@@ -30,7 +30,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 from nio import (
     AsyncClient,
     AsyncClientConfig,
@@ -81,9 +81,19 @@ class Session:
     # Глубина последнего доставленного сообщения: исходящие получают +1.
     depth: int = 0
     signal: asyncio.Event = field(default_factory=asyncio.Event)
+    # Для агентов с push-доставкой: их собственный HTTP-сервер и id сессии.
+    push_url: str = ""
+    push_session: str = ""
+
+    @property
+    def push(self) -> bool:
+        return bool(self.push_url and self.push_session)
 
     def state(self) -> str:
         now = time.time()
+        if self.push:
+            # Слушать нечего: брокер сам кладёт сообщение в сессию.
+            return "push"
         if self.open_waits > 0 or now < self.listening_until:
             return "слушает"
         if self.last_delivery and now - self.last_delivery < 120:
@@ -109,7 +119,13 @@ class Broker:
         )
         self.names: dict[str, str] = {}
         self.clients: dict[str, AsyncClient] = {}
+        # Агенты, которым брокер доставляет сам, через их собственный HTTP API
+        # (OpenCode). Для остальных доставка идёт через listener и его выход.
+        self.push_urls: dict[str, str] = {}
+        self.http: ClientSession | None = None
         for agent, data in cfg["agents"].items():
+            if data.get("server_url"):
+                self.push_urls[agent] = str(data["server_url"]).rstrip("/")
             client = AsyncClient(
                 cfg["homeserver_url"],
                 data["user_id"],
@@ -196,6 +212,18 @@ class Broker:
                         0,
                     )
                 continue
+            if session.push:
+                try:
+                    await self.deliver_push(session, envelope)
+                except Exception as error:  # noqa: BLE001
+                    log.error("доставка в сессию %s не удалась: %s", agent, error)
+                    await self.publish(
+                        agent,
+                        f"(сообщение не доставлено в сессию {agent}: {error}. "
+                        f"Проверьте, запущен ли её сервер на {session.push_url}.)",
+                        0,
+                    )
+                continue
             session.inbox.append(envelope)
             session.signal.set()
 
@@ -214,6 +242,38 @@ class Broker:
         if not isinstance(response, RoomSendResponse):
             raise RuntimeError(f"публикация не удалась: {response}")
         return response.event_id
+
+    async def resolve_push_session(self, base: str) -> str:
+        """Определяет сессию агента как самую недавно обновлённую.
+
+        Спросить «какая сессия меня сейчас выполняет» у OpenCode нечем, но в
+        момент login команду выполняет именно она, поэтому по времени
+        обновления она заведомо первая.
+        """
+        if self.http is None:
+            raise RuntimeError("HTTP-клиент брокера не инициализирован")
+        async with self.http.get(f"{base}/api/session") as response:
+            response.raise_for_status()
+            payload = await response.json()
+        rows = payload.get("data") if isinstance(payload, dict) else payload
+        if not isinstance(rows, list) or not rows:
+            raise RuntimeError(f"на {base} нет ни одной сессии")
+        newest = max(rows, key=lambda r: int(r.get("time", {}).get("updated", 0)))
+        return str(newest["id"])
+
+    async def deliver_push(self, session: Session, envelope: Envelope) -> None:
+        if self.http is None:
+            raise RuntimeError("HTTP-клиент брокера не инициализирован")
+        url = f"{session.push_url}/api/session/{session.push_session}/prompt"
+        body = {
+            "prompt": {"text": envelope.render(restart_listener=False)},
+            # queue, а не steer: не перебиваем агента на середине его хода.
+            "delivery": "queue",
+        }
+        async with self.http.post(url, json=body) as response:
+            response.raise_for_status()
+        session.last_delivery = time.time()
+        session.depth = envelope.depth
 
     async def sync_forever(self) -> None:
         self.reader.add_event_callback(self.on_message, RoomMessageText)
@@ -251,9 +311,33 @@ class Broker:
             secrets.token_hex(16),
             time.time(),
         )
+        base = self.push_urls.get(agent, "")
+        if base:
+            try:
+                session.push_session = await self.resolve_push_session(base)
+            except Exception as error:  # noqa: BLE001
+                raise web.HTTPBadGateway(
+                    text=(
+                        f"сервер агента {agent} на {base} недоступен или не имеет "
+                        f"сессий: {error}. Запустите его с --port и повторите."
+                    )
+                ) from error
+            session.push_url = base
+            log.info(
+                "сессия %s получает доставку push в %s (сессия %s)",
+                agent,
+                base,
+                session.push_session,
+            )
         self.sessions[agent] = session
         log.info("подключена сессия %s (%s)", agent, session.label)
-        return web.json_response({"token": session.token, "room": self.room})
+        return web.json_response(
+            {
+                "token": session.token,
+                "room": self.room,
+                "mode": "push" if session.push else "listener",
+            }
+        )
 
     async def handle_logout(self, request: web.Request) -> web.Response:
         data = await request.json()
@@ -266,6 +350,13 @@ class Broker:
 
     async def handle_wait(self, request: web.Request) -> web.Response:
         session = self.session_of(dict(request.query))
+        if session.push:
+            raise web.HTTPConflict(
+                text=(
+                    f"агенту {session.agent} брокер доставляет сам, listener ему "
+                    "не нужен и работать не будет. Не запускай его."
+                )
+            )
         session.open_waits += 1
         session.listening_until = time.time() + LISTEN_GRACE
         try:
@@ -349,6 +440,7 @@ def only_agents(cfg: dict, names: str) -> dict:
 async def run(config: Path, agents: str = "") -> None:
     cfg = only_agents(yaml.safe_load(config.read_text(encoding="utf-8")), agents)
     broker = Broker(cfg)
+    broker.http = ClientSession(timeout=ClientTimeout(total=30))
     await broker.join_all()
     runner = web.AppRunner(broker.app())
     await runner.setup()
@@ -358,6 +450,8 @@ async def run(config: Path, agents: str = "") -> None:
         await broker.sync_forever()
     finally:
         await runner.cleanup()
+        if broker.http is not None:
+            await broker.http.close()
         for client in broker.clients.values():
             await client.close()
 

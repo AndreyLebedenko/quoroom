@@ -124,3 +124,7 @@ agents:
     aliases: []
     max_replies_per_minute: 6
     timeout_seconds: 600
+    # Адрес HTTP-сервера живой сессии OpenCode (запуск: opencode --port 8799).
+    # Если поле задано, брокер доставляет сообщения в сессию сам, а listener
+    # этому агенту не нужен. См. docs/SESSION_BRIDGE.md.
+    server_url: "http://127.0.0.1:8799"

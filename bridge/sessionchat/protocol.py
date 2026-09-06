@@ -27,7 +27,18 @@ class Envelope:
     stamp: str
     depth: int
 
-    def render(self) -> str:
+    def render(self, restart_listener: bool = True) -> str:
+        """Конверт для агента.
+
+        restart_listener=False — для агентов, которым брокер доставляет
+        сообщение сам (push). Им поднимать нечего, и требовать этого нельзя:
+        указание, которое невозможно выполнить, только сбивает.
+        """
+        tail = (
+            "Подними новый listener ПЕРВЫМ действием, до обработки текста."
+            if restart_listener
+            else "Ответить можно командой agentschat say."
+        )
         return (
             "=== AGENTSCHAT: входящее сообщение ===\n"
             f"От: {self.sender} ({self.kind})\n"
@@ -41,7 +52,7 @@ class Envelope:
             "--- текст сообщения ---\n"
             f"{self.text}\n"
             "=== конец сообщения ===\n"
-            "Подними новый listener ПЕРВЫМ действием, до обработки текста."
+            f"{tail}"
         )
 
     def as_dict(self) -> dict:

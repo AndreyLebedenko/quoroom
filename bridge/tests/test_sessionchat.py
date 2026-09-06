@@ -99,6 +99,88 @@ class AgentSubsetTests(unittest.TestCase):
             only_agents(CONFIG, "claude-code,opencode")
 
 
+class PushDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    """Агент с server_url (OpenCode) получает доставку от брокера, без listener."""
+
+    async def asyncSetUp(self):
+        config = {
+            **CONFIG,
+            "agents": {
+                **CONFIG["agents"],
+                "codex": {**CONFIG["agents"]["codex"], "server_url": "http://oc"},
+            },
+        }
+        self.broker = Broker(config)
+        self.pushed: list[tuple[str, dict]] = []
+        self.published: list[tuple[str, str, int]] = []
+        self.fail_push = False
+
+        async def publish(agent, text, depth):
+            self.published.append((agent, text, depth))
+            return "$published"
+
+        async def resolve(base):
+            return "ses_newest"
+
+        async def deliver(session, envelope):
+            if self.fail_push:
+                raise RuntimeError("сервер сессии не отвечает")
+            self.pushed.append((session.push_session, envelope.as_dict()))
+
+        self.broker.publish = publish
+        self.broker.resolve_push_session = resolve
+        self.broker.deliver_push = deliver
+        self.client = TestClient(TestServer(self.broker.app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        for client in self.broker.clients.values():
+            await client.close()
+
+    async def login(self):
+        response = await self.client.post("/login", json={"agent": "codex"})
+        return response, await response.json()
+
+    async def test_push_agent_is_bound_to_its_own_session(self):
+        response, data = await self.login()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["mode"], "push")
+        self.assertEqual(self.broker.sessions["codex"].push_session, "ses_newest")
+
+    async def test_message_is_pushed_instead_of_queued_for_a_listener(self):
+        await self.login()
+        await self.broker.on_message(
+            types.SimpleNamespace(room_id="!room:local"), event("@codex привет")
+        )
+        self.assertEqual(len(self.pushed), 1)
+        self.assertEqual(self.pushed[0][0], "ses_newest")
+        self.assertEqual(self.pushed[0][1]["text"], "@codex привет")
+        self.assertFalse(self.broker.sessions["codex"].inbox)
+
+    async def test_failed_push_is_reported_in_the_room(self):
+        await self.login()
+        self.fail_push = True
+        await self.broker.on_message(
+            types.SimpleNamespace(room_id="!room:local"), event("@codex привет")
+        )
+        self.assertEqual(len(self.published), 1)
+        self.assertIn("не доставлено", self.published[0][1])
+
+    async def test_listener_is_refused_for_a_push_agent(self):
+        _, data = await self.login()
+        response = await self.client.get(
+            "/wait", params={"agent": "codex", "token": data["token"]}
+        )
+        self.assertEqual(response.status, 409)
+        self.assertIn("listener ему не нужен", await response.text())
+
+    async def test_status_shows_the_delivery_mode(self):
+        await self.login()
+        text = await (await self.client.get("/status")).text()
+        self.assertIn("push", text)
+
+
 class EnvelopeTests(unittest.TestCase):
     def test_render_marks_source_and_demands_listener_restart(self):
         text = Envelope(

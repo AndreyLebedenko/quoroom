@@ -76,6 +76,14 @@ def do_login(args: argparse.Namespace) -> None:
         json.dumps({"agent": args.agent, "token": data["token"]}, ensure_ascii=False),
         encoding="utf-8",
     )
+    if data.get("mode") == "push":
+        print(
+            f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
+            "Доставку берёт на себя брокер: входящие сообщения будут приходить "
+            "тебе как обычные запросы, помеченные конвертом AGENTSCHAT.\n"
+            "Listener запускать НЕ надо — он тебе не нужен и работать не будет."
+        )
+        return
     print(
         f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
         "Теперь запусти listener ФОНОВОЙ командой и не жди её завершения:\n"
