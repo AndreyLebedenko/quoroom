@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Клиент чата сессий: этим CLI пользуется сам агент изнутри своей сессии.
+
+Ключевая команда — wait. Она блокируется до входящего сообщения, печатает
+конверт и ВЫХОДИТ. Выход фонового процесса будит сессию средствами самого
+CLI-агента: именно так доставляются непрошеные сообщения.
+
+Второе назначение wait — сторожить себя. Если брокер недоступен дольше
+DEAF_SECONDS, процесс жив, но глух, а значит бесполезен: он завершается с
+кодом 1, чем будит сессию и вынуждает поднять себя заново.
+
+    agentschat login  --agent claude-code --label "рефакторинг авторизации"
+    agentschat wait   --agent claude-code      # в фоне
+    agentschat say    --agent claude-code "текст"
+    agentschat ask    --agent claude-code --timeout 300 "вопрос"
+    agentschat status
+    agentschat logout --agent claude-code [--force]
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import requests
+
+from .protocol import DEAF_SECONDS, DEFAULT_PORT, WAIT_SECONDS, Envelope
+
+STORE = Path.home() / ".agentschat"
+
+
+def port() -> int:
+    return int(os.environ.get("AGENTSCHAT_PORT", DEFAULT_PORT))
+
+
+def base() -> str:
+    return f"http://127.0.0.1:{port()}"
+
+
+def credentials(agent: str) -> dict:
+    path = STORE / f"{agent}.json"
+    if not path.is_file():
+        fail(
+            f"сессия {agent} не подключена к чату. Сначала выполните: "
+            f"agentschat login --agent {agent}"
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def fail(message: str) -> None:
+    print(f"AGENTSCHAT: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def explain(response: requests.Response) -> str:
+    return response.text.strip() or f"HTTP {response.status_code}"
+
+
+def do_login(args: argparse.Namespace) -> None:
+    try:
+        response = requests.post(
+            f"{base()}/login",
+            json={"agent": args.agent, "label": args.label},
+            timeout=15,
+        )
+    except requests.RequestException as error:
+        fail(f"брокер недоступен на {base()}: {error}")
+    if response.status_code != 200:
+        fail(explain(response))
+    data = response.json()
+    STORE.mkdir(parents=True, exist_ok=True)
+    path = STORE / f"{args.agent}.json"
+    path.write_text(
+        json.dumps({"agent": args.agent, "token": data["token"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(
+        f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
+        "Теперь запусти listener ФОНОВОЙ командой и не жди её завершения:\n"
+        f"    agentschat wait --agent {args.agent}\n"
+        "Когда listener завершится, ты будешь разбужен его выводом. Первым "
+        "действием после пробуждения подними listener заново."
+    )
+
+
+def do_logout(args: argparse.Namespace) -> None:
+    payload = {"agent": args.agent, "force": bool(args.force)}
+    if not args.force:
+        payload["token"] = credentials(args.agent)["token"]
+    try:
+        response = requests.post(f"{base()}/logout", json=payload, timeout=15)
+    except requests.RequestException as error:
+        fail(f"брокер недоступен: {error}")
+    if response.status_code != 200:
+        fail(explain(response))
+    (STORE / f"{args.agent}.json").unlink(missing_ok=True)
+    print(f"AGENTSCHAT: сессия {args.agent} отключена.")
+
+
+def poll_once(agent: str, token: str) -> Envelope | None:
+    """Один long-poll. None означает, что за окно ничего не пришло."""
+    response = requests.get(
+        f"{base()}/wait",
+        params={"agent": agent, "token": token},
+        timeout=WAIT_SECONDS + 10,
+    )
+    if response.status_code == 204:
+        return None
+    if response.status_code == 200:
+        return Envelope.from_dict(response.json())
+    raise RuntimeError(explain(response))
+
+
+def do_wait(args: argparse.Namespace) -> None:
+    token = credentials(args.agent)["token"]
+    deaf_since = 0.0
+    while True:
+        try:
+            envelope = poll_once(args.agent, token)
+        except requests.RequestException as error:
+            # Процесс жив, но связи нет. Ждём восстановления, а по истечении
+            # запаса выходим: смерть listener будит сессию и чинит связь.
+            now = time.time()
+            deaf_since = deaf_since or now
+            if now - deaf_since >= DEAF_SECONDS:
+                print(
+                    "=== AGENTSCHAT: связь с брокером потеряна ===\n"
+                    f"Брокер {base()} недоступен уже "
+                    f"{int(now - deaf_since)}с: {error}\n"
+                    "Listener завершился, чтобы не изображать работу вслепую.\n"
+                    "Проверь, запущен ли брокер, и подними listener заново."
+                )
+                raise SystemExit(1) from None
+            time.sleep(3)
+            continue
+        except RuntimeError as error:
+            print(f"=== AGENTSCHAT: listener остановлен ===\n{error}")
+            raise SystemExit(1) from None
+        deaf_since = 0.0
+        if envelope is not None:
+            print(envelope.render())
+            return
+
+
+def do_say(args: argparse.Namespace) -> None:
+    token = credentials(args.agent)["token"]
+    try:
+        response = requests.post(
+            f"{base()}/say",
+            json={"agent": args.agent, "token": token, "text": args.text},
+            timeout=30,
+        )
+    except requests.RequestException as error:
+        fail(f"брокер недоступен: {error}")
+    if response.status_code != 200:
+        fail(explain(response))
+    print(f"AGENTSCHAT: отправлено ({response.json()['event_id']}).")
+
+
+def do_ask(args: argparse.Namespace) -> None:
+    do_say(args)
+    token = credentials(args.agent)["token"]
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        try:
+            envelope = poll_once(args.agent, token)
+        except (requests.RequestException, RuntimeError) as error:
+            fail(f"ожидание ответа прервано: {error}")
+        if envelope is not None:
+            print(envelope.render())
+            return
+    print(
+        f"AGENTSCHAT: за {args.timeout}с ответа не пришло. Сообщение доставлено; "
+        "не жди дальше в этом ходе — ответ придёт через listener."
+    )
+
+
+def do_status(args: argparse.Namespace) -> None:
+    try:
+        response = requests.get(f"{base()}/status", timeout=15)
+    except requests.RequestException as error:
+        fail(f"брокер недоступен на {base()}: {error}")
+    print(response.text.rstrip())
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="agentschat", description="AgentsChat session client"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    login = sub.add_parser("login", help="подключить эту сессию к чату")
+    login.add_argument("--agent", required=True)
+    login.add_argument("--label", default="", help="чем занята сессия")
+    login.set_defaults(run=do_login)
+
+    wait = sub.add_parser("wait", help="listener: ждать сообщение и выйти")
+    wait.add_argument("--agent", required=True)
+    wait.set_defaults(run=do_wait)
+
+    say = sub.add_parser("say", help="отправить сообщение в чат")
+    say.add_argument("--agent", required=True)
+    say.add_argument("text")
+    say.set_defaults(run=do_say)
+
+    ask = sub.add_parser("ask", help="отправить и подождать ответ")
+    ask.add_argument("--agent", required=True)
+    ask.add_argument("--timeout", type=float, default=300.0)
+    ask.add_argument("text")
+    ask.set_defaults(run=do_ask)
+
+    status = sub.add_parser("status", help="кто подключён и кто слушает")
+    status.set_defaults(run=do_status)
+
+    logout = sub.add_parser("logout", help="отключить сессию")
+    logout.add_argument("--agent", required=True)
+    logout.add_argument("--force", action="store_true", help="освободить чужой слот")
+    logout.set_defaults(run=do_logout)
+
+    args = parser.parse_args()
+    args.run(args)
+
+
+if __name__ == "__main__":
+    main()
