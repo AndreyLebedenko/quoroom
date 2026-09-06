@@ -2,6 +2,12 @@
 docker/.env
 docker/continuwuity/continuwuity.toml
 bridge/config.yaml
+bridge/config.yaml.local
+bridge/*.local
+bridge/coordination.yaml
+bridge/state/
+bridge/live-checks/
+workspace/session-check/
 docker/caddy/certs/
 
 # Виртуальное окружение Python
