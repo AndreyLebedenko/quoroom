@@ -52,19 +52,19 @@ from .protocol import (
 log = logging.getLogger("agentschat.broker")
 
 
-def push_payload(text: str, running: bool) -> dict:
+PROMPT_PATH = "/session/{session}/prompt_async"
+
+
+def push_payload(text: str) -> dict:
     """Тело запроса к OpenCode.
 
-    Обычный вызов планирует выполнение агентского цикла, а `delivery: queue`
-    только кладёт вход в очередь сессии. Очередь нужна, лишь когда агент
-    занят: перебивать его на середине хода мы не хотим. Для простаивающей
-    сессии очередь означала бы, что сообщение пролежит непрочитанным до
-    следующего действия человека, — что и наблюдалось на живой проверке.
+    Используется prompt_async: "starting the session if needed and returning
+    immediately". Соседний /api/session/{id}/prompt на живой проверке только
+    принимал вход в очередь сессии и не запускал обработку — сообщения лежали
+    непрочитанными, пока человек сам что-нибудь не напишет. Ни `delivery`, ни
+    `resume` этого не меняли.
     """
-    body: dict = {"prompt": {"text": text}}
-    if running:
-        body["delivery"] = "queue"
-    return body
+    return {"parts": [{"type": "text", "text": text}]}
 
 
 def bounded(needle: str, haystack: str) -> bool:
@@ -296,9 +296,8 @@ class Broker:
     async def deliver_push(self, session: Session, envelope: Envelope) -> None:
         if self.http is None:
             raise RuntimeError("HTTP-клиент брокера не инициализирован")
-        running = session.push_session in await self.active_sessions(session.push_url)
-        url = f"{session.push_url}/api/session/{session.push_session}/prompt"
-        body = push_payload(envelope.render(restart_listener=False), running)
+        url = session.push_url + PROMPT_PATH.format(session=session.push_session)
+        body = push_payload(envelope.render(restart_listener=False))
         async with self.http.post(url, json=body) as response:
             response.raise_for_status()
         session.last_delivery = time.time()

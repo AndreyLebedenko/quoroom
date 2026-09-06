@@ -4,7 +4,7 @@ import unittest
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from sessionchat.broker import Broker, Session, only_agents, push_payload
+from sessionchat.broker import PROMPT_PATH, Broker, Session, only_agents, push_payload
 from sessionchat.protocol import MAX_DEPTH, MAX_SENDS_PER_MINUTE, Envelope
 
 CONFIG = {
@@ -100,18 +100,17 @@ class AgentSubsetTests(unittest.TestCase):
 
 
 class PushPayloadTests(unittest.TestCase):
-    def test_idle_session_gets_execution_scheduled(self):
-        # Без delivery запрос планирует выполнение; с queue сообщение просто
-        # ляжет в очередь и у простаивающей сессии останется непрочитанным.
-        self.assertNotIn("delivery", push_payload("текст", running=False))
-
-    def test_busy_session_is_queued_not_interrupted(self):
-        self.assertEqual(push_payload("текст", running=True)["delivery"], "queue")
-
-    def test_text_is_carried_as_the_prompt(self):
+    def test_text_is_carried_as_a_prompt_part(self):
         self.assertEqual(
-            push_payload("текст", running=False)["prompt"]["text"], "текст"
+            push_payload("текст")["parts"], [{"type": "text", "text": "текст"}]
         )
+
+    def test_endpoint_is_the_one_that_starts_the_session(self):
+        # /api/session/{id}/prompt только принимает вход в очередь: на живой
+        # проверке сообщения лежали непрочитанными. Запускает обработку
+        # только prompt_async.
+        self.assertTrue(PROMPT_PATH.endswith("/prompt_async"))
+        self.assertNotIn("/api/", PROMPT_PATH)
 
 
 class PushDeliveryTests(unittest.IsolatedAsyncioTestCase):
