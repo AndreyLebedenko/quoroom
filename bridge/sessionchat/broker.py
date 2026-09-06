@@ -52,6 +52,21 @@ from .protocol import (
 log = logging.getLogger("agentschat.broker")
 
 
+def push_payload(text: str, running: bool) -> dict:
+    """Тело запроса к OpenCode.
+
+    Обычный вызов планирует выполнение агентского цикла, а `delivery: queue`
+    только кладёт вход в очередь сессии. Очередь нужна, лишь когда агент
+    занят: перебивать его на середине хода мы не хотим. Для простаивающей
+    сессии очередь означала бы, что сообщение пролежит непрочитанным до
+    следующего действия человека, — что и наблюдалось на живой проверке.
+    """
+    body: dict = {"prompt": {"text": text}}
+    if running:
+        body["delivery"] = "queue"
+    return body
+
+
 def bounded(needle: str, haystack: str) -> bool:
     """Вхождение с границами слова.
 
@@ -243,33 +258,47 @@ class Broker:
             raise RuntimeError(f"публикация не удалась: {response}")
         return response.event_id
 
-    async def resolve_push_session(self, base: str) -> str:
-        """Определяет сессию агента как самую недавно обновлённую.
+    async def active_sessions(self, base: str) -> set[str]:
+        if self.http is None:
+            raise RuntimeError("HTTP-клиент брокера не инициализирован")
+        async with self.http.get(f"{base}/api/session/active") as response:
+            response.raise_for_status()
+            payload = await response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        return set(data) if isinstance(data, dict) else set()
 
-        Спросить «какая сессия меня сейчас выполняет» у OpenCode нечем, но в
-        момент login команду выполняет именно она, поэтому по времени
-        обновления она заведомо первая.
+    async def resolve_push_session(self, base: str) -> str:
+        """Определяет, какая сессия агента выполняет login прямо сейчас.
+
+        Прямого «кто меня выполняет» у OpenCode нет, но в момент login сессия
+        занята этой командой, поэтому она числится активной. Если активной не
+        видно (login запущен не из сессии), отступаем к самой свежей.
         """
         if self.http is None:
             raise RuntimeError("HTTP-клиент брокера не инициализирован")
+        active = await self.active_sessions(base)
+        if len(active) == 1:
+            return active.pop()
+        if len(active) > 1:
+            raise RuntimeError(
+                f"на {base} одновременно работают несколько сессий "
+                f"({', '.join(sorted(active))}); непонятно, какая из них ваша"
+            )
         async with self.http.get(f"{base}/api/session") as response:
             response.raise_for_status()
             payload = await response.json()
         rows = payload.get("data") if isinstance(payload, dict) else payload
         if not isinstance(rows, list) or not rows:
             raise RuntimeError(f"на {base} нет ни одной сессии")
-        newest = max(rows, key=lambda r: int(r.get("time", {}).get("updated", 0)))
+        newest = max(rows, key=lambda r: int(r.get("time", {}).get("created", 0)))
         return str(newest["id"])
 
     async def deliver_push(self, session: Session, envelope: Envelope) -> None:
         if self.http is None:
             raise RuntimeError("HTTP-клиент брокера не инициализирован")
+        running = session.push_session in await self.active_sessions(session.push_url)
         url = f"{session.push_url}/api/session/{session.push_session}/prompt"
-        body = {
-            "prompt": {"text": envelope.render(restart_listener=False)},
-            # queue, а не steer: не перебиваем агента на середине его хода.
-            "delivery": "queue",
-        }
+        body = push_payload(envelope.render(restart_listener=False), running)
         async with self.http.post(url, json=body) as response:
             response.raise_for_status()
         session.last_delivery = time.time()

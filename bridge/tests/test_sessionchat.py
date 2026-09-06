@@ -4,7 +4,7 @@ import unittest
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from sessionchat.broker import Broker, Session, only_agents
+from sessionchat.broker import Broker, Session, only_agents, push_payload
 from sessionchat.protocol import MAX_DEPTH, MAX_SENDS_PER_MINUTE, Envelope
 
 CONFIG = {
@@ -97,6 +97,21 @@ class AgentSubsetTests(unittest.TestCase):
     def test_unknown_agent_is_refused_before_connecting(self):
         with self.assertRaises(ValueError):
             only_agents(CONFIG, "claude-code,opencode")
+
+
+class PushPayloadTests(unittest.TestCase):
+    def test_idle_session_gets_execution_scheduled(self):
+        # Без delivery запрос планирует выполнение; с queue сообщение просто
+        # ляжет в очередь и у простаивающей сессии останется непрочитанным.
+        self.assertNotIn("delivery", push_payload("текст", running=False))
+
+    def test_busy_session_is_queued_not_interrupted(self):
+        self.assertEqual(push_payload("текст", running=True)["delivery"], "queue")
+
+    def test_text_is_carried_as_the_prompt(self):
+        self.assertEqual(
+            push_payload("текст", running=False)["prompt"]["text"], "текст"
+        )
 
 
 class PushDeliveryTests(unittest.IsolatedAsyncioTestCase):
