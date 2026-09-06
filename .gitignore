@@ -23,3 +23,6 @@ __pycache__/
 # Данные Docker-томов сюда не попадают (они в именованных volume Docker),
 # но на всякий случай:
 docker/data/
+
+# Локальные настройки Claude Code (личные, не общие для проекта)
+.claude/settings.local.json
