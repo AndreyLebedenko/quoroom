@@ -1,0 +1,14 @@
+agentschat.local {
+	tls /certs/agentschat.local.pem /certs/agentschat.local-key.pem
+
+	# Client-Server API и медиа Continuwuity
+	@matrix path /_matrix/* /_continuwuity/* /.well-known/matrix/*
+	handle @matrix {
+		reverse_proxy continuwuity:8008
+	}
+
+	# Всё остальное — Element Web
+	handle {
+		reverse_proxy element:80
+	}
+}

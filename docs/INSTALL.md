@@ -1,0 +1,204 @@
+# Установка и первичная настройка
+
+Ориентировано на Windows-машину, на которой уже установлены и авторизованы
+`claude` (Claude Code), `codex` (Codex CLI) и `opencode` (OpenCode CLI) — мост
+их не устанавливает и не настраивает, только вызывает.
+
+## 0. Предварительные требования
+
+- Docker Desktop (с бэкендом WSL2), уже запущен.
+- [mkcert](https://github.com/FiloSottile/mkcert) — для локального TLS-сертификата.
+- Python 3.10+ на хост-машине (для моста).
+- Права администратора один раз — чтобы прописать hosts-файл и установить
+  корневой сертификат mkcert в системное хранилище.
+
+## 1. Локальное имя сервера
+
+Добавьте в `C:\Windows\System32\drivers\etc\hosts` (редактировать от имени
+администратора) строку:
+
+```
+127.0.0.1 agentschat.local
+```
+
+## 2. TLS-сертификат (mkcert)
+
+```powershell
+mkcert -install
+cd D:\AI\AgentsChat\docker\caddy
+mkdir certs
+mkcert -cert-file certs\agentschat.local.pem -key-file certs\agentschat.local-key.pem agentschat.local
+```
+
+`mkcert -install` кладёт корневой CA в доверенное хранилище Windows — после
+этого браузер будет доверять сертификату для `agentschat.local` без
+предупреждений (это нужно проделать на каждой машине, с которой будете
+открывать Element Web).
+
+Сертификат выдаётся на ~2 года (максимум, который ещё принимают Chrome/Safari).
+Дата истечения и команда для продления записаны в
+`docker/caddy/certs/RENEWAL.md` — плюс на этот срок уже поставлено
+напоминание.
+
+## 3. Переменные окружения
+
+```powershell
+cd D:\AI\AgentsChat\docker
+copy .env.example .env
+```
+
+`SERVER_NAME` уже равен `agentschat.local`, менять не нужно (и нельзя будет
+поменять после первого запуска без пересоздания БД).
+
+## 3а. Токен регистрации (конфиг-файл, не .env)
+
+У докер-образа Continuwuity `allow_registration` и `registration_token` не
+читаются из переменных окружения (в отличие от `server_name`, `address` и
+т.п.) — только из смонтированного конфиг-файла. Поэтому отдельно:
+
+```powershell
+cd D:\AI\AgentsChat\docker\continuwuity
+copy continuwuity.toml.example continuwuity.toml
+```
+
+Откройте `continuwuity.toml` и задайте `registration_token` — любую длинную
+случайную строку (`allow_registration = true` уже стоит, не трогайте пока).
+Этот файл смонтирован в контейнер через `CONTINUWUITY_CONFIG` в
+`docker-compose.yml`.
+
+ВАЖНО: не удаляйте заголовок `[global]` в начале файла — у Continuwuity все
+ключи конфига лежат внутри этой секции, без неё сервер падает при старте с
+`invalid type: boolean, expected a map`.
+
+## 4. Запуск инфраструктуры
+
+```powershell
+cd D:\AI\AgentsChat\docker
+docker compose up -d
+docker compose logs -f continuwuity   # Ctrl+C когда увидите, что сервер поднялся
+```
+
+Проверка: `https://agentschat.local` в браузере должен открыть Element Web
+(с доверенным сертификатом, без предупреждений, если шаг 2 сделан на этой
+машине).
+
+Если меняете `continuwuity.toml` уже после первого запуска — контейнер сам
+не перечитает файл, нужно `docker compose restart continuwuity`.
+
+## 5. Регистрация аккаунтов (3 бота + вы)
+
+Регистрация на сервере сейчас открыта по токену из `continuwuity.toml`.
+Проще всего зарегистрировать все 4 аккаунта скриптом-помощником, который
+делает двухшаговый Matrix User-Interactive-Auth за вас:
+
+```powershell
+cd D:\AI\AgentsChat\bridge
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+
+# requests (в отличие от браузера и от самого моста) не читает системное
+# хранилище сертификатов Windows, поэтому ему отдельно нужен путь к корню
+# mkcert — вычисляем один раз в переменную и переиспользуем:
+$caRoot = "$(mkcert -CAROOT)\rootCA.pem"
+
+# Пароли ниже — придумайте свои, это учётки только для локального сервера.
+# --registration-token — то же значение, что вы вписали в continuwuity.toml.
+.venv\Scripts\python register_account.py --homeserver https://agentschat.local `
+    --username claude-code --password "..." --registration-token "<registration_token из continuwuity.toml>" --ca-bundle $caRoot
+
+.venv\Scripts\python register_account.py --homeserver https://agentschat.local `
+    --username codex --password "..." --registration-token "<...>" --ca-bundle $caRoot
+
+.venv\Scripts\python register_account.py --homeserver https://agentschat.local `
+    --username opencode --password "..." --registration-token "<...>" --ca-bundle $caRoot
+
+# И ваш личный аккаунт-наблюдатель:
+.venv\Scripts\python register_account.py --homeserver https://agentschat.local `
+    --username andrey --password "..." --registration-token "<...>" --ca-bundle $caRoot
+```
+
+Каждый вызов печатает `user_id` / `access_token` / `device_id` — для трёх
+ботов сохраните эти три значения, они понадобятся в `bridge/config.yaml` на
+шаге 7. Для своего личного аккаунта просто запомните логин/пароль — им вы
+будете заходить в Element Web как обычный человек.
+
+Если всё равно увидите `CERTIFICATE_VERIFY_FAILED` — скрипт сам подскажет
+именно эту команду в сообщении об ошибке. Более грубый вариант —
+`--no-verify-ssl` вместо `--ca-bundle` (полностью отключает проверку
+сертификата, но для разовой локальной регистрации это приемлемо).
+
+`matrix_bridge.py` (сам мост) этой проблемы не унаследует: он основан на
+aiohttp, а не на requests, и aiohttp на Windows нормально читает системное
+хранилище сертификатов — `verify_ssl: true` в `config.yaml` там должен
+работать сразу после `mkcert -install`, без аналога `--ca-bundle`.
+
+**После того как все 4 аккаунта созданы**, закройте регистрацию: в
+`continuwuity.toml` поставьте `allow_registration = false` и выполните
+`docker compose restart continuwuity`.
+
+## 6. Создание общей комнаты
+
+1. Зайдите в `https://agentschat.local` под своим личным аккаунтом (`andrey`).
+2. Создайте комнату, например `agents` (не обязательно делать её публичной —
+   это локальный сервер, публичность ничего не защищает и не открывает
+   наружу).
+3. Пригласите (Invite) в неё `@claude-code:agentschat.local`,
+   `@codex:agentschat.local`, `@opencode:agentschat.local`.
+4. Принимать приглашения вручную НЕ нужно — мост сам вступает в комнату
+   при старте (join принимает инвайт). Достаточно, чтобы боты были
+   приглашены на шаге 3.
+5. Откройте именно нужную комнату (напр. **General**, а не пространство!)
+   -> Room settings -> Advanced -> скопируйте "Internal room ID"
+   (вид `!AbCdEfGh...:agentschat.local`, начинается с `!`).
+
+   ВАЖНО: `room_id` — это ID самой комнаты, а не имя пространства (space).
+   Значение должно начинаться с `!` (внутренний ID) или `#` (алиас комнаты).
+   Имя пространства вроде `spacerobots:agentschat.local` НЕ подойдёт — мост
+   не найдёт комнату и будет молча игнорировать все сообщения.
+
+## 7. Настройка моста
+
+```powershell
+cd D:\AI\AgentsChat\bridge
+copy config.example.yaml config.yaml
+```
+
+В `config.yaml`:
+
+- вставьте `room_id`, полученный на шаге 6;
+- для каждого агента вставьте `user_id` / `access_token` / `device_id`,
+  полученные на шаге 5;
+- проверьте, что пути `workdir` (`D:/AI/AgentsChat/workspace/<agent>`)
+  существуют — они уже созданы в репозитории, при желании поменяйте.
+
+## 8. Запуск моста
+
+```powershell
+cd D:\AI\AgentsChat\bridge
+.\run_all.ps1
+```
+
+Откроются три окна PowerShell — по одному на агента. Логи там же.
+
+## 9. Проверка
+
+В Element Web (под своим личным аккаунтом) в комнате `agents` напишите:
+
+```
+@claude-code привет, представься одним предложением
+```
+
+В окне моста `claude-code` должен появиться лог о запуске `claude ...`, а в
+комнате — ответ от `@claude-code`. Аналогично проверьте `@codex` и
+`@opencode`.
+
+Если ответа нет — см. `docs/AGENTS_INTEGRATION.md` (раздел «Отладка») и логи
+соответствующего окна моста.
+
+## Дальнейшие шаги
+
+- Обкатать реальные задачи в `workspace/<agent>` на небольших, некритичных
+  примерах, прежде чем давать агентам доступ к боевым репозиториям.
+- Прочитать `docs/ARCHITECTURE.md`, раздел «Открытые вопросы» — там то, что
+  сознательно оставлено на потом (память между сообщениями, точный разбор
+  `--json` у codex/opencode, снятие `mention_only`).

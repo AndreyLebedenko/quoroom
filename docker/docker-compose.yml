@@ -1,0 +1,66 @@
+services:
+  continuwuity:
+    image: ghcr.io/continuwuity/continuwuity:latest
+    container_name: agentschat-continuwuity
+    restart: unless-stopped
+    environment:
+      CONTINUWUITY_SERVER_NAME: ${SERVER_NAME}
+      CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
+      CONTINUWUITY_ADDRESS: 0.0.0.0
+      CONTINUWUITY_PORT: 8008
+      # allow_registration и registration_token у образа Continuwuity НЕ
+      # управляются переменными окружения (в отличие от остального здесь) —
+      # только конфиг-файлом, поэтому они заданы в continuwuity/continuwuity.toml
+      # и подключены через CONTINUWUITY_CONFIG ниже. См. docs/INSTALL.md, шаг 3а.
+      CONTINUWUITY_CONFIG: /etc/continuwuity/continuwuity.toml
+      # Локальный стенд, наружу не смотрит — федерация не нужна.
+      CONTINUWUITY_ALLOW_FEDERATION: "false"
+      CONTINUWUITY_ALLOW_CHECK_FOR_UPDATES: "false"
+      CONTINUWUITY_LOG: "info"
+    volumes:
+      - continuwuity-data:/var/lib/continuwuity
+      - ./continuwuity/continuwuity.toml:/etc/continuwuity/continuwuity.toml:ro
+    networks:
+      - agentschat
+
+  element:
+    image: vectorim/element-web:latest
+    container_name: agentschat-element
+    restart: unless-stopped
+    volumes:
+      - ./element/config.json:/app/config.json:ro
+    networks:
+      - agentschat
+    depends_on:
+      - continuwuity
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: agentschat-caddy
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      # Порт 80 наружу не публикуем — на Windows он часто занят системным
+      # резервом (Hyper-V/WSL exclusion range), а нам он не нужен: мы всегда
+      # ходим на https://agentschat.local напрямую. Внутри контейнера Caddy
+      # всё равно может использовать 80 для собственного http->https редиректа,
+      # это не конфликтует с хостом.
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - agentschat
+    depends_on:
+      - continuwuity
+      - element
+
+networks:
+  agentschat:
+    driver: bridge
+
+volumes:
+  continuwuity-data:
+  caddy-data:
+  caddy-config:

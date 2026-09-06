@@ -1,0 +1,25 @@
+# Скопируйте в continuwuity.toml (в этой же папке) и задайте свой токен.
+# continuwuity.toml — секрет (в нём токен регистрации), в git не должен уходить,
+# см. .gitignore. Этот .example-файл — не секрет, можно коммитить.
+#
+# Почему это отдельный файл, а не переменная окружения в docker/.env:
+# у докер-образа Continuwuity allow_registration и registration_token не
+# подключены к CONTINUWUITY_*-переменным (в отличие от server_name,
+# database_path и т.п.) — только к конфиг-файлу. Подробности и объяснение,
+# как до этого докопались, — в docs/INSTALL.md, шаг 3а.
+#
+# ВАЖНО: у Continuwuity все ключи конфига лежат ВНУТРИ секции [global].
+# Без этого заголовка сервер падает с "invalid type: boolean, expected a map".
+
+[global]
+
+# Разрешить регистрацию новых аккаунтов по токену.
+# После того как зарегистрируете все 4 аккаунта (docs/INSTALL.md, шаг 5),
+# поставьте здесь false и перезапустите continuwuity (docker compose restart
+# continuwuity) — тогда регистрация закроется по-настоящему.
+allow_registration = true
+
+# Токен, который нужно будет ввести при регистрации каждого из 4 аккаунтов.
+# Сгенерируйте случайную строку самостоятельно, например:
+#   PowerShell:  -join ((48..57)+(97..122)|Get-Random -Count 32|%{[char]$_})
+registration_token = "change-me-before-first-run"

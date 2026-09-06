@@ -1,0 +1,19 @@
+# Секреты
+docker/.env
+docker/continuwuity/continuwuity.toml
+bridge/config.yaml
+docker/caddy/certs/
+
+# Виртуальное окружение Python
+bridge/.venv/
+bridge/.tools/
+bridge/logs/
+.coverage
+coverage.json
+.ruff_cache/
+__pycache__/
+*.pyc
+
+# Данные Docker-томов сюда не попадают (они в именованных volume Docker),
+# но на всякий случай:
+docker/data/

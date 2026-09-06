@@ -1,0 +1,126 @@
+# Скопируйте в config.yaml и заполните. config.yaml содержит секреты
+# (access_token каждого бота) — не должен уходить в git.
+
+homeserver_url: "https://agentschat.local"
+
+# true — обычная проверка (мост на aiohttp, он читает системное хранилище
+#   Windows, куда mkcert -install кладёт свой корень — обычно этого достаточно).
+# путь к файлу, например "C:/Users/<you>/AppData/Local/mkcert/rootCA.pem"
+#   (узнать точный путь: mkcert -CAROOT) — если true почему-то не сработал.
+# false — полностью отключить проверку сертификата (только для отладки).
+verify_ssl: true
+
+# Внутренний ID комнаты (не alias), берётся в Element Web:
+# комната -> Settings -> Advanced -> "Internal room ID". Выглядит как
+# "!AbCdEfGhIjKlMnOp:agentschat.local"
+room_id: "!REPLACE_ME:agentschat.local"
+
+agents:
+  claude-code:
+    user_id: "@claude-code:agentschat.local"
+    access_token: "PASTE_TOKEN_HERE"
+    device_id: "PASTE_DEVICE_ID_HERE"
+    display_name: "Claude Code"
+    # Рабочий каталог, в котором CLI будет работать с файлами.
+    workdir: "D:/AI/AgentsChat/workspace/claude-code"
+
+    # {prompt} и {workdir} подставляются мостом перед запуском.
+    command:
+      - "claude"
+      - "-p"
+      - "{prompt}"
+      - "--output-format"
+      - "json"
+      - "--permission-mode"
+      - "auto"
+      - "--permission-prompts"
+      - "none"
+
+    # Формат вывода этой команды подтверждён официальной документацией:
+    # финальный текст ответа лежит в JSON-поле "result" последней строки stdout.
+    result_mode: "json_field"
+    result_json_path: "result"
+
+    # mention_only: реагировать только на сообщения, адресованные агенту.
+    mention_only: true
+    # respond_to_room_mention: реагировать и на широковещательное @room
+    #   (аналог slack @here/@channel) — одним сообщением будятся все агенты,
+    #   у кого это включено. Rate limit ниже остаётся страховкой от каскада.
+    respond_to_room_mention: true
+    # aliases: дополнительные слова-триггеры адресации (кроме @claude-code /
+    #   display name). Напр. ["все", "агенты"] — тогда "все, статус?" разбудит
+    #   агента. Пусто = только персональное упоминание и (если включено) @room.
+    aliases: []
+    max_replies_per_minute: 6
+    timeout_seconds: 600
+
+  codex:
+    user_id: "@codex:agentschat.local"
+    access_token: "PASTE_TOKEN_HERE"
+    device_id: "PASTE_DEVICE_ID_HERE"
+    display_name: "Codex"
+    workdir: "D:/AI/AgentsChat/workspace/codex"
+
+    # --output-last-message записывает финальный ответ в файл, а не в JSON
+    # события в stdout — точная схема --json события codex не была
+    # проверена нами вживую, поэтому используем более надёжный документированный
+    # способ получить финальный текст. См. docs/AGENTS_INTEGRATION.md.
+    command:
+      - "codex"
+      - "exec"
+      - "--sandbox"
+      - "workspace-write"
+      - "--skip-git-repo-check"
+      - "--cd"
+      - "{workdir}"
+      - "--output-last-message"
+      - "{tmp}"
+      - "{prompt}"
+
+    result_mode: "file"
+    output_file: "{tmp}"
+
+    # mention_only: реагировать только на сообщения, адресованные агенту.
+    mention_only: true
+    # respond_to_room_mention: реагировать и на широковещательное @room
+    #   (аналог slack @here/@channel) — одним сообщением будятся все агенты,
+    #   у кого это включено. Rate limit ниже остаётся страховкой от каскада.
+    respond_to_room_mention: true
+    # aliases: дополнительные слова-триггеры адресации (кроме @claude-code /
+    #   display name). Напр. ["все", "агенты"] — тогда "все, статус?" разбудит
+    #   агента. Пусто = только персональное упоминание и (если включено) @room.
+    aliases: []
+    max_replies_per_minute: 6
+    timeout_seconds: 600
+
+  opencode:
+    user_id: "@opencode:agentschat.local"
+    access_token: "PASTE_TOKEN_HERE"
+    device_id: "PASTE_DEVICE_ID_HERE"
+    display_name: "OpenCode"
+    workdir: "D:/AI/AgentsChat/workspace/opencode"
+
+    # Точная JSON-схема "opencode run --format json" не была проверена вживую,
+    # поэтому по умолчанию берём обычный текстовый stdout (формат "default").
+    # См. docs/AGENTS_INTEGRATION.md про апгрейд на --format json.
+    command:
+      - "opencode"
+      - "run"
+      - "--dir"
+      - "{workdir}"
+      - "{prompt}"
+
+    result_mode: "raw_stdout"
+
+    # mention_only: реагировать только на сообщения, адресованные агенту.
+    mention_only: true
+    # respond_to_room_mention: реагировать и на широковещательное @room
+    #   (аналог slack @here/@channel) — одним сообщением будятся все агенты,
+    #   у кого это включено. Rate limit ниже остаётся страховкой от каскада.
+    respond_to_room_mention: true
+    # aliases: дополнительные слова-триггеры адресации (кроме @claude-code /
+    #   display name). Напр. ["все", "агенты"] — тогда "все, статус?" разбудит
+    #   агента. Пусто = только персональное упоминание и (если включено) @room.
+    aliases: []
+    max_replies_per_minute: 6
+    timeout_seconds: 600
