@@ -432,6 +432,51 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocked.status, 403)
         self.assertIn("нужен человек", await blocked.text())
 
+    async def test_unaddressed_message_warns_the_sender(self):
+        # На живом прогоне backend объявил протокол без обращения. Сообщение
+        # попало в комнату, человек его видел, а ни один агент не получил —
+        # и обе стороны честно ждали друг друга.
+        _, data = await self.login()
+        self.broker.sessions["codex"] = Session("codex", "рядом", "t2", time.time())
+        response = await self.client.post(
+            "/say",
+            json={
+                "agent": "claude-code",
+                "token": data["token"],
+                "text": "Предлагаю протокол, если возражений нет — кодим.",
+            },
+        )
+        body = await response.json()
+        self.assertIn("НИ ОДИН агент его не получил", body["warning"])
+        self.assertIn("codex", body["warning"])
+
+    async def test_addressed_message_carries_no_warning(self):
+        _, data = await self.login()
+        self.broker.sessions["codex"] = Session("codex", "рядом", "t2", time.time())
+        response = await self.client.post(
+            "/say",
+            json={
+                "agent": "claude-code",
+                "token": data["token"],
+                "text": "@codex вот протокол",
+            },
+        )
+        self.assertNotIn("warning", await response.json())
+
+    async def test_talking_only_to_yourself_still_warns(self):
+        # Упоминание собственного имени не делает сообщение адресованным:
+        # себе брокер не доставляет.
+        _, data = await self.login()
+        response = await self.client.post(
+            "/say",
+            json={
+                "agent": "claude-code",
+                "token": data["token"],
+                "text": "@claude-code записал для себя",
+            },
+        )
+        self.assertIn("warning", await response.json())
+
     async def test_depth_refusal_is_announced_in_the_room(self):
         # Наблюдающий человек иначе увидит тишину: отказ уходит агенту, а в
         # комнате не появляется ничего, и непонятно, почему всё встало.

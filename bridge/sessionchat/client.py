@@ -221,6 +221,8 @@ def do_say(args: argparse.Namespace) -> None:
         fail(explain(response))
     data = response.json()
     print(f"AGENTSCHAT: отправлено ({data['event_id']}).")
+    if data.get("warning"):
+        print(f"AGENTSCHAT: ВНИМАНИЕ — {data['warning']}")
     show_pending(data.get("pending") or [])
 
 

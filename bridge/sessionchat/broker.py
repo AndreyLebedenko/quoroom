@@ -247,7 +247,10 @@ class Broker:
                         0,
                     )
                 continue
-            first_in_queue = session.polls and not session.inbox
+            # Пометку ставим только на сообщение человека: агенту про
+            # отложенную доставку сказано в его же конверте, а комната от
+            # пометки на каждое сообщение превращается в мусор.
+            first_in_queue = human and session.polls and not session.inbox
             session.inbox.append(envelope)
             session.signal.set()
             if first_in_queue:
@@ -398,8 +401,21 @@ class Broker:
                 text=f"превышен предел {MAX_SENDS_PER_MINUTE} сообщений в минуту"
             )
         session.sends.append(time.time())
+        # Сообщение без обращения попадает в комнату, но не доставляется никому:
+        # человек видит его в Element, а агенты — нет. Отправитель при этом
+        # уверен, что сказал. На живом прогоне так и вышло: backend объявил
+        # протокол в пустоту, а frontend ждал его и не дождался.
+        reach = [a for a in self.addressees(text, None) if a != session.agent]
         event_id = await self.publish(session.agent, text, depth)
         answer = {"event_id": event_id, "depth": depth}
+        if not reach:
+            others = [a for a in self.sessions if a != session.agent]
+            answer["warning"] = (
+                "сообщение опубликовано, но НИ ОДИН агент его не получил: в нём "
+                "нет обращения. Адресуй явно — @имя или @room. Сейчас "
+                + (f"подключены: {', '.join(sorted(others))}." if others
+                   else "других подключённых сессий нет.")
+            )
         if session.polls:
             # Очередь отдаём ПОСЛЕ публикации: исходящее относится к тому, что
             # агент уже знал, и не должно наследовать глубину только что
