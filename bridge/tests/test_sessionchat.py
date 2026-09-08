@@ -265,6 +265,105 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class PollDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    """Агент с delivery: poll забирает очередь сам, при обращении к чату."""
+
+    async def asyncSetUp(self):
+        config = {
+            **CONFIG,
+            "agents": {
+                **CONFIG["agents"],
+                "codex": {**CONFIG["agents"]["codex"], "delivery": "poll"},
+            },
+        }
+        self.broker = Broker(config)
+        self.published: list[tuple[str, str, int]] = []
+
+        async def publish(agent, text, depth):
+            self.published.append((agent, text, depth))
+            return "$published"
+
+        self.broker.publish = publish
+        self.client = TestClient(TestServer(self.broker.app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        for client in self.broker.clients.values():
+            await client.close()
+
+    async def login(self, agent="codex"):
+        response = await self.client.post("/login", json={"agent": agent})
+        return await response.json()
+
+    async def arrive(self, text="@codex привет"):
+        await self.broker.on_message(
+            types.SimpleNamespace(room_id="!room:local"), event(text)
+        )
+
+    async def test_login_reports_the_poll_mode(self):
+        self.assertEqual((await self.login())["mode"], "poll")
+
+    async def test_first_queued_message_is_announced_in_the_room(self):
+        # Человек должен видеть, что доставка отложена, а не считать её
+        # состоявшейся.
+        await self.login()
+        await self.arrive()
+        self.assertEqual(len(self.published), 1)
+        self.assertIn("при следующем обращении", self.published[0][1])
+
+    async def test_further_messages_do_not_repeat_the_announcement(self):
+        await self.login()
+        await self.arrive()
+        await self.arrive("@codex ещё раз")
+        self.assertEqual(len(self.published), 1)
+        self.assertEqual(len(self.broker.sessions["codex"].inbox), 2)
+
+    async def test_inbox_hands_over_everything_once(self):
+        data = await self.login()
+        await self.arrive()
+        await self.arrive("@codex ещё раз")
+        response = await self.client.get(
+            "/inbox", params={"agent": "codex", "token": data["token"]}
+        )
+        pending = (await response.json())["pending"]
+        self.assertEqual(len(pending), 2)
+        self.assertIn("привет", pending[0])
+        self.assertNotIn("Подними новый listener", pending[0])
+        self.assertFalse(self.broker.sessions["codex"].inbox)
+
+    async def test_say_returns_the_queue_with_its_receipt(self):
+        data = await self.login()
+        await self.arrive()
+        response = await self.client.post(
+            "/say", json={"agent": "codex", "token": data["token"], "text": "ответ"}
+        )
+        body = await response.json()
+        self.assertEqual(len(body["pending"]), 1)
+        # Исходящее относится к тому, что агент уже знал: очередь не должна
+        # поднимать его глубину задним числом.
+        self.assertEqual(body["depth"], 1)
+
+    async def test_listener_agent_keeps_its_queue_on_say(self):
+        # Иначе say отнял бы у listener сообщение, которого тот ждёт.
+        data = await self.login(agent="claude-code")
+        self.broker.sessions["claude-code"].inbox.append(
+            Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
+        )
+        response = await self.client.post(
+            "/say",
+            json={"agent": "claude-code", "token": data["token"], "text": "ответ"},
+        )
+        self.assertNotIn("pending", await response.json())
+        self.assertEqual(len(self.broker.sessions["claude-code"].inbox), 1)
+
+    async def test_status_shows_the_queue_length(self):
+        await self.login()
+        await self.arrive()
+        text = await (await self.client.get("/status")).text()
+        self.assertIn("опрос (в очереди 1)", text)
+
+
 class EnvelopeTests(unittest.TestCase):
     def test_render_marks_source_and_demands_listener_restart(self):
         text = Envelope(

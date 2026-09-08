@@ -99,7 +99,7 @@ class Session:
     # Для агентов с push-доставкой: их собственный HTTP-сервер и id сессии.
     push_url: str = ""
     push_session: str = ""
-    # "listener" | "plugin" | (push определяется наличием push_url)
+    # "listener" | "plugin" | "poll" (push определяется наличием push_url)
     listener_kind: str = "listener"
 
     @property
@@ -122,11 +122,32 @@ class Session:
         """
         return self.mode == "listener"
 
+    @property
+    def polls(self) -> bool:
+        """Забирает ли агент очередь сам, при следующем обращении к чату.
+
+        Так живут CLI, в которые снаружи ничего вложить нельзя: доставка
+        откладывается до момента, когда агент сам заговорит.
+        """
+        return self.mode == "poll"
+
+    def drain(self) -> list[str]:
+        """Отдаёт всё накопленное разом и очищает очередь."""
+        taken = list(self.inbox)
+        self.inbox.clear()
+        if taken:
+            self.last_delivery = time.time()
+            self.depth = taken[-1].depth
+        return [envelope.render(self.restart_listener) for envelope in taken]
+
     def state(self) -> str:
         now = time.time()
         if self.push:
             # Слушать нечего: брокер сам кладёт сообщение в сессию.
             return "push"
+        if self.polls:
+            waiting = len(self.inbox)
+            return f"опрос (в очереди {waiting})" if waiting else "опрос"
         if self.open_waits > 0 or now < self.listening_until:
             return "слушает"
         if self.last_delivery and now - self.last_delivery < 120:
@@ -158,13 +179,17 @@ class Broker:
         # Агенты, у которых listener живёт внутри самого CLI (плагин OpenCode).
         # Для брокера это обычный listener: разница только в том, что человеку
         # и агенту нечего запускать руками.
-        self.plugin_agents: set[str] = set()
+        # Как агент забирает непрошеные сообщения, если не через listener:
+        # "plugin" — слушатель внутри самого CLI, "poll" — очередь до
+        # следующего обращения агента к чату.
+        self.delivery_kinds: dict[str, str] = {}
         self.http: ClientSession | None = None
         for agent, data in cfg["agents"].items():
             if data.get("server_url"):
                 self.push_urls[agent] = str(data["server_url"]).rstrip("/")
-            if str(data.get("delivery", "")) == "plugin":
-                self.plugin_agents.add(agent)
+            kind = str(data.get("delivery", ""))
+            if kind in ("plugin", "poll"):
+                self.delivery_kinds[agent] = kind
             client = AsyncClient(
                 cfg["homeserver_url"],
                 data["user_id"],
@@ -263,8 +288,16 @@ class Broker:
                         0,
                     )
                 continue
+            first_in_queue = session.polls and not session.inbox
             session.inbox.append(envelope)
             session.signal.set()
+            if first_in_queue:
+                await self.publish(
+                    agent,
+                    f"(сессия {agent} заберёт это при следующем обращении к "
+                    "чату: вложить сообщение в неё снаружи нельзя.)",
+                    0,
+                )
 
     async def publish(self, agent: str, text: str, depth: int) -> str:
         response = await self.clients[agent].room_send(
@@ -363,8 +396,7 @@ class Broker:
             secrets.token_hex(16),
             time.time(),
         )
-        if agent in self.plugin_agents:
-            session.listener_kind = "plugin"
+        session.listener_kind = self.delivery_kinds.get(agent, "listener")
         base = self.push_urls.get(agent, "")
         if base:
             try:
@@ -433,6 +465,10 @@ class Broker:
             session.open_waits -= 1
             session.listening_until = time.time() + LISTEN_GRACE
 
+    async def handle_inbox(self, request: web.Request) -> web.Response:
+        session = self.session_of(dict(request.query))
+        return web.json_response({"pending": session.drain()})
+
     async def handle_say(self, request: web.Request) -> web.Response:
         data = await request.json()
         session = self.session_of(data)
@@ -453,7 +489,14 @@ class Broker:
             )
         session.sends.append(time.time())
         event_id = await self.publish(session.agent, text, depth)
-        return web.json_response({"event_id": event_id, "depth": depth})
+        answer = {"event_id": event_id, "depth": depth}
+        if session.polls:
+            # Очередь отдаём ПОСЛЕ публикации: исходящее относится к тому, что
+            # агент уже знал, и не должно наследовать глубину только что
+            # пришедшего. Для listener не трогаем — это отняло бы у него
+            # сообщение, которое он сейчас ждёт.
+            answer["pending"] = session.drain()
+        return web.json_response(answer)
 
     async def handle_status(self, request: web.Request) -> web.Response:
         lines = []
@@ -475,6 +518,7 @@ class Broker:
         app.router.add_post("/login", self.handle_login)
         app.router.add_post("/logout", self.handle_logout)
         app.router.add_get("/wait", self.handle_wait)
+        app.router.add_get("/inbox", self.handle_inbox)
         app.router.add_post("/say", self.handle_say)
         app.router.add_get("/status", self.handle_status)
         return app

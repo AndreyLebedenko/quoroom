@@ -13,6 +13,7 @@ DEAF_SECONDS, процесс жив, но глух, а значит беспол
     agentschat wait   --agent claude-code      # в фоне
     agentschat say    --agent claude-code "текст"
     agentschat ask    --agent claude-code --timeout 300 "вопрос"
+    agentschat inbox  --agent codex            # забрать очередь
     agentschat status
     agentschat logout --agent claude-code [--force]
 """
@@ -76,6 +77,17 @@ def do_login(args: argparse.Namespace) -> None:
         json.dumps({"agent": args.agent, "token": data["token"]}, ensure_ascii=False),
         encoding="utf-8",
     )
+    if data.get("mode") == "poll":
+        print(
+            f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
+            "Вложить сообщение в эту сессию снаружи нельзя, поэтому входящие "
+            "копятся в очереди и приходят вместе с ответом на любую твою "
+            "команду чата.\n"
+            "Listener запускать НЕ надо — он работать не будет. Чтобы забрать "
+            "накопленное, не отправляя ничего: agentschat inbox --agent "
+            f"{args.agent}"
+        )
+        return
     if data.get("mode") == "plugin":
         print(
             f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
@@ -166,6 +178,35 @@ def do_wait(args: argparse.Namespace) -> None:
             return
 
 
+def show_pending(pending: list) -> None:
+    """Печатает очередь, накопленную для агента без непрошеной доставки."""
+    if not pending:
+        return
+    print(f"\nAGENTSCHAT: пока тебя не было, пришло сообщений: {len(pending)}.")
+    for item in pending:
+        print()
+        print(item)
+
+
+def do_inbox(args: argparse.Namespace) -> None:
+    token = credentials(args.agent)["token"]
+    try:
+        response = requests.get(
+            f"{base()}/inbox",
+            params={"agent": args.agent, "token": token},
+            timeout=30,
+        )
+    except requests.RequestException as error:
+        fail(f"брокер недоступен: {error}")
+    if response.status_code != 200:
+        fail(explain(response))
+    pending = response.json().get("pending") or []
+    if not pending:
+        print("AGENTSCHAT: новых сообщений нет.")
+        return
+    show_pending(pending)
+
+
 def do_say(args: argparse.Namespace) -> None:
     token = credentials(args.agent)["token"]
     try:
@@ -178,7 +219,9 @@ def do_say(args: argparse.Namespace) -> None:
         fail(f"брокер недоступен: {error}")
     if response.status_code != 200:
         fail(explain(response))
-    print(f"AGENTSCHAT: отправлено ({response.json()['event_id']}).")
+    data = response.json()
+    print(f"AGENTSCHAT: отправлено ({data['event_id']}).")
+    show_pending(data.get("pending") or [])
 
 
 def do_ask(args: argparse.Namespace) -> None:
@@ -232,6 +275,10 @@ def main() -> None:
     ask.add_argument("--timeout", type=float, default=300.0)
     ask.add_argument("text")
     ask.set_defaults(run=do_ask)
+
+    inbox = sub.add_parser("inbox", help="забрать накопленные сообщения")
+    inbox.add_argument("--agent", required=True)
+    inbox.set_defaults(run=do_inbox)
 
     status = sub.add_parser("status", help="кто подключён и кто слушает")
     status.set_defaults(run=do_status)

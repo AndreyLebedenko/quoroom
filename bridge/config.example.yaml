@@ -93,6 +93,11 @@ agents:
     max_replies_per_minute: 6
     timeout_seconds: 600
 
+    # В открытое окно десктопного Codex вложить сообщение снаружи нельзя:
+    # управляющий сокет app-server существует только на Unix, а канал
+    # приложения односоставный и занят им самим. Поэтому входящие копятся
+    # в очереди и выдаются агенту при следующем обращении к чату.
+    delivery: "poll"
   opencode:
     user_id: "@opencode:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"
