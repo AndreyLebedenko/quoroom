@@ -124,7 +124,7 @@ agents:
     aliases: []
     max_replies_per_minute: 6
     timeout_seconds: 600
-    # Слушателем для OpenCode работает плагин .opencode/plugin/agentschat.js:
+    # Слушателем для OpenCode работает плагин .opencode/plugins/agentschat.js:
     # он живёт внутри процесса OpenCode и вкладывает входящее прямо в сессию.
     # Ни фонового listener, ни server_url этому агенту не нужно.
     # См. docs/SESSION_BRIDGE.md.

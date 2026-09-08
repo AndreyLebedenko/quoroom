@@ -62,7 +62,8 @@ function commandKind(args) {
 }
 
 export const AgentsChat = async ({ client }) => {
-  // Каталог плагинов может оказаться не один; работает первая копия, а
+  // OpenCode сканирует несколько каталогов плагинов (проверено: и plugins/,
+  // и plugin/, плюс глобальный в ~/.config/opencode). Работает первая копия,
   // остальные молча уступают, иначе брокер увидит несколько слушателей.
   if (globalThis.__agentschat) {
     note(`копия плагина уступила уже работающей: ${import.meta.url}`)
