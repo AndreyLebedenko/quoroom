@@ -11,7 +11,8 @@ DEAF_SECONDS, процесс жив, но глух, а значит беспол
 
     agentschat login  --agent claude-code --label "рефакторинг авторизации"
     agentschat wait   --agent claude-code      # в фоне
-    agentschat say    --agent claude-code "текст"
+    agentschat say    --agent claude-code "однострочный текст"
+    agentschat say    --agent claude-code --file письмо.md   # многострочный
     agentschat ask    --agent claude-code --timeout 300 "вопрос"
     agentschat inbox  --agent codex            # забрать очередь
     agentschat status
@@ -207,7 +208,28 @@ def do_inbox(args: argparse.Namespace) -> None:
     show_pending(pending)
 
 
+def message_text(args: argparse.Namespace) -> str:
+    """Текст сообщения: из аргумента, из файла или со стандартного ввода.
+
+    Многострочный текст НЕЛЬЗЯ передавать аргументом командной строки: под
+    Windows вызов идёт через cmd.exe, а тот обрывает командную строку на первом
+    переводе строки. На живом прогоне так пропали четыре абзаца из пяти, и обе
+    стороны ждали друг друга. Поэтому всё длиннее одной строки — файлом.
+    """
+    if args.file:
+        # utf-8-sig, а не utf-8: редакторы под Windows ставят BOM, и он
+        # уезжает в комнату видимым мусором в начале сообщения.
+        return Path(args.file).read_text(encoding="utf-8-sig").strip()
+    text = args.text or ""
+    if text == "-":
+        return sys.stdin.read().strip()
+    if not text:
+        fail("нечего отправлять: укажите текст, --file или - для стандартного ввода")
+    return text
+
+
 def do_say(args: argparse.Namespace) -> None:
+    args.text = message_text(args)
     token = credentials(args.agent)["token"]
     try:
         response = requests.post(
@@ -272,13 +294,15 @@ def main() -> None:
 
     say = sub.add_parser("say", help="отправить сообщение в чат")
     say.add_argument("--agent", required=True)
-    say.add_argument("text")
+    say.add_argument("text", nargs="?", help="текст; - читать со stdin")
+    say.add_argument("--file", help="взять текст из файла (для многострочного)")
     say.set_defaults(run=do_say)
 
     ask = sub.add_parser("ask", help="отправить и подождать ответ")
     ask.add_argument("--agent", required=True)
     ask.add_argument("--timeout", type=float, default=300.0)
-    ask.add_argument("text")
+    ask.add_argument("text", nargs="?", help="текст; - читать со stdin")
+    ask.add_argument("--file", help="взять текст из файла (для многострочного)")
     ask.set_defaults(run=do_ask)
 
     inbox = sub.add_parser("inbox", help="забрать накопленные сообщения")

@@ -70,13 +70,16 @@ def validate_fleet(ships):
                     and 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE):
                 raise GameError("координаты вне поля", 400)
             cells.append((x, y))
+        if len(set(cells)) != len(cells):
+            raise GameError("в корабле повторяются клетки", 400)
+        cells.sort()
         straight = all(
             (c[0] - cells[0][0], c[1] - cells[0][1]) == (i, 0)
             or (c[0] - cells[0][0], c[1] - cells[0][1]) == (0, i)
             for i, c in enumerate(cells)
-        ) if len(set(cells)) == len(cells) else False
+        )
         if not straight:
-            raise GameError("корабль должен быть прямой линией без повторов", 400)
+            raise GameError("корабль должен быть прямой линией", 400)
         for x, y in cells:
             if any(board[ny][nx] == SHIP for nx, ny in neighbors(x, y)):
                 raise GameError("корабли не должны касаться даже углами", 400)

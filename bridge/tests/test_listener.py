@@ -6,6 +6,8 @@
 """
 
 import io
+import tempfile
+import pathlib
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
@@ -93,6 +95,54 @@ class ListenerTests(unittest.TestCase):
         self.assertIn("listener остановлен", text)
         self.assertIn("токен неверен", text)
         self.assertEqual(self.clock.now, 1000.0)  # без выжидания запаса
+
+
+class MessageTextTests(unittest.TestCase):
+    """Откуда берётся текст сообщения.
+
+    Многострочный текст нельзя передать аргументом: под Windows вызов идёт
+    через cmd.exe, а тот обрывает командную строку на первом переводе строки.
+    На живом прогоне так пропали четыре абзаца из пяти.
+    """
+
+    def args(self, text=None, file=None):
+        return type("Args", (), {"text": text, "file": file})()
+
+    def test_single_line_comes_from_the_argument(self):
+        self.assertEqual(client.message_text(self.args(text="привет")), "привет")
+
+    def test_file_keeps_every_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "письмо.md"
+            path.write_text("первая\nвторая\nтретья\n", encoding="utf-8")
+            text = client.message_text(self.args(file=str(path)))
+        self.assertEqual(text.splitlines(), ["первая", "вторая", "третья"])
+
+    def test_byte_order_mark_is_stripped(self):
+        # Редакторы под Windows ставят BOM, и он уезжал в комнату видимым
+        # мусором в начале сообщения — так и случилось на живом прогоне.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "письмо.md"
+            path.write_bytes("\ufeff@codex вот протокол".encode("utf-8"))
+            text = client.message_text(self.args(file=str(path)))
+        self.assertTrue(text.startswith("@codex"), text[:20])
+
+    def test_file_wins_over_the_argument(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "письмо.md"
+            path.write_text("из файла", encoding="utf-8")
+            text = client.message_text(self.args(text="из аргумента", file=str(path)))
+        self.assertEqual(text, "из файла")
+
+    def test_dash_reads_standard_input(self):
+        with patch.object(client.sys, "stdin", io.StringIO("строка\nещё\n")):
+            text = client.message_text(self.args(text="-"))
+        self.assertEqual(text.splitlines(), ["строка", "ещё"])
+
+    def test_nothing_to_send_is_refused(self):
+        with self.assertRaises(SystemExit):
+            with redirect_stdout(io.StringIO()):
+                client.message_text(self.args())
 
 
 if __name__ == "__main__":

@@ -55,6 +55,22 @@ class ValidateFleetTests(unittest.TestCase):
         with self.assertRaises(GameError):
             validate_fleet([[{"x": 0, "y": 0}, {"x": 1, "y": 1}]] + classic_fleet()[1:])
 
+    def test_bent_ship_rejected(self):
+        with self.assertRaises(GameError):
+            validate_fleet([[{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 0, "y": 2}]]
+                           + classic_fleet()[1:])
+
+    def test_ship_with_gap_rejected(self):
+        with self.assertRaises(GameError):
+            validate_fleet([[{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 3, "y": 0}]]
+                           + classic_fleet()[1:])
+
+    def test_ship_cells_in_any_order(self):
+        fleet = classic_fleet()
+        fleet[0] = [{"x": x, "y": 0} for x in range(4)][::-1]
+        board, norm = validate_fleet(fleet)
+        self.assertEqual(len(norm[0]), 4)
+
     def test_touching_rejected(self):
         fleet = classic_fleet()
         fleet[6] = [{"x": 4, "y": 0}]
