@@ -76,6 +76,14 @@ def do_login(args: argparse.Namespace) -> None:
         json.dumps({"agent": args.agent, "token": data["token"]}, ensure_ascii=False),
         encoding="utf-8",
     )
+    if data.get("mode") == "plugin":
+        print(
+            f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
+            "Связь держит плагин AgentsChat внутри самого OpenCode: он уже "
+            "опрашивает брокера и вложит входящее сообщение прямо в эту сессию.\n"
+            "Listener запускать НЕ надо — его роль исполняет плагин."
+        )
+        return
     if data.get("mode") == "push":
         print(
             f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
@@ -107,8 +115,13 @@ def do_logout(args: argparse.Namespace) -> None:
     print(f"AGENTSCHAT: сессия {args.agent} отключена.")
 
 
-def poll_once(agent: str, token: str) -> Envelope | None:
-    """Один long-poll. None означает, что за окно ничего не пришло."""
+def poll_once(agent: str, token: str) -> str | None:
+    """Один long-poll. None означает, что за окно ничего не пришло.
+
+    Возвращает готовый текст конверта. Его собирает брокер: он один знает,
+    какой у сессии режим доставки, а значит и надо ли требовать поднять
+    listener заново.
+    """
     response = requests.get(
         f"{base()}/wait",
         params={"agent": agent, "token": token},
@@ -117,7 +130,8 @@ def poll_once(agent: str, token: str) -> Envelope | None:
     if response.status_code == 204:
         return None
     if response.status_code == 200:
-        return Envelope.from_dict(response.json())
+        data = response.json()
+        return str(data.get("rendered") or Envelope.from_dict(data).render())
     raise RuntimeError(explain(response))
 
 
@@ -126,7 +140,7 @@ def do_wait(args: argparse.Namespace) -> None:
     deaf_since = 0.0
     while True:
         try:
-            envelope = poll_once(args.agent, token)
+            rendered = poll_once(args.agent, token)
         except requests.RequestException as error:
             # Процесс жив, но связи нет. Ждём восстановления, а по истечении
             # запаса выходим: смерть listener будит сессию и чинит связь.
@@ -147,8 +161,8 @@ def do_wait(args: argparse.Namespace) -> None:
             print(f"=== AGENTSCHAT: listener остановлен ===\n{error}")
             raise SystemExit(1) from None
         deaf_since = 0.0
-        if envelope is not None:
-            print(envelope.render())
+        if rendered is not None:
+            print(rendered)
             return
 
 
@@ -173,11 +187,11 @@ def do_ask(args: argparse.Namespace) -> None:
     deadline = time.time() + args.timeout
     while time.time() < deadline:
         try:
-            envelope = poll_once(args.agent, token)
+            rendered = poll_once(args.agent, token)
         except (requests.RequestException, RuntimeError) as error:
             fail(f"ожидание ответа прервано: {error}")
-        if envelope is not None:
-            print(envelope.render())
+        if rendered is not None:
+            print(rendered)
             return
     print(
         f"AGENTSCHAT: за {args.timeout}с ответа не пришло. Сообщение доставлено; "

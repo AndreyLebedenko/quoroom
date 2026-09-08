@@ -195,6 +195,76 @@ class PushDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("push", text)
 
 
+class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    """Агент с delivery: plugin слушает через /wait, но listener не запускает."""
+
+    async def asyncSetUp(self):
+        config = {
+            **CONFIG,
+            "agents": {
+                **CONFIG["agents"],
+                "codex": {**CONFIG["agents"]["codex"], "delivery": "plugin"},
+            },
+        }
+        self.broker = Broker(config)
+        self.client = TestClient(TestServer(self.broker.app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        for client in self.broker.clients.values():
+            await client.close()
+
+    async def login(self, agent="codex"):
+        response = await self.client.post("/login", json={"agent": agent})
+        return await response.json()
+
+    async def test_login_reports_the_plugin_mode(self):
+        self.assertEqual((await self.login())["mode"], "plugin")
+
+    async def test_plugin_listens_through_the_same_wait(self):
+        data = await self.login()
+        session = self.broker.sessions["codex"]
+        session.inbox.append(
+            Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
+        )
+        session.signal.set()
+        response = await self.client.get(
+            "/wait", params={"agent": "codex", "token": data["token"]}
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["text"], "привет")
+
+    async def test_envelope_does_not_demand_a_listener_restart(self):
+        # Плагину нечего поднимать: требование было бы невыполнимым.
+        data = await self.login()
+        session = self.broker.sessions["codex"]
+        session.inbox.append(
+            Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
+        )
+        session.signal.set()
+        response = await self.client.get(
+            "/wait", params={"agent": "codex", "token": data["token"]}
+        )
+        rendered = (await response.json())["rendered"]
+        self.assertNotIn("Подними новый listener", rendered)
+        self.assertIn("данные из чата", rendered)
+
+    async def test_ordinary_agent_is_still_told_to_restart_its_listener(self):
+        data = await self.login(agent="claude-code")
+        session = self.broker.sessions["claude-code"]
+        session.inbox.append(
+            Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
+        )
+        session.signal.set()
+        response = await self.client.get(
+            "/wait", params={"agent": "claude-code", "token": data["token"]}
+        )
+        self.assertIn(
+            "Подними новый listener", (await response.json())["rendered"]
+        )
+
+
 class EnvelopeTests(unittest.TestCase):
     def test_render_marks_source_and_demands_listener_restart(self):
         text = Envelope(

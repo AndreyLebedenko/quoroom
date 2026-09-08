@@ -99,10 +99,28 @@ class Session:
     # Для агентов с push-доставкой: их собственный HTTP-сервер и id сессии.
     push_url: str = ""
     push_session: str = ""
+    # "listener" | "plugin" | (push определяется наличием push_url)
+    listener_kind: str = "listener"
 
     @property
     def push(self) -> bool:
         return bool(self.push_url and self.push_session)
+
+    @property
+    def mode(self) -> str:
+        if self.push:
+            return "push"
+        return self.listener_kind
+
+    @property
+    def restart_listener(self) -> bool:
+        """Требовать ли от агента поднять listener заново после пробуждения.
+
+        Требование имеет смысл только там, где listener — отдельный процесс,
+        умирающий при доставке. Плагину и push-доставке поднимать нечего, а
+        невыполнимое указание в конверте только сбивает.
+        """
+        return self.mode == "listener"
 
     def state(self) -> str:
         now = time.time()
@@ -137,10 +155,16 @@ class Broker:
         # Агенты, которым брокер доставляет сам, через их собственный HTTP API
         # (OpenCode). Для остальных доставка идёт через listener и его выход.
         self.push_urls: dict[str, str] = {}
+        # Агенты, у которых listener живёт внутри самого CLI (плагин OpenCode).
+        # Для брокера это обычный listener: разница только в том, что человеку
+        # и агенту нечего запускать руками.
+        self.plugin_agents: set[str] = set()
         self.http: ClientSession | None = None
         for agent, data in cfg["agents"].items():
             if data.get("server_url"):
                 self.push_urls[agent] = str(data["server_url"]).rstrip("/")
+            if str(data.get("delivery", "")) == "plugin":
+                self.plugin_agents.add(agent)
             client = AsyncClient(
                 cfg["homeserver_url"],
                 data["user_id"],
@@ -297,7 +321,7 @@ class Broker:
         if self.http is None:
             raise RuntimeError("HTTP-клиент брокера не инициализирован")
         url = session.push_url + PROMPT_PATH.format(session=session.push_session)
-        body = push_payload(envelope.render(restart_listener=False))
+        body = push_payload(envelope.render(session.restart_listener))
         async with self.http.post(url, json=body) as response:
             response.raise_for_status()
         session.last_delivery = time.time()
@@ -339,6 +363,8 @@ class Broker:
             secrets.token_hex(16),
             time.time(),
         )
+        if agent in self.plugin_agents:
+            session.listener_kind = "plugin"
         base = self.push_urls.get(agent, "")
         if base:
             try:
@@ -363,7 +389,7 @@ class Broker:
             {
                 "token": session.token,
                 "room": self.room,
-                "mode": "push" if session.push else "listener",
+                "mode": session.mode,
             }
         )
 
@@ -397,7 +423,12 @@ class Broker:
             envelope = session.inbox.popleft()
             session.depth = envelope.depth
             session.last_delivery = time.time()
-            return web.json_response(envelope.as_dict())
+            return web.json_response(
+                {
+                    **envelope.as_dict(),
+                    "rendered": envelope.render(session.restart_listener),
+                }
+            )
         finally:
             session.open_waits -= 1
             session.listening_until = time.time() + LISTEN_GRACE

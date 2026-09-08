@@ -15,7 +15,11 @@ import requests
 from sessionchat import client
 from sessionchat.protocol import DEAF_SECONDS, Envelope
 
-MESSAGE = Envelope("@human:local", "человек", "проверка связи", "$e", "22:00:00", 0)
+# poll_once возвращает готовый текст конверта: собирает его брокер, потому
+# что только он знает режим доставки сессии.
+MESSAGE = Envelope(
+    "@human:local", "человек", "проверка связи", "$e", "22:00:00", 0
+).render()
 
 
 class Clock:
