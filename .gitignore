@@ -26,3 +26,4 @@ docker/data/
 
 # Локальные настройки Claude Code (личные, не общие для проекта)
 .claude/settings.local.json
+bridge/broker.log

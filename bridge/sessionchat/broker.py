@@ -495,9 +495,14 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    # --verbose говорит о нашей работе, а не о работе matrix-nio: на DEBUG она
+    # печатает каждое событие каждой комнаты и схему каждого ответа /sync,
+    # в которых лог брокера тонет.
+    log.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+    logging.getLogger("nio").setLevel(logging.WARNING)
     asyncio.run(run(Path(args.config).resolve(), args.agents))
 
 
