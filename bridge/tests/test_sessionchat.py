@@ -1,3 +1,4 @@
+import asyncio
 import time
 import types
 import unittest
@@ -399,6 +400,24 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual((await response.json())["text"], "привет")
         self.assertFalse(session.inbox)
+
+    async def test_second_listener_gets_an_empty_window_not_a_crash(self):
+        # Два listener на одной сессии — не выдумка: токен лежит в общем файле
+        # ~/.agentschat/<агент>.json, и два процесса прочитают один и тот же.
+        # Опоздавший должен получить пустое окно и опросить снова; раньше
+        # popleft падал с IndexError и отдавал ему 500.
+        _, data = await self.login()
+        params = {"agent": "claude-code", "token": data["token"]}
+        first = asyncio.create_task(self.client.get("/wait", params=params))
+        second = asyncio.create_task(self.client.get("/wait", params=params))
+        await asyncio.sleep(0.1)
+        session = self.broker.sessions["claude-code"]
+        session.inbox.append(
+            Envelope("@human:local", "человек", "одно", "$e", "22:00", 0)
+        )
+        session.signal.set()
+        statuses = sorted(r.status for r in await asyncio.gather(first, second))
+        self.assertEqual(statuses, [200, 204])
 
     async def test_reply_depth_grows_and_is_capped(self):
         _, data = await self.login()

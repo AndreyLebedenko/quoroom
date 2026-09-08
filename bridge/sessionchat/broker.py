@@ -342,6 +342,13 @@ class Broker:
                     await asyncio.wait_for(session.signal.wait(), WAIT_SECONDS)
                 except asyncio.TimeoutError:
                     return web.Response(status=204)
+            if not session.inbox:
+                # Разбудили, но сообщение уже забрал другой listener на этой же
+                # сессии. Так бывает, когда токен из ~/.agentschat/<агент>.json
+                # прочитали два процесса. Пустое окно — честный ответ: клиент
+                # просто опросит ещё раз. Без этой проверки popleft падал с
+                # IndexError, и опоздавший получал 500.
+                return web.Response(status=204)
             envelope = session.inbox.popleft()
             session.depth = envelope.depth
             session.last_delivery = time.time()
