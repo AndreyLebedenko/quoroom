@@ -225,6 +225,9 @@ def do_say(args: argparse.Namespace) -> None:
 
 
 def do_ask(args: argparse.Namespace) -> None:
+    # Порядок важен: say у poll-агента сначала отдаёт накопленную очередь, и
+    # только потом мы начинаем ждать ответ. Иначе первое же ожидание вернуло бы
+    # старое сообщение из очереди, выдав его за ответ на заданный вопрос.
     do_say(args)
     token = credentials(args.agent)["token"]
     deadline = time.time() + args.timeout
