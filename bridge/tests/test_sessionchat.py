@@ -268,6 +268,52 @@ class PollDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("опрос (в очереди 1)", text)
 
 
+class DepthLimitTests(unittest.IsolatedAsyncioTestCase):
+    """Предел глубины настраивается: шести звеньев мало для совместной работы."""
+
+    async def asyncSetUp(self):
+        self.broker = Broker({**CONFIG, "max_depth": 20})
+        self.published: list[tuple[str, str, int]] = []
+
+        async def publish(agent, text, depth):
+            self.published.append((agent, text, depth))
+            return "$published"
+
+        self.broker.publish = publish
+        self.client = TestClient(TestServer(self.broker.app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        for client in self.broker.clients.values():
+            await client.close()
+
+    async def test_configured_limit_replaces_the_default(self):
+        response = await self.client.post("/login", json={"agent": "claude-code"})
+        data = await response.json()
+        session = self.broker.sessions["claude-code"]
+        session.depth = MAX_DEPTH
+        allowed = await self.client.post(
+            "/say",
+            json={"agent": "claude-code", "token": data["token"], "text": "дальше"},
+        )
+        self.assertEqual(allowed.status, 200)
+        self.assertEqual(self.published[-1][2], MAX_DEPTH + 1)
+
+    async def test_envelope_shows_the_configured_limit(self):
+        response = await self.client.post("/login", json={"agent": "claude-code"})
+        data = await response.json()
+        session = self.broker.sessions["claude-code"]
+        session.inbox.append(
+            Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
+        )
+        session.signal.set()
+        answer = await self.client.get(
+            "/wait", params={"agent": "claude-code", "token": data["token"]}
+        )
+        self.assertIn("из 20", (await answer.json())["rendered"])
+
+
 class EnvelopeTests(unittest.TestCase):
     def test_render_marks_source_and_demands_listener_restart(self):
         text = Envelope(
@@ -366,6 +412,19 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         blocked = await self.client.post("/say", json=payload)
         self.assertEqual(blocked.status, 403)
         self.assertIn("нужен человек", await blocked.text())
+
+    async def test_depth_refusal_is_announced_in_the_room(self):
+        # Наблюдающий человек иначе увидит тишину: отказ уходит агенту, а в
+        # комнате не появляется ничего, и непонятно, почему всё встало.
+        _, data = await self.login()
+        self.broker.sessions["claude-code"].depth = MAX_DEPTH
+        blocked = await self.client.post(
+            "/say",
+            json={"agent": "claude-code", "token": data["token"], "text": "ответ"},
+        )
+        self.assertEqual(blocked.status, 403)
+        self.assertIn("достигла предела глубины", self.published[-1][1])
+        self.assertIn("обнулит счётчик", self.published[-1][1])
 
     async def test_rate_limit_stops_a_runaway_session(self):
         _, data = await self.login()

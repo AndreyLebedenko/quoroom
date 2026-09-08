@@ -83,6 +83,9 @@ class Session:
     signal: asyncio.Event = field(default_factory=asyncio.Event)
     # "listener" | "plugin" | "poll"
     listener_kind: str = "listener"
+    # Предел глубины цепочки, действующий для этой сессии. Хранится здесь,
+    # чтобы конверт печатал настоящее "из N", а не значение по умолчанию.
+    max_depth: int = MAX_DEPTH
 
     @property
     def mode(self) -> str:
@@ -114,7 +117,10 @@ class Session:
         if taken:
             self.last_delivery = time.time()
             self.depth = taken[-1].depth
-        return [envelope.render(self.restart_listener) for envelope in taken]
+        return [
+            envelope.render(self.restart_listener, self.max_depth)
+            for envelope in taken
+        ]
 
     def state(self) -> str:
         now = time.time()
@@ -138,6 +144,7 @@ class Broker:
     def __init__(self, cfg: dict):
         self.room = cfg["room_id"]
         self.port = int(cfg.get("sessionchat_port", DEFAULT_PORT))
+        self.max_depth = int(cfg.get("max_depth", MAX_DEPTH))
         verify = cfg.get("verify_ssl", True)
         tls = (
             ssl.create_default_context(cafile=verify)
@@ -304,6 +311,7 @@ class Broker:
             time.time(),
         )
         session.listener_kind = self.delivery_kinds.get(agent, "listener")
+        session.max_depth = self.max_depth
         self.sessions[agent] = session
         log.info("подключена сессия %s (%s)", agent, session.label)
         return web.json_response(
@@ -340,7 +348,9 @@ class Broker:
             return web.json_response(
                 {
                     **envelope.as_dict(),
-                    "rendered": envelope.render(session.restart_listener),
+                    "rendered": envelope.render(
+                        session.restart_listener, session.max_depth
+                    ),
                 }
             )
         finally:
@@ -358,11 +368,22 @@ class Broker:
         if not text:
             raise web.HTTPBadRequest(text="пустое сообщение")
         depth = session.depth + 1
-        if depth > MAX_DEPTH:
+        if depth > self.max_depth:
+            # Человек, который просто наблюдает, иначе увидит тишину и не
+            # поймёт, что цепочка упёрлась в предел: отказ уходит агенту, а в
+            # комнате не появляется ничего.
+            await self.publish(
+                session.agent,
+                f"(цепочка достигла предела глубины {self.max_depth} без "
+                "участия человека, дальше агенты продолжать не могут. "
+                "Напишите что-нибудь в комнату — это обнулит счётчик.)",
+                0,
+            )
             raise web.HTTPForbidden(
                 text=(
-                    f"достигнута предельная глубина цепочки ({MAX_DEPTH}) без "
-                    "участия человека. Сообщение не отправлено: нужен человек."
+                    f"достигнута предельная глубина цепочки ({self.max_depth}) "
+                    "без участия человека. Сообщение не отправлено: нужен "
+                    "человек. Об этом сказано в комнате, повторять не надо."
                 )
             )
         if session.throttled():
