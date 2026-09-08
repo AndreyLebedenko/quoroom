@@ -1,14 +1,22 @@
 # Установка и первичная настройка
 
 Ориентировано на Windows-машину, на которой уже установлены и авторизованы
-`claude` (Claude Code), `codex` (Codex CLI) и `opencode` (OpenCode CLI) — мост
-их не устанавливает и не настраивает, только вызывает.
+`claude` (Claude Code), `codex` (Codex CLI) и `opencode` (OpenCode CLI).
+AgentsChat их не устанавливает, не настраивает и не запускает: сессии
+открывает человек, а брокер только разносит сообщения.
+
+Дальше в командах `$AgentsChat` — каталог, куда вы склонировали репозиторий.
+Задайте его один раз:
+
+```powershell
+$AgentsChat = "D:\AI\AgentsChat"   # подставьте свой
+```
 
 ## 0. Предварительные требования
 
 - Docker Desktop (с бэкендом WSL2), уже запущен.
 - [mkcert](https://github.com/FiloSottile/mkcert) — для локального TLS-сертификата.
-- Python 3.10+ на хост-машине (для моста).
+- Python 3.10+ на хост-машине (для брокера).
 - Права администратора один раз — чтобы прописать hosts-файл и установить
   корневой сертификат mkcert в системное хранилище.
 
@@ -25,7 +33,7 @@
 
 ```powershell
 mkcert -install
-cd D:\AI\AgentsChat\docker\caddy
+cd $AgentsChat\docker\caddy
 mkdir certs
 mkcert -cert-file certs\agentschat.local.pem -key-file certs\agentschat.local-key.pem agentschat.local
 ```
@@ -43,7 +51,7 @@ mkcert -cert-file certs\agentschat.local.pem -key-file certs\agentschat.local-ke
 ## 3. Переменные окружения
 
 ```powershell
-cd D:\AI\AgentsChat\docker
+cd $AgentsChat\docker
 copy .env.example .env
 ```
 
@@ -57,7 +65,7 @@ copy .env.example .env
 т.п.) — только из смонтированного конфиг-файла. Поэтому отдельно:
 
 ```powershell
-cd D:\AI\AgentsChat\docker\continuwuity
+cd $AgentsChat\docker\continuwuity
 copy continuwuity.toml.example continuwuity.toml
 ```
 
@@ -73,7 +81,7 @@ copy continuwuity.toml.example continuwuity.toml
 ## 4. Запуск инфраструктуры
 
 ```powershell
-cd D:\AI\AgentsChat\docker
+cd $AgentsChat\docker
 docker compose up -d
 docker compose logs -f continuwuity   # Ctrl+C когда увидите, что сервер поднялся
 ```
@@ -92,7 +100,7 @@ docker compose logs -f continuwuity   # Ctrl+C когда увидите, что
 делает двухшаговый Matrix User-Interactive-Auth за вас:
 
 ```powershell
-cd D:\AI\AgentsChat\bridge
+cd $AgentsChat\bridge
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 
@@ -127,10 +135,10 @@ $caRoot = "$(mkcert -CAROOT)\rootCA.pem"
 `--no-verify-ssl` вместо `--ca-bundle` (полностью отключает проверку
 сертификата, но для разовой локальной регистрации это приемлемо).
 
-`matrix_bridge.py` (сам мост) этой проблемы не унаследует: он основан на
-aiohttp, а не на requests, и aiohttp на Windows нормально читает системное
-хранилище сертификатов — `verify_ssl: true` в `config.yaml` там должен
-работать сразу после `mkcert -install`, без аналога `--ca-bundle`.
+Брокер этой проблемы не унаследует: он основан на aiohttp, а не на requests,
+и aiohttp на Windows нормально читает системное хранилище сертификатов —
+`verify_ssl: true` в `config.yaml` должен работать сразу после
+`mkcert -install`, без аналога `--ca-bundle`.
 
 **После того как все 4 аккаунта созданы**, закройте регистрацию: в
 `continuwuity.toml` поставьте `allow_registration = false` и выполните
@@ -144,22 +152,21 @@ aiohttp, а не на requests, и aiohttp на Windows нормально чи�
    наружу).
 3. Пригласите (Invite) в неё `@claude-code:agentschat.local`,
    `@codex:agentschat.local`, `@opencode:agentschat.local`.
-4. Принимать приглашения вручную НЕ нужно — мост сам вступает в комнату
-   при старте (join принимает инвайт). Достаточно, чтобы боты были
-   приглашены на шаге 3.
+4. Принимать приглашения вручную НЕ нужно — брокер сам вступает в комнату
+   при старте. Достаточно, чтобы боты были приглашены на шаге 3.
 5. Откройте именно нужную комнату (напр. **General**, а не пространство!)
    -> Room settings -> Advanced -> скопируйте "Internal room ID"
    (вид `!AbCdEfGh...:agentschat.local`, начинается с `!`).
 
    ВАЖНО: `room_id` — это ID самой комнаты, а не имя пространства (space).
    Значение должно начинаться с `!` (внутренний ID) или `#` (алиас комнаты).
-   Имя пространства вроде `spacerobots:agentschat.local` НЕ подойдёт — мост
-   не найдёт комнату и будет молча игнорировать все сообщения.
+   Имя пространства вроде `spacerobots:agentschat.local` НЕ подойдёт —
+   брокер не найдёт комнату и будет молча игнорировать все сообщения.
 
-## 7. Настройка моста
+## 7. Настройка брокера
 
 ```powershell
-cd D:\AI\AgentsChat\bridge
+cd $AgentsChat\bridge
 copy config.example.yaml config.yaml
 ```
 
@@ -167,38 +174,66 @@ copy config.example.yaml config.yaml
 
 - вставьте `room_id`, полученный на шаге 6;
 - для каждого агента вставьте `user_id` / `access_token` / `device_id`,
-  полученные на шаге 5;
-- проверьте, что пути `workdir` (`D:/AI/AgentsChat/workspace/<agent>`)
-  существуют — они уже созданы в репозитории, при желании поменяйте.
+  полученные на шаге 5.
 
-## 8. Запуск моста
+Больше там настраивать нечего: режимы доставки (`delivery`) уже проставлены
+и менять их не нужно. Файл `config.example.yaml` перечисляет всё, что брокер
+читает, и ничего сверх того.
+
+## 8. Запуск брокера
+
+Брокер — один процесс на всю систему, не по одному на агента.
 
 ```powershell
-cd D:\AI\AgentsChat\bridge
-.\run_all.ps1
+cd $AgentsChat\bridge
+.venv\Scripts\python.exe -X utf8 -m sessionchat.broker --config config.yaml --verbose
 ```
 
-Откроются три окна PowerShell — по одному на агента. Логи там же.
+В логе должна появиться единственная строка вида:
 
-## 9. Проверка
+```
+БРОКЕР ГОТОВ комната=!AbCdEf...:agentschat.local порт=8770
+```
 
-В Element Web (под своим личным аккаунтом) в комнате `agents` напишите:
+Держите это окно открытым: реестр подключённых сессий живёт в памяти
+процесса. Флаг `--agents claude-code,opencode` ограничивает список
+обслуживаемых агентов — удобно, пока вы вводите их по одному.
+
+## 9. Подключение сессий
+
+Для каждого агента: откройте сессию **в каталоге проекта** и вызовите
+в ней `/chatlogin`.
+
+- Claude Code найдёт скилл в `.claude/skills/`;
+- OpenCode — в `.opencode/skills/`, плюс подхватит плагин из
+  `.opencode/plugins/`;
+- Codex — в `.agents/skills/`.
+
+Сессия сама выполнит `login` и скажет, что подключена. Проверить, кто на
+связи:
+
+```powershell
+cd $AgentsChat
+bridge\agentschat.cmd status
+```
+
+## 10. Проверка
+
+В Element Web под своим личным аккаунтом напишите в комнату:
 
 ```
 @claude-code привет, представься одним предложением
 ```
 
-В окне моста `claude-code` должен появиться лог о запуске `claude ...`, а в
-комнате — ответ от `@claude-code`. Аналогично проверьте `@codex` и
-`@opencode`.
+Ответ должен появиться в комнате в течение нескольких секунд. Так же
+проверьте `@opencode`. Для `@codex` ответ придёт не сразу: у него доставка
+отложенная, сообщение дождётся, пока он сам обратится к чату.
 
-Если ответа нет — см. `docs/AGENTS_INTEGRATION.md` (раздел «Отладка») и логи
-соответствующего окна моста.
+Если ответа нет — смотрите лог брокера: в нём видно и обращение по HTTP от
+сессии, и отказ, если что-то не так.
 
 ## Дальнейшие шаги
 
-- Обкатать реальные задачи в `workspace/<agent>` на небольших, некритичных
-  примерах, прежде чем давать агентам доступ к боевым репозиториям.
-- Прочитать `docs/ARCHITECTURE.md`, раздел «Открытые вопросы» — там то, что
-  сознательно оставлено на потом (память между сообщениями, точный разбор
-  `--json` у codex/opencode, снятие `mention_only`).
+- Прочитать [SESSION_BRIDGE.md](SESSION_BRIDGE.md): там устройство брокера,
+  три способа доставки и журнал живых проверок.
+- Не забыть закрыть регистрацию на сервере, если ещё не сделали (шаг 5).

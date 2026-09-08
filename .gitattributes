@@ -1,0 +1,9 @@
+* text=auto
+
+# Пусковик для macOS и Linux: с CRLF ядро не найдёт интерпретатор в shebang.
+bridge/agentschat text eol=lf
+*.sh text eol=lf
+
+# Пусковик для Windows: cmd.exe требует CRLF.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

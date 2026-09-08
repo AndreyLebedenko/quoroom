@@ -1,0 +1,11 @@
+#!/bin/sh
+# Тот же вход, что и agentschat.cmd, для macOS и Linux.
+# Пути ищем от расположения скрипта, а не от текущего каталога: агент может
+# вызвать его откуда угодно внутри проекта.
+here=$(cd "$(dirname "$0")" && pwd)
+if [ -x "$here/.venv/bin/python" ]; then
+  python="$here/.venv/bin/python"
+else
+  python=python3
+fi
+PYTHONPATH="$here" exec "$python" -X utf8 -m sessionchat.client "$@"

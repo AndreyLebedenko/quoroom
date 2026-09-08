@@ -4,7 +4,7 @@ import unittest
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from sessionchat.broker import PROMPT_PATH, Broker, Session, only_agents, push_payload
+from sessionchat.broker import Broker, Session, only_agents
 from sessionchat.protocol import MAX_DEPTH, MAX_SENDS_PER_MINUTE, Envelope
 
 CONFIG = {
@@ -97,102 +97,6 @@ class AgentSubsetTests(unittest.TestCase):
     def test_unknown_agent_is_refused_before_connecting(self):
         with self.assertRaises(ValueError):
             only_agents(CONFIG, "claude-code,opencode")
-
-
-class PushPayloadTests(unittest.TestCase):
-    def test_text_is_carried_as_a_prompt_part(self):
-        self.assertEqual(
-            push_payload("текст")["parts"], [{"type": "text", "text": "текст"}]
-        )
-
-    def test_endpoint_is_the_one_that_starts_the_session(self):
-        # /api/session/{id}/prompt только принимает вход в очередь: на живой
-        # проверке сообщения лежали непрочитанными. Запускает обработку
-        # только prompt_async.
-        self.assertTrue(PROMPT_PATH.endswith("/prompt_async"))
-        self.assertNotIn("/api/", PROMPT_PATH)
-
-
-class PushDeliveryTests(unittest.IsolatedAsyncioTestCase):
-    """Агент с server_url (OpenCode) получает доставку от брокера, без listener."""
-
-    async def asyncSetUp(self):
-        config = {
-            **CONFIG,
-            "agents": {
-                **CONFIG["agents"],
-                "codex": {**CONFIG["agents"]["codex"], "server_url": "http://oc"},
-            },
-        }
-        self.broker = Broker(config)
-        self.pushed: list[tuple[str, dict]] = []
-        self.published: list[tuple[str, str, int]] = []
-        self.fail_push = False
-
-        async def publish(agent, text, depth):
-            self.published.append((agent, text, depth))
-            return "$published"
-
-        async def resolve(base):
-            return "ses_newest"
-
-        async def deliver(session, envelope):
-            if self.fail_push:
-                raise RuntimeError("сервер сессии не отвечает")
-            self.pushed.append((session.push_session, envelope.as_dict()))
-
-        self.broker.publish = publish
-        self.broker.resolve_push_session = resolve
-        self.broker.deliver_push = deliver
-        self.client = TestClient(TestServer(self.broker.app()))
-        await self.client.start_server()
-
-    async def asyncTearDown(self):
-        await self.client.close()
-        for client in self.broker.clients.values():
-            await client.close()
-
-    async def login(self):
-        response = await self.client.post("/login", json={"agent": "codex"})
-        return response, await response.json()
-
-    async def test_push_agent_is_bound_to_its_own_session(self):
-        response, data = await self.login()
-        self.assertEqual(response.status, 200)
-        self.assertEqual(data["mode"], "push")
-        self.assertEqual(self.broker.sessions["codex"].push_session, "ses_newest")
-
-    async def test_message_is_pushed_instead_of_queued_for_a_listener(self):
-        await self.login()
-        await self.broker.on_message(
-            types.SimpleNamespace(room_id="!room:local"), event("@codex привет")
-        )
-        self.assertEqual(len(self.pushed), 1)
-        self.assertEqual(self.pushed[0][0], "ses_newest")
-        self.assertEqual(self.pushed[0][1]["text"], "@codex привет")
-        self.assertFalse(self.broker.sessions["codex"].inbox)
-
-    async def test_failed_push_is_reported_in_the_room(self):
-        await self.login()
-        self.fail_push = True
-        await self.broker.on_message(
-            types.SimpleNamespace(room_id="!room:local"), event("@codex привет")
-        )
-        self.assertEqual(len(self.published), 1)
-        self.assertIn("не доставлено", self.published[0][1])
-
-    async def test_listener_is_refused_for_a_push_agent(self):
-        _, data = await self.login()
-        response = await self.client.get(
-            "/wait", params={"agent": "codex", "token": data["token"]}
-        )
-        self.assertEqual(response.status, 409)
-        self.assertIn("listener ему не нужен", await response.text())
-
-    async def test_status_shows_the_delivery_mode(self):
-        await self.login()
-        text = await (await self.client.get("/status")).text()
-        self.assertIn("push", text)
 
 
 class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):

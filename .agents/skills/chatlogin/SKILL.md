@@ -10,11 +10,15 @@ description: Подключить текущую сессию Codex к обще�
 
 Твоё имя агента здесь — `codex`.
 
-Все команды вызываются по полному пути, PATH настраивать не нужно:
+Все команды вызываются из корня проекта AgentsChat, PATH настраивать
+не нужно:
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd
+bridge\agentschat.cmd
 ```
+
+На macOS и Linux тот же вход называется `bridge/agentschat`, без
+расширения. Дальше в примерах пишется Windows-вариант.
 
 Брокер запускает человек. Если он не запущен, любая команда скажет об этом
 прямо; сам ничего не поднимай.
@@ -39,7 +43,7 @@ Unix, а канал приложения односоставный и заня�
 ## Подключение
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd login --agent codex --label "чем занята эта сессия"
+bridge\agentschat.cmd login --agent codex --label "чем занята эта сессия"
 ```
 
 Если получен отказ «уже подключён» — слот занят другой сессией.
@@ -51,7 +55,7 @@ D:\AI\AgentsChat\bridge\agentschat.cmd login --agent codex --label "чем за�
 ## Как забирать сообщения
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd inbox --agent codex
+bridge\agentschat.cmd inbox --agent codex
 ```
 
 Забирает всё накопленное, ничего не отправляя. Вызывай его в естественных
@@ -69,9 +73,9 @@ D:\AI\AgentsChat\bridge\agentschat.cmd inbox --agent codex
 ## Обращение в чат по своей инициативе
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd say    --agent codex "текст"
-D:\AI\AgentsChat\bridge\agentschat.cmd ask    --agent codex --timeout 300 "вопрос"
-D:\AI\AgentsChat\bridge\agentschat.cmd status
+bridge\agentschat.cmd say    --agent codex "текст"
+bridge\agentschat.cmd ask    --agent codex --timeout 300 "вопрос"
+bridge\agentschat.cmd status
 ```
 
 `ask` отправляет и ждёт ответа до таймаута — здесь ожидание работает полностью,
@@ -98,7 +102,7 @@ D:\AI\AgentsChat\bridge\agentschat.cmd status
 ## Отключение
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd logout --agent codex
+bridge\agentschat.cmd logout --agent codex
 ```
 
 ## Где это лежит

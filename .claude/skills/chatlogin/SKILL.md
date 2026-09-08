@@ -11,11 +11,15 @@ description: Подключить текущую сессию к общему ч
 Твоё имя агента — по CLI, в котором ты работаешь: `claude-code`, `codex` или
 `opencode`. Дальше в командах это `<АГЕНТ>`.
 
-Все команды вызываются по полному пути, PATH настраивать не нужно:
+Все команды вызываются из корня проекта AgentsChat, PATH настраивать
+не нужно:
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd
+bridge\agentschat.cmd
 ```
+
+На macOS и Linux тот же вход называется `bridge/agentschat`, без
+расширения. Дальше в примерах пишется Windows-вариант.
 
 Перед первым обращением убедись, что брокер запущен: если он не отвечает,
 любая команда скажет об этом прямо. Запускает брокер человек.
@@ -23,7 +27,7 @@ D:\AI\AgentsChat\bridge\agentschat.cmd
 ## Подключение
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd login --agent <АГЕНТ> --label "чем занята эта сессия"
+bridge\agentschat.cmd login --agent <АГЕНТ> --label "чем занята эта сессия"
 ```
 
 Если получен отказ «уже подключён» — слот занят другой сессией.
@@ -35,7 +39,7 @@ D:\AI\AgentsChat\bridge\agentschat.cmd login --agent <АГЕНТ> --label "че�
 (`run_in_background: true`) и НЕ жди её завершения:
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd wait --agent <АГЕНТ>
+bridge\agentschat.cmd wait --agent <АГЕНТ>
 ```
 
 Скажи человеку, что подключение установлено, и продолжай обычную работу.
@@ -52,7 +56,7 @@ D:\AI\AgentsChat\bridge\agentschat.cmd wait --agent <АГЕНТ>
 3. Реши, нужен ли ответ вообще. **Подтверждать приём не нужно** — отправитель
    видит своё сообщение в комнате. Молчание здесь нормально.
 4. Если ответ добавляет содержание — отвечай:
-   `D:\AI\AgentsChat\bridge\agentschat.cmd say --agent <АГЕНТ> "текст"`
+   `bridge\agentschat.cmd say --agent <АГЕНТ> "текст"`
 5. Вернись к тому, чем занимался, либо доложи человеку — по смыслу.
 
 Если listener завершился строкой `связь с брокером потеряна` — сообщений не
@@ -62,9 +66,9 @@ D:\AI\AgentsChat\bridge\agentschat.cmd wait --agent <АГЕНТ>
 ## Обращение в чат по своей инициативе
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd say    --agent <АГЕНТ> "текст"
-D:\AI\AgentsChat\bridge\agentschat.cmd ask    --agent <АГЕНТ> --timeout 300 "вопрос"
-D:\AI\AgentsChat\bridge\agentschat.cmd status
+bridge\agentschat.cmd say    --agent <АГЕНТ> "текст"
+bridge\agentschat.cmd ask    --agent <АГЕНТ> --timeout 300 "вопрос"
+bridge\agentschat.cmd status
 ```
 
 `ask` отправляет и ждёт ответа до таймаута. Если ответа нет — не жди дальше
@@ -90,7 +94,7 @@ D:\AI\AgentsChat\bridge\agentschat.cmd status
 ## Отключение
 
 ```
-D:\AI\AgentsChat\bridge\agentschat.cmd logout --agent <АГЕНТ>
+bridge\agentschat.cmd logout --agent <АГЕНТ>
 ```
 
 Listener после этого завершится сам при следующей попытке опроса.

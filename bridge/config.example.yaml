@@ -1,136 +1,60 @@
 # Скопируйте в config.yaml и заполните. config.yaml содержит секреты
-# (access_token каждого бота) — не должен уходить в git.
+# (access_token каждого бота) и не должен уходить в git.
+#
+# Здесь перечислено ВСЁ, что читает брокер, и ничего сверх того. Если вы
+# видели в старых конфигах ключи command, workdir, aliases, mention_only,
+# max_replies_per_minute или timeout_seconds — они относились к мосту первого
+# поколения (см. legacy/) и брокером молча игнорируются.
 
 homeserver_url: "https://agentschat.local"
 
-# true — обычная проверка (мост на aiohttp, он читает системное хранилище
-#   Windows, куда mkcert -install кладёт свой корень — обычно этого достаточно).
+# true — обычная проверка сертификата. На Windows этого обычно достаточно:
+#   aiohttp читает системное хранилище, куда mkcert -install кладёт свой корень.
 # путь к файлу, например "C:/Users/<you>/AppData/Local/mkcert/rootCA.pem"
-#   (узнать точный путь: mkcert -CAROOT) — если true почему-то не сработал.
-# false — полностью отключить проверку сертификата (только для отладки).
+#   (точный путь скажет `mkcert -CAROOT`) — если true почему-то не сработал.
+# false — отключить проверку полностью, только для отладки.
 verify_ssl: true
 
-# Внутренний ID комнаты (не alias), берётся в Element Web:
-# комната -> Settings -> Advanced -> "Internal room ID". Выглядит как
-# "!AbCdEfGhIjKlMnOp:agentschat.local"
+# Внутренний ID комнаты, не alias. Берётся в Element Web:
+# комната -> Settings -> Advanced -> "Internal room ID".
 room_id: "!REPLACE_ME:agentschat.local"
 
+# Порт, на котором брокер слушает живые сессии. Только 127.0.0.1.
+sessionchat_port: 8770
+
 agents:
+  # Ключ словаря — имя агента в командах CLI: --agent claude-code.
   claude-code:
     user_id: "@claude-code:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"
     device_id: "PASTE_DEVICE_ID_HERE"
+    # По этому имени к агенту тоже можно обратиться в комнате, наравне
+    # с логином. Сравнение идёт по границам слова.
     display_name: "Claude Code"
-    # Рабочий каталог, в котором CLI будет работать с файлами.
-    workdir: "D:/AI/AgentsChat/workspace/claude-code"
-
-    # {prompt} и {workdir} подставляются мостом перед запуском.
-    command:
-      - "claude"
-      - "-p"
-      - "{prompt}"
-      - "--output-format"
-      - "json"
-      - "--permission-mode"
-      - "auto"
-      - "--permission-prompts"
-      - "none"
-
-    # Формат вывода этой команды подтверждён официальной документацией:
-    # финальный текст ответа лежит в JSON-поле "result" последней строки stdout.
-    result_mode: "json_field"
-    result_json_path: "result"
-
-    # mention_only: реагировать только на сообщения, адресованные агенту.
-    mention_only: true
-    # respond_to_room_mention: реагировать и на широковещательное @room
-    #   (аналог slack @here/@channel) — одним сообщением будятся все агенты,
-    #   у кого это включено. Rate limit ниже остаётся страховкой от каскада.
-    respond_to_room_mention: true
-    # aliases: дополнительные слова-триггеры адресации (кроме @claude-code /
-    #   display name). Напр. ["все", "агенты"] — тогда "все, статус?" разбудит
-    #   агента. Пусто = только персональное упоминание и (если включено) @room.
-    aliases: []
-    max_replies_per_minute: 6
-    timeout_seconds: 600
+    # delivery не указан — значит listener: сессия сама держит фоновый
+    # процесс, выход которого её будит.
 
   codex:
     user_id: "@codex:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"
     device_id: "PASTE_DEVICE_ID_HERE"
     display_name: "Codex"
-    workdir: "D:/AI/AgentsChat/workspace/codex"
-
-    # --output-last-message записывает финальный ответ в файл, а не в JSON
-    # события в stdout — точная схема --json события codex не была
-    # проверена нами вживую, поэтому используем более надёжный документированный
-    # способ получить финальный текст. См. docs/AGENTS_INTEGRATION.md.
-    command:
-      - "codex"
-      - "exec"
-      - "--sandbox"
-      - "workspace-write"
-      - "--skip-git-repo-check"
-      - "--cd"
-      - "{workdir}"
-      - "--output-last-message"
-      - "{tmp}"
-      - "{prompt}"
-
-    result_mode: "file"
-    output_file: "{tmp}"
-
-    # mention_only: реагировать только на сообщения, адресованные агенту.
-    mention_only: true
-    # respond_to_room_mention: реагировать и на широковещательное @room
-    #   (аналог slack @here/@channel) — одним сообщением будятся все агенты,
-    #   у кого это включено. Rate limit ниже остаётся страховкой от каскада.
-    respond_to_room_mention: true
-    # aliases: дополнительные слова-триггеры адресации (кроме @claude-code /
-    #   display name). Напр. ["все", "агенты"] — тогда "все, статус?" разбудит
-    #   агента. Пусто = только персональное упоминание и (если включено) @room.
-    aliases: []
-    max_replies_per_minute: 6
-    timeout_seconds: 600
-
     # В открытое окно десктопного Codex вложить сообщение снаружи нельзя:
     # управляющий сокет app-server существует только на Unix, а канал
     # приложения односоставный и занят им самим. Поэтому входящие копятся
     # в очереди и выдаются агенту при следующем обращении к чату.
     delivery: "poll"
+
   opencode:
     user_id: "@opencode:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"
     device_id: "PASTE_DEVICE_ID_HERE"
     display_name: "OpenCode"
-    workdir: "D:/AI/AgentsChat/workspace/opencode"
-
-    # Точная JSON-схема "opencode run --format json" не была проверена вживую,
-    # поэтому по умолчанию берём обычный текстовый stdout (формат "default").
-    # См. docs/AGENTS_INTEGRATION.md про апгрейд на --format json.
-    command:
-      - "opencode"
-      - "run"
-      - "--dir"
-      - "{workdir}"
-      - "{prompt}"
-
-    result_mode: "raw_stdout"
-
-    # mention_only: реагировать только на сообщения, адресованные агенту.
-    mention_only: true
-    # respond_to_room_mention: реагировать и на широковещательное @room
-    #   (аналог slack @here/@channel) — одним сообщением будятся все агенты,
-    #   у кого это включено. Rate limit ниже остаётся страховкой от каскада.
-    respond_to_room_mention: true
-    # aliases: дополнительные слова-триггеры адресации (кроме @claude-code /
-    #   display name). Напр. ["все", "агенты"] — тогда "все, статус?" разбудит
-    #   агента. Пусто = только персональное упоминание и (если включено) @room.
-    aliases: []
-    max_replies_per_minute: 6
-    timeout_seconds: 600
     # Слушателем для OpenCode работает плагин .opencode/plugins/agentschat.js:
     # он живёт внутри процесса OpenCode и вкладывает входящее прямо в сессию.
-    # Ни фонового listener, ни server_url этому агенту не нужно.
-    # См. docs/SESSION_BRIDGE.md.
     delivery: "plugin"
+
+    # Четвёртый режим, push: брокер сам стучится в HTTP-сервер живой сессии.
+    # Работает, но потребителей не имеет — OpenCode перешёл на плагин, потому
+    # что push требовал запускать его консолью, с открытым портом.
+    #   server_url: "http://127.0.0.1:8799"
