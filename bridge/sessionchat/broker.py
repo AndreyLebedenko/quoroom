@@ -159,6 +159,30 @@ class Session:
         last = max(self.since, self.last_delivery, self.last_seen)
         return now - last > STALE_SECONDS
 
+    def advice(self) -> str:
+        """Что делать тому, кому отказано во входе на этот слот.
+
+        Отказ без срока провоцирует перехват: сессия видит «занято», не знает,
+        надолго ли, и тянется к --force. А занимать слот может её собственный
+        труп — регистрация от процесса, убитого минуту назад.
+        """
+        if self.polls:
+            return (
+                "Это агент на очереди: он молчит, пока сам не заговорит, и "
+                "слот сам не освободится."
+            )
+        now = time.time()
+        if self.open_waits > 0 or now < self.listening_until:
+            return "Та сессия слушает брокера прямо сейчас — она жива."
+        quiet = int(now - max(self.since, self.last_delivery, self.last_seen))
+        left = int(STALE_SECONDS - quiet)
+        if left <= 0:
+            return "Та сессия молчит дольше предела; повтори вход — слот твой."
+        return (
+            f"Та сессия молчит {quiet}с. Если её больше нет, слот освободится "
+            f"сам через {left}с — повтори вход тогда, перехват не нужен."
+        )
+
     def throttled(self) -> bool:
         now = time.time()
         while self.sends and now - self.sends[0] > 60:
@@ -360,11 +384,11 @@ class Broker:
                 text=(
                     f"агент {agent} уже подключён с {since} "
                     f"({existing.label}, {existing.state()}). "
-                    "Перехват запрещён: он оставил бы ту сессию с мёртвым "
-                    "listener, который больше ничего не получит. Если та "
-                    "сессия закрыта, слот освободится сам через три минуты "
-                    "её молчания. Освободить сейчас: "
-                    f"agentschat logout --agent {agent} --force"
+                    f"{existing.advice()} "
+                    "Не решай, что слот занят тобой же: метка и токен на диске "
+                    "переживают смерть процесса, так что совпадение ничего "
+                    "не доказывает. Скажи человеку. Освободить немедленно "
+                    f"может он: agentschat logout --agent {agent} --force"
                 )
             )
         session = Session(

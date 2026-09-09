@@ -394,6 +394,28 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("уже подключён", text)
         self.assertIn("logout --agent claude-code --force", text)
 
+    async def test_refusal_says_when_the_slot_frees_itself(self):
+        # Отказ без срока провоцирует перехват: сессия видит «занято», не
+        # знает, надолго ли, и тянется к --force.
+        await self.login()
+        session = self.broker.sessions["claude-code"]
+        session.since = session.last_seen = time.time() - 60
+        again = await self.client.post(
+            "/login", json={"agent": "claude-code", "label": "вторая"}
+        )
+        text = await again.text()
+        self.assertIn("молчит 60с", text)
+        self.assertIn("освободится", text)
+        self.assertIn("не решай, что слот занят тобой же", text.lower())
+
+    async def test_refusal_says_plainly_that_a_listening_session_is_alive(self):
+        await self.login()
+        self.broker.sessions["claude-code"].listening_until = time.time() + 60
+        again = await self.client.post(
+            "/login", json={"agent": "claude-code", "label": "вторая"}
+        )
+        self.assertIn("она жива", await again.text())
+
     async def test_silent_session_yields_its_slot_to_a_new_login(self):
         # Закрытое приложение, убитый процесс, перезагрузка — слот держала
         # запись, которую освобождать было некому. Три минуты полного молчания

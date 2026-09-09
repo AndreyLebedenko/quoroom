@@ -96,6 +96,8 @@ function shared() {
       pending: new Map(),
       /** sessionID → имя, под которым эта сессия входила в чат */
       names: new Map(),
+      /** типы событий OpenCode, уже попавшие в лог: пишем каждый один раз */
+      seenEvents: new Set(),
       /** сколько экземпляров плагина живо: последний гасит циклы */
       instances: 0,
       stopped: false,
@@ -249,8 +251,19 @@ export const AgentsChat = async ({ client }) => {
     },
 
     event: async (input) => {
+      const kind = input?.event?.type
+      if (typeof kind === "string" && kind.startsWith("session.")) {
+        // Какое событие OpenCode шлёт на закрытие сессии — вопрос не
+        // теоретический: «убить сессию» в интерфейсе не обязано означать
+        // session.deleted. Пишем каждый новый тип один раз за запуск, чтобы
+        // следующая проверка отвечала на этот вопрос сама.
+        if (!state.seenEvents.has(kind)) {
+          state.seenEvents.add(kind)
+          note(`событие OpenCode: ${kind}`)
+        }
+      }
       // Сессию закрыли в самом OpenCode. Слот держать больше не за кого.
-      if (input?.event?.type !== "session.deleted") return
+      if (kind !== "session.deleted") return
       const sessionID = input.event.properties?.info?.id
       if (!sessionID) return
       for (const [agent, bound] of state.bindings) {
