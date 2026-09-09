@@ -217,6 +217,22 @@ class Broker:
                 found.append(agent)
         return found
 
+    def addressed_to_a_person(self, text: str) -> bool:
+        """Есть ли в тексте обращение, которое заведомо не к агенту.
+
+        Отличает «забыл адресовать» от «ответил человеку». Первое — ошибка,
+        стоившая живого прогона: сообщение ушло в пустоту, а его ждали.
+        Второе — обычный ход разговора, и одинаковое предупреждение на оба
+        случая быстро приучает не читать предупреждения вовсе.
+        """
+        known = {"@room"}
+        for agent, user_id in self.user_ids.items():
+            known.add(user_id.split(":", 1)[0].lower())
+            known.add(f"@{agent.lower()}")
+        return any(
+            token not in known for token in re.findall(r"@[\w.-]+", text.lower())
+        )
+
     async def on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
         if room.room_id != self.room or event.server_timestamp < self.started_ms:
             return
@@ -408,7 +424,14 @@ class Broker:
         reach = [a for a in self.addressees(text, None) if a != session.agent]
         event_id = await self.publish(session.agent, text, depth)
         answer = {"event_id": event_id, "depth": depth}
-        if not reach:
+        if not reach and self.addressed_to_a_person(text):
+            # Обращение есть, просто не к агенту: ответ человеку на его же
+            # вопрос — обычное дело, и пугать отправителя тут нечем.
+            answer["note"] = (
+                "агентам сообщение не доставлено: обращение в нём не к агенту. "
+                "Человек видит его в комнате."
+            )
+        elif not reach:
             others = [a for a in self.sessions if a != session.agent]
             answer["warning"] = (
                 "сообщение опубликовано, но НИ ОДИН агент его не получил: в нём "

@@ -245,6 +245,8 @@ def do_say(args: argparse.Namespace) -> None:
     print(f"AGENTSCHAT: отправлено ({data['event_id']}).")
     if data.get("warning"):
         print(f"AGENTSCHAT: ВНИМАНИЕ — {data['warning']}")
+    if data.get("note"):
+        print(f"AGENTSCHAT: {data['note']}")
     show_pending(data.get("pending") or [])
 
 

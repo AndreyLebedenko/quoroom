@@ -463,6 +463,23 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("warning", await response.json())
 
+    async def test_answering_a_person_gets_a_note_not_a_warning(self):
+        # Ответ человеку на его же вопрос — не забытая адресация. Одинаковое
+        # предупреждение на оба случая приучает не читать предупреждения.
+        _, data = await self.login()
+        self.broker.sessions["codex"] = Session("codex", "рядом", "t2", time.time())
+        response = await self.client.post(
+            "/say",
+            json={
+                "agent": "claude-code",
+                "token": data["token"],
+                "text": "@human Claude Code: claude-opus-5",
+            },
+        )
+        body = await response.json()
+        self.assertNotIn("warning", body)
+        self.assertIn("обращение в нём не к агенту", body["note"])
+
     async def test_talking_only_to_yourself_still_warns(self):
         # Упоминание собственного имени не делает сообщение адресованным:
         # себе брокер не доставляет.
