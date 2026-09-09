@@ -36,8 +36,9 @@ agents:
     user_id: "@claude-code:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"
     device_id: "PASTE_DEVICE_ID_HERE"
-    # По этому имени к агенту тоже можно обратиться в комнате, наравне
-    # с логином. Сравнение идёт по границам слова.
+    # Подпись для людей: брокер по ней НЕ адресует. Обращение работает
+    # только через @claude-code, пилюлю Element или @room — иначе агент
+    # по имени OpenCode считал бы обращением любое упоминание CLI.
     display_name: "Claude Code"
     # delivery не указан — значит listener: сессия сама держит фоновый
     # процесс, выход которого её будит.

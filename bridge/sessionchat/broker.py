@@ -151,7 +151,6 @@ class Broker:
             if isinstance(verify, str)
             else bool(verify)
         )
-        self.names: dict[str, str] = {}
         self.clients: dict[str, AsyncClient] = {}
         # Как агент получает непрошеные сообщения, если не через listener:
         # "plugin" — слушатель живёт внутри самого CLI (OpenCode), "poll" —
@@ -173,7 +172,6 @@ class Broker:
                 access_token=data["access_token"],
             )
             self.clients[agent] = client
-            self.names[agent] = data.get("display_name", agent)
         self.user_ids = {a: c.user_id for a, c in self.clients.items()}
         self.sessions: dict[str, Session] = {}
         self.reader = next(iter(self.clients.values()))
@@ -196,7 +194,19 @@ class Broker:
             self.room = response.room_id
 
     def addressees(self, body: str, event) -> list[str]:
-        """Адресация по логину: localpart, display name, пилюля или @room."""
+        """Адресация: @localpart, пилюля или @room. Ничего больше.
+
+        Голое display name адресовать не может, и это выяснено дорогой ценой:
+        агент по имени OpenCode считал обращением к себе любое упоминание CLI
+        в отчёте о работе, а GLM — любое обсуждение моделей. Разговор о самих
+        инструментах у нас идёт постоянно, и каждое ложное срабатывание стоит
+        собеседнику полного хода.
+
+        Страховка, ради которой матч по имени и стоял, оказалась не нужна:
+        пилюля Element в plain-text теле выглядит как имя профиля без собаки,
+        но рядом приходит m.mentions, и его мы разбираем отдельно (проверено
+        на живом событии из комнаты).
+        """
         low = body.lower()
         try:
             content = (event.source.get("content", {}) or {}) if event else {}
@@ -209,11 +219,7 @@ class Broker:
         found = []
         for agent, user_id in self.user_ids.items():
             localpart = user_id.split(":", 1)[0]
-            if (
-                bounded(localpart, low)
-                or bounded(self.names[agent], low)
-                or user_id in pills
-            ):
+            if bounded(localpart, low) or user_id in pills:
                 found.append(agent)
         return found
 

@@ -48,12 +48,33 @@ class AddressingTests(unittest.TestCase):
             "claude-code", "test", "tok", time.time()
         )
 
-    def test_localpart_and_display_name_address_the_agent(self):
+    def test_localpart_addresses_the_agent(self):
         self.assertEqual(
             self.broker.addressees("@claude-code привет", event("x")), ["claude-code"]
         )
+
+    def test_display_name_alone_does_not_address(self):
+        # Голое имя в тексте — не обращение: иначе агент по имени OpenCode
+        # считал бы обращением любое упоминание CLI в отчёте о работе.
         self.assertEqual(
-            self.broker.addressees("Claude Code, статус?", event("x")), ["claude-code"]
+            self.broker.addressees("Claude Code, статус?", event("x")), []
+        )
+
+    def test_name_without_the_at_sign_does_not_address(self):
+        self.assertEqual(
+            self.broker.addressees("правил скилл claude-code сегодня", event("x")), []
+        )
+
+    def test_pill_addresses_even_though_its_text_has_no_at_sign(self):
+        # Так выглядит пилюля Element: в plain-text теле имя профиля без
+        # собаки, а рядом m.mentions. Проверено на живом событии из комнаты.
+        source = event(
+            "claude-code: переподключение прошло успешно",
+            content={"m.mentions": {"user_ids": ["@claude-code:local"]}},
+        )
+        self.assertEqual(
+            self.broker.addressees("claude-code: переподключение", source),
+            ["claude-code"],
         )
 
     def test_pill_addresses_the_agent(self):
@@ -71,17 +92,15 @@ class AddressingTests(unittest.TestCase):
     def test_longer_localpart_is_not_matched_by_prefix(self):
         self.assertEqual(self.broker.addressees("@codex-extra тест", event("x")), [])
 
-    def test_display_name_inside_a_longer_name_does_not_address(self):
-        # "Claude Coder" содержит display name как префикс более длинного слова.
-        self.assertEqual(
-            self.broker.addressees("это Claude Coder, не агент", event("x")), []
-        )
-
-    def test_display_name_as_a_whole_word_does_address(self):
-        self.assertEqual(
-            self.broker.addressees("сравни Claude Codex и прочее", event("x")),
-            ["codex"],
-        )
+    def test_talking_about_the_tools_addresses_nobody(self):
+        # Разговор о самих CLI и моделях идёт постоянно; будить им агентов
+        # нельзя — каждое ложное срабатывание стоит собеседнику полного хода.
+        for text in (
+            "сравни Claude Codex и прочее",
+            "у OpenAI сегодня лёг API",
+            "плагин OpenCode держит две привязки",
+        ):
+            self.assertEqual(self.broker.addressees(text, event("x")), [], text)
 
 
 class AgentSubsetTests(unittest.TestCase):
