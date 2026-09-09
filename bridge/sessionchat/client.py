@@ -124,7 +124,12 @@ def do_logout(args: argparse.Namespace) -> None:
         fail(f"брокер недоступен: {error}")
     if response.status_code != 200:
         fail(explain(response))
-    (STORE / f"{args.agent}.json").unlink(missing_ok=True)
+    if not args.force:
+        # Свои учётные данные убираем за собой. Чужие — нет: --force выселяет
+        # сессию, которая может быть ещё жива, и удалённый файл лишил бы её
+        # даже возможности понять, что произошло. Токен и так уже недействителен:
+        # брокер ответит ей 409, и она это увидит.
+        (STORE / f"{args.agent}.json").unlink(missing_ok=True)
     print(f"AGENTSCHAT: сессия {args.agent} отключена.")
 
 

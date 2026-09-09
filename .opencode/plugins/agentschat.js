@@ -32,7 +32,12 @@ const BROKER = process.env.AGENTSCHAT_URL || "http://127.0.0.1:8770"
 const HOME = path.join(os.homedir(), ".agentschat")
 // Потолок long-poll у брокера — 50с; ждём чуть дольше, чем он молчит.
 const POLL_TIMEOUT_MS = 70_000
-const RETRY_MS = 3_000
+// Пауза перед повтором. Переменной окружения тут место только ради проверки:
+// тест не может ждать минуту, чтобы увидеть, как снимается привязка.
+const RETRY_MS = Number(process.env.AGENTSCHAT_RETRY_MS) || 3_000
+// Сколько попыток подряд терпеть отсутствие файла с токеном, прежде чем
+// признать привязку недействительной. Двадцать попыток — минута.
+const TOKENLESS_LIMIT = 20
 // Лог кладём рядом с токенами, а не в каталог плагина: путь предсказуем и
 // одинаков, из какого бы каталога плагин ни загрузился. Лог один на все
 // привязки — каждая строка называет имя агента.
@@ -140,9 +145,19 @@ export const AgentsChat = async ({ client }) => {
     while (!state.stopped && state.bindings.get(agent) === bound) {
       const token = brokerToken(agent)
       if (!token) {
+        // Файла с токеном нет: login ещё не дописал его — или кто-то снял
+        // сессию снаружи. Молчать тут нельзя: однажды такой цикл крутился
+        // впустую полчаса, а привязка снаружи выглядела живой.
+        bound.tokenless = (bound.tokenless || 0) + 1
+        if (bound.tokenless === 1) note(`${agent}: токен не найден, жду`)
+        if (bound.tokenless > TOKENLESS_LIMIT) {
+          note(`${agent}: токена так и нет, привязку снимаю — нужен новый login`)
+          state.bindings.delete(agent)
+        }
         await sleep(RETRY_MS)
         continue
       }
+      bound.tokenless = 0
       let envelope = null
       try {
         envelope = await poll(agent, token)
@@ -166,6 +181,30 @@ export const AgentsChat = async ({ client }) => {
     }
     bound.looping = false
     note(`${agent}: опрос остановлен`)
+  }
+
+  /**
+   * Сказать брокеру, что этой сессии больше нет. Слот освободится сразу, а не
+   * через три минуты молчания, и человеку не придётся выбивать его руками.
+   * Дело это необязательное: закрытое приложение может не успеть ничего, и
+   * страховкой остаётся счёт молчания на стороне брокера.
+   */
+  async function releaseSlot(agent, why) {
+    const bound = state.bindings.get(agent)
+    state.bindings.delete(agent)
+    const token = brokerToken(agent)
+    if (!token) return
+    try {
+      await fetch(`${BROKER}/logout`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent, token }),
+        signal: AbortSignal.timeout(5_000),
+      })
+      note(`${agent}: слот освобождён (${why}), сессия ${bound?.sessionID ?? "?"}`)
+    } catch (error) {
+      note(`${agent}: слот освободить не удалось (${why}): ${error.message}`)
+    }
   }
 
   function bind(agent, sessionID, why) {
@@ -209,10 +248,27 @@ export const AgentsChat = async ({ client }) => {
       bind(agent, input.sessionID, "привязка по сообщению, а не по login")
     },
 
+    event: async (input) => {
+      // Сессию закрыли в самом OpenCode. Слот держать больше не за кого.
+      if (input?.event?.type !== "session.deleted") return
+      const sessionID = input.event.properties?.info?.id
+      if (!sessionID) return
+      for (const [agent, bound] of state.bindings) {
+        if (bound.sessionID === sessionID) await releaseSlot(agent, "сессия закрыта")
+      }
+      state.names.delete(sessionID)
+    },
+
     dispose: async () => {
       state.instances -= 1
       if (state.instances > 0) return
       state.stopped = true
+      // Уходит последний экземпляр — значит закрывается сам OpenCode.
+      // Успеть освободить слоты получается не всегда: убитый процесс не
+      // исполняет ничего. Поэтому это ускорение, а не гарантия.
+      for (const agent of [...state.bindings.keys()]) {
+        await releaseSlot(agent, "OpenCode закрывается")
+      }
       state.bindings.clear()
     },
   }

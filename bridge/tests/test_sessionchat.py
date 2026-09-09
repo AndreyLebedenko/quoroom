@@ -6,7 +6,12 @@ import unittest
 from aiohttp.test_utils import TestClient, TestServer
 
 from sessionchat.broker import Broker, Session, only_agents
-from sessionchat.protocol import MAX_DEPTH, MAX_SENDS_PER_MINUTE, Envelope
+from sessionchat.protocol import (
+    LISTEN_GRACE,
+    MAX_DEPTH,
+    MAX_SENDS_PER_MINUTE,
+    Envelope,
+)
 
 CONFIG = {
     "homeserver_url": "https://matrix.invalid",
@@ -388,6 +393,45 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         text = await again.text()
         self.assertIn("уже подключён", text)
         self.assertIn("logout --agent claude-code --force", text)
+
+    async def test_silent_session_yields_its_slot_to_a_new_login(self):
+        # Закрытое приложение, убитый процесс, перезагрузка — слот держала
+        # запись, которую освобождать было некому. Три минуты полного молчания
+        # живой сессии не бывает: и listener, и плагин опрашивают непрерывно.
+        _, first = await self.login(label="прежняя")
+        stale = self.broker.sessions["claude-code"]
+        stale.since = stale.last_seen = time.time() - 10 * 60
+        response, second = await self.login(label="новая")
+        self.assertEqual(response.status, 200)
+        self.assertNotEqual(second["token"], first["token"])
+        self.assertEqual(self.broker.sessions["claude-code"].label, "новая")
+
+    async def test_a_listening_session_keeps_its_slot(self):
+        await self.login()
+        session = self.broker.sessions["claude-code"]
+        session.since = session.last_seen = time.time() - 10 * 60
+        session.listening_until = time.time() + LISTEN_GRACE
+        response, _ = await self.login(label="вторая")
+        self.assertEqual(response.status, 409)
+
+    async def test_a_session_still_handling_a_delivery_keeps_its_slot(self):
+        # listener умирает при доставке, и сессии нужно время его поднять.
+        await self.login()
+        session = self.broker.sessions["claude-code"]
+        session.since = session.last_seen = time.time() - 10 * 60
+        session.last_delivery = time.time() - 30
+        response, _ = await self.login(label="вторая")
+        self.assertEqual(response.status, 409)
+
+    async def test_a_queue_agent_never_yields_its_slot(self):
+        # У poll-агента признака жизни нет вовсе: он и должен молчать, пока
+        # сам не заговорит. Отдать его слот значило бы потерять очередь.
+        await self.login(agent="codex")
+        session = self.broker.sessions["codex"]
+        session.listener_kind = "poll"
+        session.since = session.last_seen = time.time() - 10 * 60
+        response, _ = await self.login(agent="codex", label="вторая")
+        self.assertEqual(response.status, 409)
 
     async def test_force_logout_releases_the_slot(self):
         await self.login()

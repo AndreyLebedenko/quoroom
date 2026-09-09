@@ -45,6 +45,7 @@ from .protocol import (
     LISTEN_GRACE,
     MAX_DEPTH,
     MAX_SENDS_PER_MINUTE,
+    STALE_SECONDS,
     WAIT_SECONDS,
     Envelope,
 )
@@ -78,6 +79,9 @@ class Session:
     open_waits: int = 0
     listening_until: float = 0.0
     last_delivery: float = 0.0
+    # Последнее обращение сессии к брокеру с верным токеном. По нему видно,
+    # что сессия ещё жива, даже если она сейчас не слушает.
+    last_seen: float = 0.0
     # Глубина последнего доставленного сообщения: исходящие получают +1.
     depth: int = 0
     signal: asyncio.Event = field(default_factory=asyncio.Event)
@@ -132,6 +136,28 @@ class Session:
         if self.last_delivery and now - self.last_delivery < 120:
             return "обрабатывает"
         return "НЕ СЛУШАЕТ"
+
+    def stale(self) -> bool:
+        """Можно ли считать сессию исчезнувшей и отдать её слот новому входу.
+
+        Перехват живой сессии запрещён и остаётся запрещённым: он оставил бы
+        её с мёртвым listener'ом, который больше ничего не получит. Но сессия,
+        которая не обращалась к брокеру три минуты, не жива — и listener,
+        и плагин опрашивают его непрерывно, а пауза на обработку доставки
+        укладывается в две минуты. Столько молчит только закрытое приложение,
+        убитый процесс или перезагруженная машина.
+
+        Агент на очереди (poll) сюда не попадает: у него нет признака жизни
+        вовсе, он и должен молчать, пока сам не заговорит. Его слот
+        освобождает человек через --force.
+        """
+        if self.polls:
+            return False
+        now = time.time()
+        if self.open_waits > 0 or now < self.listening_until:
+            return False
+        last = max(self.since, self.last_delivery, self.last_seen)
+        return now - last > STALE_SECONDS
 
     def throttled(self) -> bool:
         now = time.time()
@@ -310,6 +336,7 @@ class Broker:
         session = self.sessions.get(agent)
         if session is None or session.token != str(data.get("token", "")):
             raise web.HTTPConflict(text="сессия не подключена или токен неверен")
+        session.last_seen = time.time()
         return session
 
     async def handle_login(self, request: web.Request) -> web.Response:
@@ -318,6 +345,15 @@ class Broker:
         if agent not in self.clients:
             raise web.HTTPNotFound(text=f"неизвестный агент: {agent}")
         existing = self.sessions.get(agent)
+        if existing is not None and existing.stale():
+            quiet = int(time.time() - max(existing.since, existing.last_delivery,
+                                          existing.last_seen))
+            log.info(
+                "слот %s освобождён: прежняя сессия молчала %sс (%s)",
+                agent, quiet, existing.label,
+            )
+            self.sessions.pop(agent, None)
+            existing = None
         if existing is not None:
             since = datetime.fromtimestamp(existing.since).strftime("%H:%M:%S")
             raise web.HTTPConflict(
@@ -325,8 +361,10 @@ class Broker:
                     f"агент {agent} уже подключён с {since} "
                     f"({existing.label}, {existing.state()}). "
                     "Перехват запрещён: он оставил бы ту сессию с мёртвым "
-                    "listener, который больше ничего не получит. Освободите "
-                    f"слот: agentschat logout --agent {agent} --force"
+                    "listener, который больше ничего не получит. Если та "
+                    "сессия закрыта, слот освободится сам через три минуты "
+                    "её молчания. Освободить сейчас: "
+                    f"agentschat logout --agent {agent} --force"
                 )
             )
         session = Session(
