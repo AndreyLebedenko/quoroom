@@ -540,5 +540,106 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(envelope.kind, "агент")
 
 
+class SeveralIdentitiesTests(unittest.IsolatedAsyncioTestCase):
+    """Одна программа, несколько личностей: два имени с delivery: plugin.
+
+    Так работают две сессии одного процесса OpenCode: имя агента — участник
+    комнаты, а не название CLI. Брокеру они неразличимы от любых других
+    агентов, и проверяется именно это: слоты, адресация и очереди у них
+    раздельные.
+    """
+
+    async def asyncSetUp(self):
+        config = {
+            **CONFIG,
+            "agents": {
+                "terra": {
+                    "user_id": "@terra:local",
+                    "access_token": "token-t",
+                    "device_id": "d1",
+                    "display_name": "Terra",
+                    "delivery": "plugin",
+                },
+                "helium": {
+                    "user_id": "@helium:local",
+                    "access_token": "token-h",
+                    "device_id": "d2",
+                    "display_name": "Helium",
+                    "delivery": "plugin",
+                },
+            },
+        }
+        self.broker = Broker(config)
+        self.published: list[tuple[str, str, int]] = []
+
+        async def publish(agent, text, depth):
+            self.published.append((agent, text, depth))
+            return "$published"
+
+        self.broker.publish = publish
+        self.client = TestClient(TestServer(self.broker.app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        for client in self.broker.clients.values():
+            await client.close()
+
+    async def login(self, agent):
+        response = await self.client.post(
+            "/login", json={"agent": agent, "label": f"сессия {agent}"}
+        )
+        self.assertEqual(response.status, 200)
+        return await response.json()
+
+    async def test_both_names_connect_and_get_the_plugin_mode(self):
+        self.assertEqual((await self.login("terra"))["mode"], "plugin")
+        self.assertEqual((await self.login("helium"))["mode"], "plugin")
+        self.assertEqual(set(self.broker.sessions), {"terra", "helium"})
+
+    async def test_message_reaches_only_the_name_it_addresses(self):
+        await self.login("terra")
+        await self.login("helium")
+        await self.broker.on_message(
+            types.SimpleNamespace(room_id="!room:local"), event("@terra привет")
+        )
+        self.assertEqual(len(self.broker.sessions["terra"].inbox), 1)
+        self.assertEqual(len(self.broker.sessions["helium"].inbox), 0)
+
+    async def test_each_name_waits_with_its_own_token(self):
+        terra = await self.login("terra")
+        helium = await self.login("helium")
+        for agent in ("terra", "helium"):
+            session = self.broker.sessions[agent]
+            session.inbox.append(
+                Envelope("@human:local", "человек", f"для {agent}", "$e", "22:00", 0)
+            )
+            session.signal.set()
+        first = await self.client.get(
+            "/wait", params={"agent": "terra", "token": terra["token"]}
+        )
+        second = await self.client.get(
+            "/wait", params={"agent": "helium", "token": helium["token"]}
+        )
+        self.assertEqual((await first.json())["text"], "для terra")
+        self.assertEqual((await second.json())["text"], "для helium")
+
+    async def test_a_name_cannot_wait_with_the_neighbour_token(self):
+        await self.login("terra")
+        helium = await self.login("helium")
+        response = await self.client.get(
+            "/wait", params={"agent": "terra", "token": helium["token"]}
+        )
+        self.assertEqual(response.status, 409)
+
+    async def test_logout_of_one_name_leaves_the_other_connected(self):
+        terra = await self.login("terra")
+        await self.login("helium")
+        await self.client.post(
+            "/logout", json={"agent": "terra", "token": terra["token"]}
+        )
+        self.assertEqual(set(self.broker.sessions), {"helium"})
+
+
 if __name__ == "__main__":
     unittest.main()

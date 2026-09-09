@@ -469,15 +469,30 @@ def only_agents(cfg: dict, names: str) -> dict:
 async def run(config: Path, agents: str = "") -> None:
     cfg = only_agents(yaml.safe_load(config.read_text(encoding="utf-8")), agents)
     broker = Broker(cfg)
-    await broker.join_all()
-    runner = web.AppRunner(broker.app())
-    await runner.setup()
-    await web.TCPSite(runner, "127.0.0.1", broker.port).start()
-    log.info("БРОКЕР ГОТОВ комната=%s порт=%s", broker.room, broker.port)
+    runner = None
     try:
+        await broker.join_all()
+        runner = web.AppRunner(broker.app())
+        await runner.setup()
+        try:
+            await web.TCPSite(runner, "127.0.0.1", broker.port).start()
+        except OSError as error:
+            # Занятый порт — не редкость, а обычный способ ошибиться: брокер
+            # уже работает в другом окне, и второй запуск с другими ключами
+            # молча ничего не меняет. Traceback здесь только прячет причину.
+            raise SystemExit(
+                f"БРОКЕР НЕ ЗАПУЩЕН: порт {broker.port} занят ({error.strerror}).\n"
+                "Скорее всего, брокер уже работает в другом окне. Проверьте: "
+                f"curl http://127.0.0.1:{broker.port}/status — и остановите "
+                "прежний, если хотите запустить этот с другими ключами."
+            ) from None
+        log.info("БРОКЕР ГОТОВ комната=%s порт=%s", broker.room, broker.port)
         await broker.sync_forever()
     finally:
-        await runner.cleanup()
+        if runner is not None:
+            await runner.cleanup()
+        # Клиенты закрываем и на неудачном старте: иначе aiohttp досыпает
+        # в вывод «Unclosed client session» на каждого агента.
         for client in broker.clients.values():
             await client.close()
 
@@ -501,7 +516,14 @@ def main() -> None:
     # в которых лог брокера тонет.
     log.setLevel(logging.DEBUG if args.verbose else logging.INFO)
     logging.getLogger("nio").setLevel(logging.WARNING)
-    asyncio.run(run(Path(args.config).resolve(), args.agents))
+    try:
+        asyncio.run(run(Path(args.config).resolve(), args.agents))
+    except ValueError as error:
+        # Опечатка в --agents или имя, которого ещё нет в конфиге. Причина
+        # известна точно, и traceback к ней ничего не добавляет.
+        raise SystemExit(f"БРОКЕР НЕ ЗАПУЩЕН: {error}") from None
+    except KeyboardInterrupt:
+        log.info("брокер остановлен")
 
 
 if __name__ == "__main__":
