@@ -465,6 +465,47 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         response, _ = await self.login(agent="codex", label="вторая")
         self.assertEqual(response.status, 409)
 
+    async def test_reconnect_returns_the_same_registration(self):
+        # После перезапуска CLI регистрация в брокере жива, а сессия
+        # восстановлена под тем же id. Токен с диска — единственное
+        # доказательство, что регистрация её.
+        _, first = await self.login(label="до перезапуска")
+        again = await self.client.post(
+            "/login",
+            json={
+                "agent": "claude-code",
+                "label": "после перезапуска",
+                "reconnect": True,
+                "token": first["token"],
+            },
+        )
+        self.assertEqual(again.status, 200)
+        body = await again.json()
+        self.assertTrue(body["reconnected"])
+        self.assertEqual(body["token"], first["token"])
+        # Метку обновляем: человек читает в status текущую работу.
+        self.assertEqual(self.broker.sessions["claude-code"].label, "после перезапуска")
+
+    async def test_reconnect_without_the_token_is_refused(self):
+        await self.login()
+        again = await self.client.post(
+            "/login",
+            json={"agent": "claude-code", "reconnect": True, "token": "чужой"},
+        )
+        self.assertEqual(again.status, 409)
+        self.assertIn("токен не совпадает", await again.text())
+
+    async def test_a_plain_login_never_reconnects_by_itself(self):
+        # Токен на диске один на имя, его видит любое окно. Молчаливое
+        # переподключение по совпадению увело бы слот при случайном входе.
+        _, first = await self.login()
+        again = await self.client.post(
+            "/login",
+            json={"agent": "claude-code", "token": first["token"]},
+        )
+        self.assertEqual(again.status, 409)
+        self.assertIn("--reconnect", await again.text())
+
     async def test_force_logout_releases_the_slot(self):
         await self.login()
         released = await self.client.post(

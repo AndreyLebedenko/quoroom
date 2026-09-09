@@ -60,11 +60,26 @@ def explain(response: requests.Response) -> str:
     return response.text.strip() or f"HTTP {response.status_code}"
 
 
+def stored_token(agent: str) -> str:
+    """Токен прежней регистрации, если он ещё лежит на диске."""
+    path = STORE / f"{agent}.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("token", "")
+    except (OSError, ValueError):
+        return ""
+
+
 def do_login(args: argparse.Namespace) -> None:
+    payload = {"agent": args.agent, "label": args.label}
+    if args.reconnect:
+        # Возврат к своей же регистрации после перезапуска CLI: право на неё
+        # подтверждает токен с диска, а не слова сессии о себе.
+        payload["reconnect"] = True
+        payload["token"] = stored_token(args.agent)
     try:
         response = requests.post(
             f"{base()}/login",
-            json={"agent": args.agent, "label": args.label},
+            json=payload,
             timeout=15,
         )
     except requests.RequestException as error:
@@ -72,12 +87,28 @@ def do_login(args: argparse.Namespace) -> None:
     if response.status_code != 200:
         fail(explain(response))
     data = response.json()
+    if data.get("reconnected"):
+        # Фразу «подключена к комнате» ниже читает плагин OpenCode, поэтому
+        # она должна остаться и здесь: по ней он привязывает сессию.
+        print(
+            f"AGENTSCHAT: это твоя прежняя регистрация, токен сверился — "
+            f"сессия {args.agent} подключена к комнате {data['room']}.\n"
+            "Новой регистрации не заводилось, слот остался за тобой."
+        )
     STORE.mkdir(parents=True, exist_ok=True)
     path = STORE / f"{args.agent}.json"
     path.write_text(
         json.dumps({"agent": args.agent, "token": data["token"]}, ensure_ascii=False),
         encoding="utf-8",
     )
+    if data.get("reconnected"):
+        if data.get("mode") == "listener":
+            print(
+                "Listener прежнего запуска умер вместе с процессом — подними "
+                f"его заново ФОНОВОЙ командой: agentschat wait --agent "
+                f"{args.agent}"
+            )
+        return
     if data.get("mode") == "poll":
         print(
             f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
@@ -293,6 +324,14 @@ def main() -> None:
     login = sub.add_parser("login", help="подключить эту сессию к чату")
     login.add_argument("--agent", required=True)
     login.add_argument("--label", default="", help="чем занята сессия")
+    login.add_argument(
+        "--reconnect",
+        action="store_true",
+        help=(
+            "вернуться к своей же регистрации после перезапуска CLI; "
+            "получится, только если совпадёт токен с диска"
+        ),
+    )
     login.set_defaults(run=do_login)
 
     wait = sub.add_parser("wait", help="listener: ждать сообщение и выйти")

@@ -387,6 +387,31 @@ class Broker:
             )
             self.sessions.pop(agent, None)
             existing = None
+        if existing is not None and data.get("reconnect"):
+            # Возврат к своей же регистрации после перезапуска CLI. Право на
+            # него подтверждает токен, а не рассуждение сессии о себе: файл с
+            # токеном переживает смерть процесса, и предъявить его может
+            # только тот, кто эту регистрацию и заводил. Ключ обязателен —
+            # молчаливое переподключение по совпадению токена увело бы слот
+            # при случайном повторном входе из соседнего окна.
+            if existing.token != str(data.get("token", "")):
+                raise web.HTTPConflict(
+                    text=(
+                        f"переподключиться к регистрации {agent} нельзя: токен "
+                        "не совпадает. Она заведена не этой сессией."
+                    )
+                )
+            existing.label = str(data.get("label", "")) or existing.label
+            existing.last_seen = time.time()
+            log.info("переподключение к регистрации %s (%s)", agent, existing.label)
+            return web.json_response(
+                {
+                    "token": existing.token,
+                    "room": self.room,
+                    "mode": existing.mode,
+                    "reconnected": True,
+                }
+            )
         if existing is not None:
             since = datetime.fromtimestamp(existing.since).strftime("%H:%M:%S")
             raise web.HTTPConflict(
@@ -394,9 +419,11 @@ class Broker:
                     f"агент {agent} уже подключён с {since} "
                     f"({existing.label}, {existing.state()}). "
                     f"{existing.advice()} "
-                    "Не решай, что слот занят тобой же: метка и токен на диске "
-                    "переживают смерть процесса, так что совпадение ничего "
-                    "не доказывает. Скажи человеку. Освободить немедленно "
+                    "Не решай, что слот занят тобой же: метка и успешный "
+                    "inbox этого не доказывают. Доказывает только токен — если "
+                    "эта регистрация твоя, из неё же и заведена, повтори вход "
+                    "с ключом --reconnect: брокер сверит токен и вернёт тебе "
+                    "её. Не сверится — скажи человеку. Освободить немедленно "
                     f"может он: agentschat logout --agent {agent} --force"
                 )
             )
