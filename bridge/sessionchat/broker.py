@@ -172,12 +172,21 @@ class Session:
                 "слот сам не освободится."
             )
         now = time.time()
-        if self.open_waits > 0 or now < self.listening_until:
-            return "Та сессия слушает брокера прямо сейчас — она жива."
-        quiet = int(now - max(self.since, self.last_delivery, self.last_seen))
-        left = int(STALE_SECONDS - quiet)
+        last = max(self.since, self.last_delivery, self.last_seen)
+        quiet = int(now - last)
+        # Освободится, когда кончится и фора слушателя, и счёт молчания.
+        left = int(max(self.listening_until, last + STALE_SECONDS) - now)
         if left <= 0:
             return "Та сессия молчит дольше предела; повтори вход — слот твой."
+        if self.open_waits > 0 or now < self.listening_until:
+            # «Она жива» здесь сказать нельзя: убитый процесс оставляет свой
+            # запрос висеть, и брокер ещё минуту видит опрос от того, кого уже
+            # нет. Известно только, когда был последний опрос.
+            return (
+                f"Та сессия опрашивала брокера {quiet}с назад. Если она жива, "
+                f"слот занят по делу; если её только что убили, он освободится "
+                f"сам через {left}с — повтори вход тогда."
+            )
         return (
             f"Та сессия молчит {quiet}с. Если её больше нет, слот освободится "
             f"сам через {left}с — повтори вход тогда, перехват не нужен."

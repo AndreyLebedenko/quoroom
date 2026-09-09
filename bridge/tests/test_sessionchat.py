@@ -408,13 +408,23 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("освободится", text)
         self.assertIn("не решай, что слот занят тобой же", text.lower())
 
-    async def test_refusal_says_plainly_that_a_listening_session_is_alive(self):
+    async def test_refusal_never_claims_more_than_the_broker_knows(self):
+        # «Та сессия жива» брокер сказать не может: убитый процесс оставляет
+        # свой запрос висеть, и опрос от него виден ещё минуту. Известно
+        # только время последнего опроса — и когда слот освободится.
         await self.login()
-        self.broker.sessions["claude-code"].listening_until = time.time() + 60
+        session = self.broker.sessions["claude-code"]
+        session.since = session.last_seen = time.time() - 20
+        session.listening_until = time.time() + 50
         again = await self.client.post(
             "/login", json={"agent": "claude-code", "label": "вторая"}
         )
-        self.assertIn("она жива", await again.text())
+        text = await again.text()
+        self.assertIn("опрашивала брокера 20с назад", text)
+        self.assertIn("освободится", text)
+        # Утверждения о жизни нет — только условие «если она жива».
+        self.assertNotIn("слушает брокера прямо сейчас", text)
+        self.assertIn("Если она жива", text)
 
     async def test_silent_session_yields_its_slot_to_a_new_login(self):
         # Закрытое приложение, убитый процесс, перезагрузка — слот держала
