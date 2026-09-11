@@ -3,8 +3,8 @@
 **Status:** Not started.
 **Story:** `.development/tasks/story-v1.0.0-pubsub-core.md`
 **Depends on:** task 03.
-**Consumes:** `spike-v1.0.0-resume-position.md` — if it chose the pagination-
-token route, the token is captured here, at the moment a reference is queued.
+**Consumes:** `closed/spike-v1.0.0-resume-position.md` — it chose anchoring by
+event id, so nothing is captured when a reference is queued.
 
 ## Summary
 
@@ -20,8 +20,9 @@ either way acknowledges. The acknowledgement is what lets the broker forget.
 - `bridge/sessionchat/protocol.py`: `Envelope` and its `render()` — the
   envelope text stays the delivered form; only what is queued changes.
 - `bridge/sessionchat/store.py`: `record_ack` from task 01.
-- `spike-v1.0.0-resume-position.md`: its recommendation decides whether a
-  pagination token is captured here. Read its finding before starting.
+- `closed/spike-v1.0.0-resume-position.md`, section "Recommendation": no
+  pagination token is captured here; queue entries stay
+  `(event_id, origin timestamp)`.
 - The two delivery modes (`listener`, `plugin`) come from `config.yaml` via
   `delivery_kinds`; task 00 removed `poll`. Both must carry the same ACK
   contract; a per-mode exception would undo the point.
@@ -63,11 +64,10 @@ either way acknowledges. The acknowledgement is what lets the broker forget.
   deduplication by `event_id` is the client's job and the broker must not
   collapse them.
 - Ordering within one subscription is the order events arrived.
-- If the spike recommended storing a pagination token, capture it when the
-  reference is queued — the token is only obtainable from the sync response
-  that carried the event, not afterwards — and pass it to `record_ack` with the
-  ACK. If the spike recommended anchoring by event id alone, queue entries
-  carry no token and this requirement does not apply.
+- No pagination token is captured when a reference is queued, and `record_ack`
+  takes none. The spike verified live that a recorded `acked_event_id` is
+  resolvable whenever resume needs it (task 05), so the sync response's
+  `prev_batch` is not kept.
 - `acked_event_id` is a **contiguous** high-water mark. Acknowledgements may
   arrive out of order; the mark advances only across an unbroken acknowledged
   prefix, so an ACK for a later entry while an earlier one is outstanding

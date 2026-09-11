@@ -3,9 +3,10 @@
 **Status:** Not started.
 **Story:** `.development/tasks/story-v1.0.0-pubsub-core.md`
 **Depends on:** task 04.
-**Consumes:** `spike-v1.0.0-resume-position.md` — it establishes *how* a
-recorded position becomes a readable point in the room. Build resume on its
-recorded finding, not on an assumption about `/messages`.
+**Consumes:** `closed/spike-v1.0.0-resume-position.md` — it established *how*
+a recorded position becomes a readable point in the room: resolve the event id
+with `/context`, then read forward with `/messages`. Build resume on that
+verified finding, not on an assumption about `/messages`.
 
 ## Summary
 
@@ -22,10 +23,13 @@ dead. Removes `started_ms` blinding and the three-term `max()` in `stale()`.
 - `bridge/sessionchat/protocol.py`: `STALE_SECONDS` and its rationale — that
   rationale is about a polling listener and does not survive this task; the new
   threshold rests on acknowledgement instead.
-- The spike's entry in `docs/VERIFICATION.md`: whether `/rooms/{id}/context`
-  resolves an event id to a pagination token, or whether the token has to be
-  captured at delivery time and stored. `GET /messages` takes `from` as a
-  pagination token, never an event id — do not assume otherwise.
+- The spike's recommendation (`closed/spike-v1.0.0-resume-position.md`) and
+  its entry in `docs/VERIFICATION.md`, verified live on Continuwuity:
+  `GET /rooms/{id}/context/{acked_event_id}?limit=0` returns `start`, the
+  stream position of that event, and `GET /messages?dir=f&from=<start>` reads
+  strictly after it. Tokens survive a homeserver restart and are not
+  account-bound, so nothing is stored besides the event id. `GET /messages`
+  takes `from` as a pagination token, never an event id.
 - No explanatory comments — a rule worth stating is stated as a test
   (AGENTS.md, Core 7). Where this task rewrites code whose existing comments
   carry a rule, that rule becomes a test in the same change. Tests: `unittest`,
@@ -46,7 +50,8 @@ dead. Removes `started_ms` blinding and the three-term `max()` in `stale()`.
 - **Resume.** When a registration reattaches — `login --reconnect` or the
   first authenticated poll after a broker restart — each of its subscriptions
   rebuilds its queue by reading the room forward from its recorded position —
-  resolved the way the spike established — and
+  `/context/{acked_event_id}?limit=0` for the `start` token, then
+  `/messages?dir=f` from it — and
   matching events against that subscription's topic (the task-03 rules). There
   is no "never acknowledged" case to handle: task 03 seeds every subscription
   with the room's position at creation, so resume has one code path. Broker
@@ -55,9 +60,16 @@ dead. Removes `started_ms` blinding and the three-term `max()` in `stale()`.
   the liveness rule without a single Matrix read.
 - Remove the `started_ms` filter in `on_message`. Resume position replaces it;
   keeping both would re-blind the broker to the downtime it just recovered.
-- Bound the read: a page size and a cap, with a clear log line when a
-  subscription is so far behind that the cap truncates it. Truncation must be
-  visible, not silent.
+- Three verified behaviours of the forward read that resume must respect:
+  - It is **exclusive** of the anchor: the acknowledged event never reappears.
+    Do not skip or deduplicate the first event read — it is already the next
+    one.
+  - A page's `end` is absent at the live edge. That is the stop condition.
+  - A page holds at most 100 events whatever `limit` asks for, so resume
+    paginates until `end` is absent rather than trusting one page.
+- Bound the read: a page size (at most 100, see above) and a cap on the total,
+  with a clear log line when a subscription is so far behind that the cap
+  truncates it. Truncation must be visible, not silent.
 - **Redelivery.** A reference handed over before a crash and never acknowledged
   reappears after resume. The client deduplicates by `event_id`; the broker
   does not try to remember what it already showed.
@@ -87,6 +99,9 @@ dead. Removes `started_ms` blinding and the three-term `max()` in `stale()`.
 - [ ] A subscription that has never acknowledged resumes from its seeded
       position, by the same code path as one that has, and never reads the room
       from the beginning.
+- [ ] Resume never re-queues the anchor event itself.
+- [ ] A gap longer than one page (more than 100 events) is read in full, up to
+      the cap: resume paginates until `end` is absent.
 - [ ] The `started_ms` filter is gone; no test depends on it.
 - [ ] A reference handed over and not acknowledged before a restart is
       redelivered.
