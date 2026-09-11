@@ -74,3 +74,30 @@ already merged.
 - [ ] The recommendation is written on this card and names the consequence for
       tasks 01, 04 and 05 by name.
 - [ ] No code merged into `bridge/`.
+
+## Recommendation (2026-09-11, verified live — see docs/VERIFICATION.md)
+
+**Anchor by event id and resolve at resume time.** Continuwuity implements
+`/rooms/{id}/context/{eventId}?limit=0`, its `start` token is the stream
+position of that event, and forward `/messages` from it reads strictly after
+it. Tokens survive a homeserver restart and are not account-bound. So the
+recorded `acked_event_id` is resolvable whenever resume needs it, and nothing
+must be captured at delivery time.
+
+Consequences, by consumer:
+
+- Task 01: no `acked_token` column. `subscriptions` carries `created_at`,
+  `acked_event_id`, `acked_at` only. The nullable-column hedge is dropped
+  together with the `token=None` parameter of `record_ack`.
+- Task 04: nothing is captured when a reference is queued. The queue entry
+  stays `(event_id, origin timestamp)`.
+- Task 05: resume is built on `/context/{acked_event_id}?limit=0` to resolve
+  the position, then `/messages?dir=f&from=<token>` to read forward. Seeding
+  at subscription creation (task 03) resolves the position the same way.
+
+Two behaviors resume must respect (both verified): forward reads are
+**exclusive** of the anchor event — the anchor itself never reappears, which
+is exactly the at-most-once property the ACK position wants; and a page's
+`end` disappears at the live edge, which is the natural stop condition.
+Pagination caps at 100 events per page regardless of the requested limit, so
+the resume loop must paginate until `end` is absent.
