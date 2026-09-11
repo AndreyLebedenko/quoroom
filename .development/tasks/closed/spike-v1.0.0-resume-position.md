@@ -1,6 +1,6 @@
 # Spike v1.0.0: How to resume reading the room from a known point
 
-**Status:** Not started.
+**Status:** Done (2026-09-11).
 **Story:** `.development/tasks/story-v1.0.0-pubsub-core.md`
 **Runs before:** task 01. Independent of task 00.
 
