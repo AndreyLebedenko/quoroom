@@ -79,9 +79,13 @@ class Session:
     open_waits: int = 0
     listening_until: float = 0.0
     last_delivery: float = 0.0
-    # Последнее обращение сессии к брокеру с верным токеном. По нему видно,
-    # что сессия ещё жива, даже если она сейчас не слушает.
-    last_seen: float = 0.0
+    # Когда пришёл запрос с токеном этой регистрации. Об обмене сообщениями
+    # не говорит ничего: пустой /wait, вернувший 204, обновляет отметку так
+    # же, как доставка. О живости не говорит ничего: файл с токеном переживает
+    # смерть процесса, и предъявить его может осиротевший listener. Это факт о
+    # прошлом; живость считает state(), опираясь на open_waits и
+    # listening_until.
+    last_contact: float = 0.0
     # Глубина последнего доставленного сообщения: исходящие получают +1.
     depth: int = 0
     signal: asyncio.Event = field(default_factory=asyncio.Event)
@@ -156,7 +160,7 @@ class Session:
         now = time.time()
         if self.open_waits > 0 or now < self.listening_until:
             return False
-        last = max(self.since, self.last_delivery, self.last_seen)
+        last = max(self.since, self.last_delivery, self.last_contact)
         return now - last > STALE_SECONDS
 
     def advice(self) -> str:
@@ -172,7 +176,7 @@ class Session:
                 "слот сам не освободится."
             )
         now = time.time()
-        last = max(self.since, self.last_delivery, self.last_seen)
+        last = max(self.since, self.last_delivery, self.last_contact)
         quiet = int(now - last)
         # Освободится, когда кончится и фора слушателя, и счёт молчания.
         left = int(max(self.listening_until, last + STALE_SECONDS) - now)
@@ -369,7 +373,7 @@ class Broker:
         session = self.sessions.get(agent)
         if session is None or session.token != str(data.get("token", "")):
             raise web.HTTPConflict(text="сессия не подключена или токен неверен")
-        session.last_seen = time.time()
+        session.last_contact = time.time()
         return session
 
     async def handle_login(self, request: web.Request) -> web.Response:
@@ -380,7 +384,7 @@ class Broker:
         existing = self.sessions.get(agent)
         if existing is not None and existing.stale():
             quiet = int(time.time() - max(existing.since, existing.last_delivery,
-                                          existing.last_seen))
+                                          existing.last_contact))
             log.info(
                 "слот %s освобождён: прежняя сессия молчала %sс (%s)",
                 agent, quiet, existing.label,
@@ -402,7 +406,7 @@ class Broker:
                     )
                 )
             existing.label = str(data.get("label", "")) or existing.label
-            existing.last_seen = time.time()
+            existing.last_contact = time.time()
             log.info("переподключение к регистрации %s (%s)", agent, existing.label)
             return web.json_response(
                 {

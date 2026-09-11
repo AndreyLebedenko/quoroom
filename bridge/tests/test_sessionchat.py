@@ -399,7 +399,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # знает, надолго ли, и тянется к --force.
         await self.login()
         session = self.broker.sessions["claude-code"]
-        session.since = session.last_seen = time.time() - 60
+        session.since = session.last_contact = time.time() - 60
         again = await self.client.post(
             "/login", json={"agent": "claude-code", "label": "вторая"}
         )
@@ -414,7 +414,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # только время последнего опроса — и когда слот освободится.
         await self.login()
         session = self.broker.sessions["claude-code"]
-        session.since = session.last_seen = time.time() - 20
+        session.since = session.last_contact = time.time() - 20
         session.listening_until = time.time() + 50
         again = await self.client.post(
             "/login", json={"agent": "claude-code", "label": "вторая"}
@@ -432,7 +432,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # живой сессии не бывает: и listener, и плагин опрашивают непрерывно.
         _, first = await self.login(label="прежняя")
         stale = self.broker.sessions["claude-code"]
-        stale.since = stale.last_seen = time.time() - 10 * 60
+        stale.since = stale.last_contact = time.time() - 10 * 60
         response, second = await self.login(label="новая")
         self.assertEqual(response.status, 200)
         self.assertNotEqual(second["token"], first["token"])
@@ -441,7 +441,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_listening_session_keeps_its_slot(self):
         await self.login()
         session = self.broker.sessions["claude-code"]
-        session.since = session.last_seen = time.time() - 10 * 60
+        session.since = session.last_contact = time.time() - 10 * 60
         session.listening_until = time.time() + LISTEN_GRACE
         response, _ = await self.login(label="вторая")
         self.assertEqual(response.status, 409)
@@ -450,7 +450,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # listener умирает при доставке, и сессии нужно время его поднять.
         await self.login()
         session = self.broker.sessions["claude-code"]
-        session.since = session.last_seen = time.time() - 10 * 60
+        session.since = session.last_contact = time.time() - 10 * 60
         session.last_delivery = time.time() - 30
         response, _ = await self.login(label="вторая")
         self.assertEqual(response.status, 409)
@@ -461,7 +461,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.login(agent="codex")
         session = self.broker.sessions["codex"]
         session.listener_kind = "poll"
-        session.since = session.last_seen = time.time() - 10 * 60
+        session.since = session.last_contact = time.time() - 10 * 60
         response, _ = await self.login(agent="codex", label="вторая")
         self.assertEqual(response.status, 409)
 
