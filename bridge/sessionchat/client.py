@@ -14,7 +14,7 @@ DEAF_SECONDS, процесс жив, но глух, а значит беспол
     agentschat say    --agent claude-code "однострочный текст"
     agentschat say    --agent claude-code --file письмо.md   # многострочный
     agentschat ask    --agent claude-code --timeout 300 "вопрос"
-    agentschat inbox  --agent codex            # забрать очередь
+    agentschat inbox  --agent claude-code     # забрать очередь
     agentschat status
     agentschat logout --agent claude-code [--force]
 """
@@ -108,17 +108,6 @@ def do_login(args: argparse.Namespace) -> None:
                 f"его заново ФОНОВОЙ командой: agentschat wait --agent "
                 f"{args.agent}"
             )
-        return
-    if data.get("mode") == "poll":
-        print(
-            f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
-            "Вложить сообщение в эту сессию снаружи нельзя, поэтому входящие "
-            "копятся в очереди и приходят вместе с ответом на любую твою "
-            "команду чата.\n"
-            "Listener запускать НЕ надо — он работать не будет. Чтобы забрать "
-            "накопленное, не отправляя ничего: agentschat inbox --agent "
-            f"{args.agent}"
-        )
         return
     if data.get("mode") == "plugin":
         print(
@@ -283,13 +272,9 @@ def do_say(args: argparse.Namespace) -> None:
         print(f"AGENTSCHAT: ВНИМАНИЕ — {data['warning']}")
     if data.get("note"):
         print(f"AGENTSCHAT: {data['note']}")
-    show_pending(data.get("pending") or [])
 
 
 def do_ask(args: argparse.Namespace) -> None:
-    # Порядок важен: say у poll-агента сначала отдаёт накопленную очередь, и
-    # только потом мы начинаем ждать ответ. Иначе первое же ожидание вернуло бы
-    # старое сообщение из очереди, выдав его за ответ на заданный вопрос.
     do_say(args)
     token = credentials(args.agent)["token"]
     deadline = time.time() + args.timeout

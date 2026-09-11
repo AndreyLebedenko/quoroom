@@ -25,11 +25,12 @@ CONFIG = {
             "device_id": "d1",
             "display_name": "Claude Code",
         },
-        "codex": {
-            "user_id": "@codex:local",
+        "opencode": {
+            "user_id": "@opencode:local",
             "access_token": "token-b",
             "device_id": "d2",
-            "display_name": "Codex",
+            "display_name": "OpenCode",
+            "delivery": "plugin",
         },
     },
 }
@@ -61,9 +62,7 @@ class AddressingTests(unittest.TestCase):
     def test_display_name_alone_does_not_address(self):
         # Голое имя в тексте — не обращение: иначе агент по имени OpenCode
         # считал бы обращением любое упоминание CLI в отчёте о работе.
-        self.assertEqual(
-            self.broker.addressees("Claude Code, статус?", event("x")), []
-        )
+        self.assertEqual(self.broker.addressees("Claude Code, статус?", event("x")), [])
 
     def test_name_without_the_at_sign_does_not_address(self):
         self.assertEqual(
@@ -83,8 +82,10 @@ class AddressingTests(unittest.TestCase):
         )
 
     def test_pill_addresses_the_agent(self):
-        source = event("привет", content={"m.mentions": {"user_ids": ["@codex:local"]}})
-        self.assertEqual(self.broker.addressees("привет", source), ["codex"])
+        source = event(
+            "привет", content={"m.mentions": {"user_ids": ["@opencode:local"]}}
+        )
+        self.assertEqual(self.broker.addressees("привет", source), ["opencode"])
 
     def test_unaddressed_message_reaches_nobody(self):
         self.assertEqual(self.broker.addressees("просто мысли вслух", event("x")), [])
@@ -111,31 +112,47 @@ class AddressingTests(unittest.TestCase):
 class AgentSubsetTests(unittest.TestCase):
     def test_empty_selection_keeps_every_agent(self):
         self.assertEqual(
-            set(only_agents(CONFIG, "")["agents"]), {"claude-code", "codex"}
+            set(only_agents(CONFIG, "")["agents"]), {"claude-code", "opencode"}
         )
 
     def test_selected_agent_is_the_only_one_served(self):
         limited = only_agents(CONFIG, "claude-code")
         self.assertEqual(set(limited["agents"]), {"claude-code"})
-        self.assertNotIn("codex", Broker(limited).clients)
+        self.assertNotIn("opencode", Broker(limited).clients)
 
     def test_unknown_agent_is_refused_before_connecting(self):
         with self.assertRaises(ValueError):
-            only_agents(CONFIG, "claude-code,opencode")
+            only_agents(CONFIG, "claude-code,codex")
+
+
+class DeliveryConfigTests(unittest.TestCase):
+    def test_unknown_delivery_value_is_refused_at_startup(self):
+        broken = {
+            **CONFIG,
+            "agents": {
+                **CONFIG["agents"],
+                "opencode": {**CONFIG["agents"]["opencode"], "delivery": "poll"},
+            },
+        }
+        with self.assertRaises(ValueError) as raised:
+            Broker(broken)
+        self.assertIn("poll", str(raised.exception))
+        self.assertIn("listener, plugin", str(raised.exception))
+
+    def test_delivery_default_is_listener_without_a_config_key(self):
+        broker = Broker(CONFIG)
+        self.assertNotIn("claude-code", broker.delivery_kinds)
+
+    def test_plugin_delivery_is_registered(self):
+        broker = Broker(CONFIG)
+        self.assertEqual(broker.delivery_kinds.get("opencode"), "plugin")
 
 
 class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
     """Агент с delivery: plugin слушает через /wait, но listener не запускает."""
 
     async def asyncSetUp(self):
-        config = {
-            **CONFIG,
-            "agents": {
-                **CONFIG["agents"],
-                "codex": {**CONFIG["agents"]["codex"], "delivery": "plugin"},
-            },
-        }
-        self.broker = Broker(config)
+        self.broker = Broker(CONFIG)
         self.client = TestClient(TestServer(self.broker.app()))
         await self.client.start_server()
 
@@ -144,7 +161,7 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
         for client in self.broker.clients.values():
             await client.close()
 
-    async def login(self, agent="codex"):
+    async def login(self, agent="opencode"):
         response = await self.client.post("/login", json={"agent": agent})
         return await response.json()
 
@@ -153,13 +170,13 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_plugin_listens_through_the_same_wait(self):
         data = await self.login()
-        session = self.broker.sessions["codex"]
+        session = self.broker.sessions["opencode"]
         session.inbox.append(
             Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
         )
         session.signal.set()
         response = await self.client.get(
-            "/wait", params={"agent": "codex", "token": data["token"]}
+            "/wait", params={"agent": "opencode", "token": data["token"]}
         )
         self.assertEqual(response.status, 200)
         self.assertEqual((await response.json())["text"], "привет")
@@ -167,13 +184,13 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_envelope_does_not_demand_a_listener_restart(self):
         # Плагину нечего поднимать: требование было бы невыполнимым.
         data = await self.login()
-        session = self.broker.sessions["codex"]
+        session = self.broker.sessions["opencode"]
         session.inbox.append(
             Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
         )
         session.signal.set()
         response = await self.client.get(
-            "/wait", params={"agent": "codex", "token": data["token"]}
+            "/wait", params={"agent": "opencode", "token": data["token"]}
         )
         rendered = (await response.json())["rendered"]
         self.assertNotIn("Подними новый listener", rendered)
@@ -189,23 +206,14 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get(
             "/wait", params={"agent": "claude-code", "token": data["token"]}
         )
-        self.assertIn(
-            "Подними новый listener", (await response.json())["rendered"]
-        )
+        self.assertIn("Подними новый listener", (await response.json())["rendered"])
 
 
-class PollDeliveryTests(unittest.IsolatedAsyncioTestCase):
-    """Агент с delivery: poll забирает очередь сам, при обращении к чату."""
+class InboxTests(unittest.IsolatedAsyncioTestCase):
+    """Явная раздача накопленного: команда inbox и её ответы."""
 
     async def asyncSetUp(self):
-        config = {
-            **CONFIG,
-            "agents": {
-                **CONFIG["agents"],
-                "codex": {**CONFIG["agents"]["codex"], "delivery": "poll"},
-            },
-        }
-        self.broker = Broker(config)
+        self.broker = Broker(CONFIG)
         self.published: list[tuple[str, str, int]] = []
 
         async def publish(agent, text, depth):
@@ -221,76 +229,38 @@ class PollDeliveryTests(unittest.IsolatedAsyncioTestCase):
         for client in self.broker.clients.values():
             await client.close()
 
-    async def login(self, agent="codex"):
+    async def login(self, agent="claude-code"):
         response = await self.client.post("/login", json={"agent": agent})
         return await response.json()
 
-    async def arrive(self, text="@codex привет"):
+    async def arrive(self, text="@claude-code привет"):
         await self.broker.on_message(
             types.SimpleNamespace(room_id="!room:local"), event(text)
         )
 
-    async def test_login_reports_the_poll_mode(self):
-        self.assertEqual((await self.login())["mode"], "poll")
-
-    async def test_first_queued_message_is_announced_in_the_room(self):
-        # Человек должен видеть, что доставка отложена, а не считать её
-        # состоявшейся.
-        await self.login()
-        await self.arrive()
-        self.assertEqual(len(self.published), 1)
-        self.assertIn("при следующем обращении", self.published[0][1])
-
-    async def test_further_messages_do_not_repeat_the_announcement(self):
-        await self.login()
-        await self.arrive()
-        await self.arrive("@codex ещё раз")
-        self.assertEqual(len(self.published), 1)
-        self.assertEqual(len(self.broker.sessions["codex"].inbox), 2)
-
     async def test_inbox_hands_over_everything_once(self):
         data = await self.login()
         await self.arrive()
-        await self.arrive("@codex ещё раз")
+        await self.arrive("@claude-code ещё раз")
         response = await self.client.get(
-            "/inbox", params={"agent": "codex", "token": data["token"]}
+            "/inbox", params={"agent": "claude-code", "token": data["token"]}
         )
         pending = (await response.json())["pending"]
         self.assertEqual(len(pending), 2)
         self.assertIn("привет", pending[0])
-        self.assertNotIn("Подними новый listener", pending[0])
-        self.assertFalse(self.broker.sessions["codex"].inbox)
+        self.assertFalse(self.broker.sessions["claude-code"].inbox)
 
-    async def test_say_returns_the_queue_with_its_receipt(self):
+    async def test_say_never_returns_the_queue_as_pending(self):
         data = await self.login()
         await self.arrive()
-        response = await self.client.post(
-            "/say", json={"agent": "codex", "token": data["token"], "text": "ответ"}
-        )
-        body = await response.json()
-        self.assertEqual(len(body["pending"]), 1)
-        # Исходящее относится к тому, что агент уже знал: очередь не должна
-        # поднимать его глубину задним числом.
-        self.assertEqual(body["depth"], 1)
-
-    async def test_listener_agent_keeps_its_queue_on_say(self):
-        # Иначе say отнял бы у listener сообщение, которого тот ждёт.
-        data = await self.login(agent="claude-code")
-        self.broker.sessions["claude-code"].inbox.append(
-            Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
-        )
         response = await self.client.post(
             "/say",
             json={"agent": "claude-code", "token": data["token"], "text": "ответ"},
         )
-        self.assertNotIn("pending", await response.json())
+        body = await response.json()
+        self.assertNotIn("pending", body)
+        # Очередь при этом не потеряна: listener всё ещё ждёт её через /wait.
         self.assertEqual(len(self.broker.sessions["claude-code"].inbox), 1)
-
-    async def test_status_shows_the_queue_length(self):
-        await self.login()
-        await self.arrive()
-        text = await (await self.client.get("/status")).text()
-        self.assertIn("опрос (в очереди 1)", text)
 
 
 class DepthLimitTests(unittest.IsolatedAsyncioTestCase):
@@ -455,16 +425,6 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         response, _ = await self.login(label="вторая")
         self.assertEqual(response.status, 409)
 
-    async def test_a_queue_agent_never_yields_its_slot(self):
-        # У poll-агента признака жизни нет вовсе: он и должен молчать, пока
-        # сам не заговорит. Отдать его слот значило бы потерять очередь.
-        await self.login(agent="codex")
-        session = self.broker.sessions["codex"]
-        session.listener_kind = "poll"
-        session.since = session.last_contact = time.time() - 10 * 60
-        response, _ = await self.login(agent="codex", label="вторая")
-        self.assertEqual(response.status, 409)
-
     async def test_reconnect_returns_the_same_registration(self):
         # После перезапуска CLI регистрация в брокере жива, а сессия
         # восстановлена под тем же id. Токен с диска — единственное
@@ -573,7 +533,9 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # попало в комнату, человек его видел, а ни один агент не получил —
         # и обе стороны честно ждали друг друга.
         _, data = await self.login()
-        self.broker.sessions["codex"] = Session("codex", "рядом", "t2", time.time())
+        self.broker.sessions["opencode"] = Session(
+            "opencode", "рядом", "t2", time.time()
+        )
         response = await self.client.post(
             "/say",
             json={
@@ -584,17 +546,19 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         )
         body = await response.json()
         self.assertIn("НИ ОДИН агент его не получил", body["warning"])
-        self.assertIn("codex", body["warning"])
+        self.assertIn("opencode", body["warning"])
 
     async def test_addressed_message_carries_no_warning(self):
         _, data = await self.login()
-        self.broker.sessions["codex"] = Session("codex", "рядом", "t2", time.time())
+        self.broker.sessions["opencode"] = Session(
+            "opencode", "рядом", "t2", time.time()
+        )
         response = await self.client.post(
             "/say",
             json={
                 "agent": "claude-code",
                 "token": data["token"],
-                "text": "@codex вот протокол",
+                "text": "@opencode вот протокол",
             },
         )
         self.assertNotIn("warning", await response.json())
@@ -603,7 +567,9 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # Ответ человеку на его же вопрос — не забытая адресация. Одинаковое
         # предупреждение на оба случая приучает не читать предупреждения.
         _, data = await self.login()
-        self.broker.sessions["codex"] = Session("codex", "рядом", "t2", time.time())
+        self.broker.sessions["opencode"] = Session(
+            "opencode", "рядом", "t2", time.time()
+        )
         response = await self.client.post(
             "/say",
             json={
@@ -656,11 +622,11 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         text = await (await self.client.get("/status")).text()
         self.assertIn("рефакторинг", text)
         self.assertIn("НЕ СЛУШАЕТ", text)
-        self.assertIn("codex          не подключён", text)
+        self.assertIn("opencode       не подключён", text)
 
     async def test_message_to_disconnected_agent_is_reported_in_room(self):
         await self.broker.on_message(
-            types.SimpleNamespace(room_id="!room:local"), event("@codex ты тут?")
+            types.SimpleNamespace(room_id="!room:local"), event("@opencode ты тут?")
         )
         self.assertEqual(len(self.published), 1)
         self.assertIn("не подключена", self.published[0][1])
@@ -682,8 +648,8 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         _, data = await self.login()
         source = event(
             "@claude-code вопрос",
-            sender="@codex:local",
-            content={"com.agentschat.agent": "codex", "com.agentschat.depth": 2},
+            sender="@opencode:local",
+            content={"com.agentschat.agent": "opencode", "com.agentschat.depth": 2},
         )
         await self.broker.on_message(
             types.SimpleNamespace(room_id="!room:local"), source

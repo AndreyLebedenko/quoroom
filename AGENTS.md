@@ -147,9 +147,13 @@
    in the same commit that introduces a dependency. The runtime dependency
    list is deliberately short — adding to it needs a reason in the task card.
 4. The `chatlogin` skill exists in two copies — `.claude/skills/chatlogin/`
-   and `.opencode/skills/chatlogin/` — and they must stay identical. Changing
-   one without the other is a defect. Codex reads `.agents/skills/`, which
-   holds no chat skill: see the `Codex` section.
+   and `.opencode/skills/chatlogin/` — and they differ by design: delivery
+   mechanics differ between the CLIs (see `docs/SESSION_BRIDGE.md`). Do not
+   make them identical. What they share — `login`, `say`, `ask`, `status` and
+   the boundaries section — must agree; changing a shared part in one copy
+   without the other is a defect. Codex's skill location is `.agents/skills/`;
+   it holds no chat skill (see the `Codex` section), and the directory is
+   absent until a Codex skill appears.
 5. When reading project text files with PowerShell, pass `-Encoding UTF8`
    explicitly, e.g. `Get-Content -Raw -Encoding UTF8 README.md`.
 6. Codex may correct a Python command's console-encoding mismatch by setting

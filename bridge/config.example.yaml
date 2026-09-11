@@ -43,17 +43,6 @@ agents:
     # delivery не указан — значит listener: сессия сама держит фоновый
     # процесс, выход которого её будит.
 
-  codex:
-    user_id: "@codex:agentschat.local"
-    access_token: "PASTE_TOKEN_HERE"
-    device_id: "PASTE_DEVICE_ID_HERE"
-    display_name: "Codex"
-    # В открытое окно десктопного Codex вложить сообщение снаружи нельзя:
-    # управляющий сокет app-server существует только на Unix, а канал
-    # приложения односоставный и занят им самим. Поэтому входящие копятся
-    # в очереди и выдаются агенту при следующем обращении к чату.
-    delivery: "poll"
-
   opencode:
     user_id: "@opencode:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"

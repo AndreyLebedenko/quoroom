@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Брокер чата сессий.
 
-Одна комната Matrix, три аккаунта агентов и человек как равноправный
-участник. К брокеру по HTTP на 127.0.0.1 подключаются ЖИВЫЕ сессии CLI —
+Одна комната Matrix, аккаунты агентов и человек как равноправные
+участники. К брокеру по HTTP на 127.0.0.1 подключаются ЖИВЫЕ сессии CLI —
 брокер сам никаких CLI не запускает.
 
 Сессия не владеет Matrix-токеном: она говорит только с брокером, а публикует
@@ -56,8 +56,8 @@ log = logging.getLogger("agentschat.broker")
 def bounded(needle: str, haystack: str) -> bool:
     """Вхождение с границами слова.
 
-    Простое вхождение подстроки адресовало бы codex сообщением про
-    @codex-extra, а Claude Code — любым упоминанием claude-code-2.
+    Простое вхождение подстроки адресовало бы агента по имени terra
+    сообщением про terra-2, а Claude Code — любым упоминанием claude-code-2.
     Дефис считаем частью имени, иначе граница не работает на localpart.
     """
     if not needle:
@@ -89,7 +89,7 @@ class Session:
     # Глубина последнего доставленного сообщения: исходящие получают +1.
     depth: int = 0
     signal: asyncio.Event = field(default_factory=asyncio.Event)
-    # "listener" | "plugin" | "poll"
+    # "listener" | "plugin"
     listener_kind: str = "listener"
     # Предел глубины цепочки, действующий для этой сессии. Хранится здесь,
     # чтобы конверт печатал настоящее "из N", а не значение по умолчанию.
@@ -109,15 +109,6 @@ class Session:
         """
         return self.mode == "listener"
 
-    @property
-    def polls(self) -> bool:
-        """Забирает ли агент очередь сам, при следующем обращении к чату.
-
-        Так живут CLI, в которые снаружи ничего вложить нельзя: доставка
-        откладывается до момента, когда агент сам заговорит.
-        """
-        return self.mode == "poll"
-
     def drain(self) -> list[str]:
         """Отдаёт всё накопленное разом и очищает очередь."""
         taken = list(self.inbox)
@@ -126,15 +117,11 @@ class Session:
             self.last_delivery = time.time()
             self.depth = taken[-1].depth
         return [
-            envelope.render(self.restart_listener, self.max_depth)
-            for envelope in taken
+            envelope.render(self.restart_listener, self.max_depth) for envelope in taken
         ]
 
     def state(self) -> str:
         now = time.time()
-        if self.polls:
-            waiting = len(self.inbox)
-            return f"опрос (в очереди {waiting})" if waiting else "опрос"
         if self.open_waits > 0 or now < self.listening_until:
             return "слушает"
         if self.last_delivery and now - self.last_delivery < 120:
@@ -150,13 +137,7 @@ class Session:
         и плагин опрашивают его непрерывно, а пауза на обработку доставки
         укладывается в две минуты. Столько молчит только закрытое приложение,
         убитый процесс или перезагруженная машина.
-
-        Агент на очереди (poll) сюда не попадает: у него нет признака жизни
-        вовсе, он и должен молчать, пока сам не заговорит. Его слот
-        освобождает человек через --force.
         """
-        if self.polls:
-            return False
         now = time.time()
         if self.open_waits > 0 or now < self.listening_until:
             return False
@@ -170,11 +151,6 @@ class Session:
         надолго ли, и тянется к --force. А занимать слот может её собственный
         труп — регистрация от процесса, убитого минуту назад.
         """
-        if self.polls:
-            return (
-                "Это агент на очереди: он молчит, пока сам не заговорит, и "
-                "слот сам не освободится."
-            )
         now = time.time()
         last = max(self.since, self.last_delivery, self.last_contact)
         quiet = int(now - last)
@@ -216,12 +192,16 @@ class Broker:
         )
         self.clients: dict[str, AsyncClient] = {}
         # Как агент получает непрошеные сообщения, если не через listener:
-        # "plugin" — слушатель живёт внутри самого CLI (OpenCode), "poll" —
-        # очередь копится до следующего обращения агента к чату (Codex).
+        # "plugin" — слушатель живёт внутри самого CLI (OpenCode).
         self.delivery_kinds: dict[str, str] = {}
         for agent, data in cfg["agents"].items():
-            kind = str(data.get("delivery", ""))
-            if kind in ("plugin", "poll"):
+            kind = str(data.get("delivery", "listener"))
+            if kind not in ("listener", "plugin"):
+                raise ValueError(
+                    f"агент {agent}: неизвестный delivery: {kind!r}. "
+                    "Допустимые значения: listener, plugin."
+                )
+            if kind == "plugin":
                 self.delivery_kinds[agent] = kind
             client = AsyncClient(
                 cfg["homeserver_url"],
@@ -332,19 +312,8 @@ class Broker:
                         0,
                     )
                 continue
-            # Пометку ставим только на сообщение человека: агенту про
-            # отложенную доставку сказано в его же конверте, а комната от
-            # пометки на каждое сообщение превращается в мусор.
-            first_in_queue = human and session.polls and not session.inbox
             session.inbox.append(envelope)
             session.signal.set()
-            if first_in_queue:
-                await self.publish(
-                    agent,
-                    f"(сессия {agent} заберёт это при следующем обращении к "
-                    "чату: вложить сообщение в неё снаружи нельзя.)",
-                    0,
-                )
 
     async def publish(self, agent: str, text: str, depth: int) -> str:
         response = await self.clients[agent].room_send(
@@ -383,11 +352,15 @@ class Broker:
             raise web.HTTPNotFound(text=f"неизвестный агент: {agent}")
         existing = self.sessions.get(agent)
         if existing is not None and existing.stale():
-            quiet = int(time.time() - max(existing.since, existing.last_delivery,
-                                          existing.last_contact))
+            quiet = int(
+                time.time()
+                - max(existing.since, existing.last_delivery, existing.last_contact)
+            )
             log.info(
                 "слот %s освобождён: прежняя сессия молчала %sс (%s)",
-                agent, quiet, existing.label,
+                agent,
+                quiet,
+                existing.label,
             )
             self.sessions.pop(agent, None)
             existing = None
@@ -544,15 +517,12 @@ class Broker:
             answer["warning"] = (
                 "сообщение опубликовано, но НИ ОДИН агент его не получил: в нём "
                 "нет обращения. Адресуй явно — @имя или @room. Сейчас "
-                + (f"подключены: {', '.join(sorted(others))}." if others
-                   else "других подключённых сессий нет.")
+                + (
+                    f"подключены: {', '.join(sorted(others))}."
+                    if others
+                    else "других подключённых сессий нет."
+                )
             )
-        if session.polls:
-            # Очередь отдаём ПОСЛЕ публикации: исходящее относится к тому, что
-            # агент уже знал, и не должно наследовать глубину только что
-            # пришедшего. Для listener не трогаем — это отняло бы у него
-            # сообщение, которое он сейчас ждёт.
-            answer["pending"] = session.drain()
         return web.json_response(answer)
 
     async def handle_status(self, request: web.Request) -> web.Response:

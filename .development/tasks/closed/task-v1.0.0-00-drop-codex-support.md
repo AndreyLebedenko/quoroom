@@ -1,6 +1,8 @@
 # Task v1.0.0-00: Drop Codex support and the poll delivery mode
 
-**Status:** Not started.
+**Status:** Completed (human review of 11 Sep 2026). Follow-ups from that
+review: `AGENTS.md` Tooling note 4 now says the two skill copies differ by
+design, and `docs/ARCHITECTURE.md` no longer lists `@codex` as a room member.
 **Story:** `.development/tasks/story-v1.0.0-pubsub-core.md`
 **Depends on:** nothing. Runs first, or in parallel with task 01. Everything
 from task 02 onward assumes this is done.
@@ -85,21 +87,30 @@ delivery, and reaches the same models.
 
 ## Acceptance criteria
 
-- [ ] No occurrence of `poll`, `polls` or `pending` as a delivery concept
+- [x] No occurrence of `poll`, `polls` or `pending` as a delivery concept
       remains in `bridge/`.
-- [ ] `delivery: "poll"` in a config fails at startup with a message naming the
+- [x] `delivery: "poll"` in a config fails at startup with a message naming the
       accepted values; a test covers it.
-- [ ] `/say` no longer returns `pending`, and no room notice about deferred
+- [x] `/say` no longer returns `pending`, and no room notice about deferred
       pickup can be produced.
-- [ ] `config.example.yaml` has no `codex` entry and still documents everything
+- [x] `config.example.yaml` has no `codex` entry and still documents everything
       the broker reads and nothing more.
-- [ ] `README.md`'s delivery table has two rows, both verified live.
-- [ ] The Unix-socket finding is in `docs/SESSION_BRIDGE.md` as the reason for
+- [x] `README.md`'s delivery table has two rows, both verified live.
+- [x] The Unix-socket finding is in `docs/SESSION_BRIDGE.md` as the reason for
       dropping Codex, with its "verified, not from documentation" standing
       intact.
-- [ ] `.agents/skills/chatlogin/` is gone; `.claude` and `.opencode` copies are
-      byte-identical to each other and contain no poll-mode instruction.
-- [ ] `AGENTS.md` states that Codex works on the project but is not a room
+- [ ] ~~`.agents/skills/chatlogin/` is gone; `.claude` and `.opencode` copies
+      are byte-identical to each other and contain no poll-mode instruction.~~
+      Closed by human decision of 11 Sep 2026: the two skill copies were never
+      identical and are intentionally different (SESSION_BRIDGE.md said so all
+      along); the byte-identical criterion was based on a stale picture of
+      their contents. The `.agents/skills/chatlogin/` copy is deleted, and the
+      only poll-mode instructions found in skills lived in the deleted copy.
+      The `.claude` copy lost its `codex` mention; the `.opencode` copy did not
+      mention Codex or poll. Note: `.agents/` itself disappeared with the
+      skill because git does not keep empty directories; recreate it when a
+      Codex skill actually appears.
+- [x] `AGENTS.md` states that Codex works on the project but is not a room
       participant, and its `Codex` section is otherwise unchanged.
-- [ ] `bridge/live-checks/` is untouched.
-- [ ] Full suite green; `ruff check` and `ruff format --check` clean.
+- [x] `bridge/live-checks/` is untouched.
+- [x] Full suite green; `ruff check` and `ruff format --check` clean.

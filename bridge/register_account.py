@@ -39,25 +39,37 @@ import sys
 import requests
 
 
-def register(homeserver: str, username: str, password: str, token: str,
-             device_name: str, verify: "bool | str") -> dict:
+def register(
+    homeserver: str,
+    username: str,
+    password: str,
+    token: str,
+    device_name: str,
+    verify: "bool | str",
+) -> dict:
     """verify: True (обычная проверка), False (без проверки) или путь к
     файлу CA-бандла (например, к rootCA.pem от mkcert)."""
     url = f"{homeserver.rstrip('/')}/_matrix/client/v3/register"
 
     # Шаг 1: сервер должен ответить 401 со списком доступных auth-flow и session id.
-    r1 = requests.post(url, json={
-        "username": username,
-        "password": password,
-        "initial_device_display_name": device_name,
-    }, verify=verify)
+    r1 = requests.post(
+        url,
+        json={
+            "username": username,
+            "password": password,
+            "initial_device_display_name": device_name,
+        },
+        verify=verify,
+    )
 
     if r1.status_code == 200:
         # Некоторые серверы при выключенной UIA могут зарегистрировать сразу.
         return r1.json()
 
     if r1.status_code != 401:
-        print(f"Неожиданный ответ на шаге 1: {r1.status_code} {r1.text}", file=sys.stderr)
+        print(
+            f"Неожиданный ответ на шаге 1: {r1.status_code} {r1.text}", file=sys.stderr
+        )
         sys.exit(1)
 
     session = r1.json().get("session")
@@ -66,16 +78,20 @@ def register(homeserver: str, username: str, password: str, token: str,
         sys.exit(1)
 
     # Шаг 2: повторяем запрос с указанием auth.
-    r2 = requests.post(url, json={
-        "username": username,
-        "password": password,
-        "initial_device_display_name": device_name,
-        "auth": {
-            "type": "m.login.registration_token",
-            "token": token,
-            "session": session,
+    r2 = requests.post(
+        url,
+        json={
+            "username": username,
+            "password": password,
+            "initial_device_display_name": device_name,
+            "auth": {
+                "type": "m.login.registration_token",
+                "token": token,
+                "session": session,
+            },
         },
-    }, verify=verify)
+        verify=verify,
+    )
 
     if r2.status_code != 200:
         print(f"Регистрация не удалась: {r2.status_code} {r2.text}", file=sys.stderr)
@@ -86,15 +102,25 @@ def register(homeserver: str, username: str, password: str, token: str,
 
 def main():
     parser = argparse.ArgumentParser(description="Регистрация аккаунта на Continuwuity")
-    parser.add_argument("--homeserver", required=True, help="например https://agentschat.local")
-    parser.add_argument("--username", required=True, help="localpart, например claude-code")
+    parser.add_argument(
+        "--homeserver", required=True, help="например https://agentschat.local"
+    )
+    parser.add_argument(
+        "--username", required=True, help="localpart, например claude-code"
+    )
     parser.add_argument("--password", required=True)
     parser.add_argument("--registration-token", required=True, dest="token")
     parser.add_argument("--device-name", default="agentschat-bridge")
-    parser.add_argument("--ca-bundle", default=None,
-                         help=r'путь к rootCA.pem из mkcert, например "$(mkcert -CAROOT)\rootCA.pem"')
-    parser.add_argument("--no-verify-ssl", action="store_true",
-                         help="полностью отключить проверку сертификата (грубее, чем --ca-bundle)")
+    parser.add_argument(
+        "--ca-bundle",
+        default=None,
+        help=r'путь к rootCA.pem из mkcert, например "$(mkcert -CAROOT)\rootCA.pem"',
+    )
+    parser.add_argument(
+        "--no-verify-ssl",
+        action="store_true",
+        help="полностью отключить проверку сертификата (грубее, чем --ca-bundle)",
+    )
     args = parser.parse_args()
 
     if args.no_verify_ssl:
@@ -117,7 +143,8 @@ def main():
         print(
             "\nОшибка проверки сертификата. requests не читает системное хранилище "
             "Windows, куда mkcert -install кладёт свой корень. Добавьте:\n"
-            r'    --ca-bundle "$(mkcert -CAROOT)\rootCA.pem"' "\n"
+            r'    --ca-bundle "$(mkcert -CAROOT)\rootCA.pem"'
+            "\n"
             "к этой же команде и запустите заново.",
             file=sys.stderr,
         )
@@ -125,9 +152,9 @@ def main():
 
     print(json.dumps(data, indent=2, ensure_ascii=False))
     print("\n--- вставить в bridge/config.yaml ---")
-    print(f"user_id: \"{data.get('user_id')}\"")
-    print(f"access_token: \"{data.get('access_token')}\"")
-    print(f"device_id: \"{data.get('device_id')}\"")
+    print(f'user_id: "{data.get("user_id")}"')
+    print(f'access_token: "{data.get("access_token")}"')
+    print(f'device_id: "{data.get("device_id")}"')
 
 
 if __name__ == "__main__":
