@@ -211,7 +211,8 @@ how far each subscription has acknowledged.**
 
 - Registrations: agent, label, token, `registered_at`, chain depth.
 - Subscriptions: registration, topic, `created_at`, `acked_event_id`,
-  `acked_at`, and `acked_token` if the resume spike calls for one.
+  `acked_at`. No pagination token: the resume spike verified that the event
+  id is resolvable at resume time.
   `acked_event_id` is seeded at creation and never empty; `acked_at` is empty
   until a real ACK.
 - Undelivered queue entries: **not stored.** The queue is memory plus the

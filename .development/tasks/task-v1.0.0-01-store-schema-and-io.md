@@ -2,8 +2,9 @@
 
 **Status:** Not started.
 **Story:** `.development/tasks/story-v1.0.0-pubsub-core.md`
-**Consumes:** `spike-v1.0.0-resume-position.md` — its recommendation decides
-whether `subscriptions` needs an `acked_token` column.
+**Consumes:** `closed/spike-v1.0.0-resume-position.md` — its recommendation
+(anchor by event id, resolve at resume time) settles that `subscriptions` has
+no `acked_token` column.
 
 ## Summary
 
@@ -48,29 +49,25 @@ in this task imports or touches the broker.
     TEXT, acked_at REAL, PRIMARY KEY (agent, topic), FOREIGN KEY (agent)
     REFERENCES registrations(agent) ON DELETE CASCADE)`, plus
     `created_at REAL NOT NULL`.
-  - `acked_token TEXT` in `subscriptions` if the spike recommends storing a
-    pagination token at ACK time. **If the spike has not reported when this
-    task starts, include the column as nullable anyway** — an unused nullable
-    column costs nothing, while adding one later means migrating a live store
-    holding real bearer tokens.
+  - **No `acked_token` column.** The spike verified live that a recorded
+    `acked_event_id` is resolvable whenever resume needs it, so nothing is
+    captured at ACK time. Do not add the column "just in case".
 - API:
   - `insert_registration(...)` — fails with a distinct exception if the agent
     already has one. Task 02 depends on this failing rather than overwriting.
   - `update_registration(agent, *, label=None, depth=None)`.
   - `load_registrations()` → every row.
   - `delete_registration(agent)` — cascades to its subscriptions.
-  - `add_subscription(agent, topic, created_at, seed_event_id,
-    seed_token=None)` (idempotent) — the seed is the room's position at the
-    moment of subscribing, written straight into `acked_event_id` /
-    `acked_token`. A subscription is therefore never in a "no position yet"
+  - `add_subscription(agent, topic, created_at, seed_event_id)` (idempotent) —
+    the seed is the room's position at the moment of subscribing, written
+    straight into `acked_event_id`. A subscription is therefore never in a "no position yet"
     state, and resume has one code path instead of two. The caller supplies the
     seed; the store does not know about Matrix.
     `acked_at` stays NULL until a real ACK: seeding it would make the field
     claim an acknowledgement that never happened. `created_at` is the clock for
     a subscription that has not acknowledged yet.
   - `delete_subscription(agent, topic)`, `load_subscriptions(agent)`.
-  - `record_ack(agent, topic, event_id, at, token=None)` — one statement, one
-    commit. `token` is written only if the spike chose that route.
+  - `record_ack(agent, topic, event_id, at)` — one statement, one commit.
 - On open: create the schema if absent; if `meta.schema_version` is newer than
   the code knows, raise a named exception instead of reading the file. Read-only
   paths use `file:...?mode=ro`.
@@ -90,7 +87,7 @@ in this task imports or touches the broker.
       seeded position in place; no row ever has a NULL `acked_event_id`.
 - [ ] `acked_at` is NULL until `record_ack` is called; seeding does not set it.
 - [ ] `record_ack` is durable: reopen after the call shows the new
-      `acked_event_id` / `acked_at`, and `acked_token` when one was given.
+      `acked_event_id` / `acked_at`.
 - [ ] Opening a database whose `schema_version` is higher than the code's
       raises, and does not read any row.
 - [ ] A truncated file and a non-SQLite file both raise the named exception
