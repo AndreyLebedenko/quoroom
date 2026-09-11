@@ -43,12 +43,16 @@ dead. Removes `started_ms` blinding and the three-term `max()` in `stale()`.
 
 ## Requirements
 
-- **Resume.** At startup, and when a registration reattaches, each subscription
+- **Resume.** When a registration reattaches — `login --reconnect` or the
+  first authenticated poll after a broker restart — each of its subscriptions
   rebuilds its queue by reading the room forward from its recorded position —
   resolved the way the spike established — and
   matching events against that subscription's topic (the task-03 rules). There
   is no "never acknowledged" case to handle: task 03 seeds every subscription
-  with the room's position at creation, so resume has one code path.
+  with the room's position at creation, so resume has one code path. Broker
+  startup restores no queues: until a token holder returns there is nobody to
+  hand them to, and a subscription whose session never returns is released by
+  the liveness rule without a single Matrix read.
 - Remove the `started_ms` filter in `on_message`. Resume position replaces it;
   keeping both would re-blind the broker to the downtime it just recovered.
 - Bound the read: a page size and a cap, with a clear log line when a
