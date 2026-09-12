@@ -329,7 +329,7 @@ Two prerequisites run first and are independent of each other:
   `acked_token` column), task 04 (whether a pagination token is captured when a
   reference is queued) and task 05 (which call resume is built on). It
   therefore precedes task 01.
-1. `task-v1.0.0-01-store-schema-and-io.md` — SQLite schema and I/O. Pure logic,
+1. `closed/task-v1.0.0-01-store-schema-and-io.md` — SQLite schema and I/O. Pure logic,
    no broker import.
 2. `task-v1.0.0-02-registrations-durable.md` — registrations through the store,
    restart restore, the parallel-login guard, `Session` → `Registration`.

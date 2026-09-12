@@ -2,7 +2,7 @@
 
 **Status:** Implemented on branch `task/v1.0.0-01-store-schema-and-io`,
 awaiting human review (2026-09-11).
-**Story:** `.development/tasks/story-v1.0.0-pubsub-core.md`
+**Story:** `../story-v1.0.0-pubsub-core.md`
 **Consumes:** `closed/spike-v1.0.0-resume-position.md` — its recommendation
 (anchor by event id, resolve at resume time) settles that `subscriptions` has
 no `acked_token` column.
@@ -16,19 +16,19 @@ in this task imports or touches the broker.
 ## Context you need
 
 - Story sections "The store" and "What transfers from the Jarvis journal".
-- `bridge/sessionchat/broker.py`, the `Session` dataclass (~line 69): the
+- `../../../bridge/sessionchat/broker.py`, the `Session` dataclass (~line 69): the
   fields that become registration columns. **Do not modify broker.py here.**
 - `D:\AI\Jarvis\src\jarvis\journal\corpus.py` for the schema-version pattern
   (`_check_schema_version`, `_connect_sqlite_read_only`). Copy the pattern, not
   the derived-index posture: this store is authoritative and has no `rebuild()`.
 - Project rules: stdlib `sqlite3` only, no new dependency. No explanatory
   comments — a rule worth stating is stated as a test (AGENTS.md, Core 7).
-  Tests are `unittest`, run from `bridge/` as
+  Tests are `unittest`, run from `../../../bridge` as
   `.venv/Scripts/python.exe -m unittest discover -s tests -t .`
 
 ## Boundary
 
-- New module `bridge/sessionchat/store.py` plus tests in
+- New module `../../../bridge/sessionchat/store.py` plus tests in
   `bridge/tests/test_store.py`. No changes anywhere else.
 - No broker wiring, no HTTP, no Matrix, no asyncio. Synchronous functions only.
 - **Queue entries are not stored.** The undelivered queue is memory plus the
@@ -38,7 +38,7 @@ in this task imports or touches the broker.
 
 ## Requirements
 
-- Database file under `bridge/state/`, path passed in by the caller (the
+- Database file under `../../../bridge/state`, path passed in by the caller (the
   constant lives in the broker, added in task 02). Create parent directories.
 - Schema, version 1:
   - `meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)` holding `schema_version`.
