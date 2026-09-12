@@ -1,6 +1,7 @@
 # Task v1.0.0-01: Store schema and I/O
 
-**Status:** Not started.
+**Status:** Implemented on branch `task/v1.0.0-01-store-schema-and-io`,
+awaiting human review (2026-09-11).
 **Story:** `.development/tasks/story-v1.0.0-pubsub-core.md`
 **Consumes:** `closed/spike-v1.0.0-resume-position.md` — its recommendation
 (anchor by event id, resolve at resume time) settles that `subscriptions` has
@@ -46,16 +47,22 @@ in this task imports or touches the broker.
     `agent` as primary key is what makes "one registration per agent" a
     property of the schema rather than of a code path.
   - `subscriptions(agent TEXT NOT NULL, topic TEXT NOT NULL, acked_event_id
-    TEXT, acked_at REAL, PRIMARY KEY (agent, topic), FOREIGN KEY (agent)
-    REFERENCES registrations(agent) ON DELETE CASCADE)`, plus
-    `created_at REAL NOT NULL`.
+    TEXT NOT NULL, acked_at REAL, PRIMARY KEY (agent, topic), FOREIGN KEY
+    (agent) REFERENCES registrations(agent) ON DELETE CASCADE)`, plus
+    `created_at REAL NOT NULL`. `acked_event_id` is `NOT NULL` because the
+    seed makes it non-empty from birth: the schema, not a code path, is what
+    keeps resume from meeting a subscription with nothing to count from.
   - **No `acked_token` column.** The spike verified live that a recorded
     `acked_event_id` is resolvable whenever resume needs it, so nothing is
     captured at ACK time. Do not add the column "just in case".
 - API:
   - `insert_registration(...)` — fails with a distinct exception if the agent
     already has one. Task 02 depends on this failing rather than overwriting.
-  - `update_registration(agent, *, label=None, depth=None)`.
+  - `update_registration(agent, *, label=None, depth=None)` — raises
+    `UnknownRegistration` if the agent has no row. Task 02 changes a label on
+    reconnect; an update that matched nothing would lose it silently.
+    `delete_registration` and `delete_subscription` stay silent instead:
+    deletion is idempotent by meaning, the row is already gone.
   - `load_registrations()` → every row.
   - `delete_registration(agent)` — cascades to its subscriptions.
   - `add_subscription(agent, topic, created_at, seed_event_id)` (idempotent) —
@@ -78,19 +85,40 @@ in this task imports or touches the broker.
 
 ## Acceptance criteria
 
-- [ ] Round-trip: registration and subscriptions written, store reopened, rows
+- [x] Round-trip: registration and subscriptions written, store reopened, rows
       read back identical (a test reopens the file between calls).
-- [ ] `insert_registration` for an agent that already has one raises the named
+- [x] `insert_registration` for an agent that already has one raises the named
       exception and leaves the existing row untouched.
-- [ ] `delete_registration` removes the agent's subscriptions.
-- [ ] A subscription is readable immediately after `add_subscription` with its
+- [x] `delete_registration` removes the agent's subscriptions.
+- [x] A subscription is readable immediately after `add_subscription` with its
       seeded position in place; no row ever has a NULL `acked_event_id`.
-- [ ] `acked_at` is NULL until `record_ack` is called; seeding does not set it.
-- [ ] `record_ack` is durable: reopen after the call shows the new
+- [x] `acked_at` is NULL until `record_ack` is called; seeding does not set it.
+- [x] `record_ack` is durable: reopen after the call shows the new
       `acked_event_id` / `acked_at`.
-- [ ] Opening a database whose `schema_version` is higher than the code's
+- [x] Opening a database whose `schema_version` is higher than the code's
       raises, and does not read any row.
-- [ ] A truncated file and a non-SQLite file both raise the named exception
+- [x] A truncated file and a non-SQLite file both raise the named exception
       with the path and the recovery in the message.
-- [ ] Tests are pure — temporary directories only, no broker import, no
+- [x] Tests are pure — temporary directories only, no broker import, no
       network. Full suite green; `ruff check` and `ruff format --check` clean.
+
+## Implementation notes (2026-09-11)
+
+- `open_store` and `open_read_only` are context managers: the connection is
+  closed on exit, which on Windows is what lets a temp directory be removed.
+  Commits happen inside each write operation, not at close.
+- `add_subscription` idempotency means "already there, change nothing": a
+  re-seed would rewind the accumulated ACK position and lose delivered
+  messages. Covered by a test that re-seeds after a real ACK.
+- `record_ack` and `update_registration` refuse an operation that matched no
+  row — `UnknownSubscription` and `UnknownRegistration`. The two deletes stay
+  silent, because deletion is idempotent by meaning. Both halves of that
+  asymmetry are stated as tests rather than explained in a comment.
+- `acked_event_id` is `NOT NULL` in the schema, and a test asserts the
+  constraint itself: "no row without a position" is a property of the schema,
+  not of the callers' discipline.
+- The schema is created inside one explicit transaction. A failure mid-way
+  leaves nothing behind because the connection closes before the commit; there
+  is no explicit `rollback()` call to point at. The version check runs before
+  any row is read on both the writable and the read-only path
+  (`file:...?mode=ro`).
