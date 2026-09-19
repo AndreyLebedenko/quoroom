@@ -97,7 +97,11 @@ if (-not $running) {
 
     $up = $false
     foreach ($i in 1..10) {
-        if ($proc.HasExited) { Die "брокер завершился при старте (код $($proc.ExitCode)). Смотрите bridge/broker.log." }
+        if ($proc.HasExited) {
+            $lastLine = ''
+            if (Test-Path $logFile) { $lastLine = (Get-Content $logFile -Tail 1 -ErrorAction SilentlyContinue) }
+            Die ("брокер завершился при старте. Из лога:`n  {0}`n(полный лог: bridge/broker.log)" -f $lastLine)
+        }
         if (Test-Port $brokerPort) { $up = $true; break }
         Start-Sleep -Seconds 1
     }
