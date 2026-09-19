@@ -29,3 +29,4 @@ docker/data/
 bridge/broker.log
 /.idea/
 /.ollamassist/
+/graphify-out/

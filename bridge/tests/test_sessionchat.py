@@ -1,16 +1,25 @@
 import asyncio
+import tempfile
 import time
 import types
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from sessionchat.broker import Broker, Session, only_agents
+from sessionchat.broker import Broker, Registration, only_agents
 from sessionchat.protocol import (
     LISTEN_GRACE,
     MAX_DEPTH,
     MAX_SENDS_PER_MINUTE,
     Envelope,
+)
+from sessionchat.store import (
+    load_registrations,
+    open_read_only,
+    open_store,
+    update_registration,
 )
 
 CONFIG = {
@@ -47,10 +56,19 @@ def event(body: str, sender: str = "@human:local", content: dict | None = None):
     )
 
 
-class AddressingTests(unittest.TestCase):
+class StoreBackedBrokerMixin:
+    """Брокер, чей store живёт во временном каталоге, а не в bridge/state."""
+
+    def make_store_path(self):
+        self.store_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.store_tmp.cleanup)
+        return Path(self.store_tmp.name) / "state" / "agentschat.db"
+
+
+class AddressingTests(StoreBackedBrokerMixin, unittest.TestCase):
     def setUp(self):
-        self.broker = Broker(CONFIG)
-        self.broker.sessions["claude-code"] = Session(
+        self.broker = Broker(CONFIG, self.make_store_path())
+        self.broker.registrations["claude-code"] = Registration(
             "claude-code", "test", "tok", time.time()
         )
 
@@ -148,11 +166,11 @@ class DeliveryConfigTests(unittest.TestCase):
         self.assertEqual(broker.delivery_kinds.get("opencode"), "plugin")
 
 
-class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
+class PluginDeliveryTests(StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCase):
     """Агент с delivery: plugin слушает через /wait, но listener не запускает."""
 
     async def asyncSetUp(self):
-        self.broker = Broker(CONFIG)
+        self.broker = Broker(CONFIG, self.make_store_path())
         self.client = TestClient(TestServer(self.broker.app()))
         await self.client.start_server()
 
@@ -170,7 +188,7 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_plugin_listens_through_the_same_wait(self):
         data = await self.login()
-        session = self.broker.sessions["opencode"]
+        session = self.broker.registrations["opencode"]
         session.inbox.append(
             Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
         )
@@ -184,7 +202,7 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_envelope_does_not_demand_a_listener_restart(self):
         # Плагину нечего поднимать: требование было бы невыполнимым.
         data = await self.login()
-        session = self.broker.sessions["opencode"]
+        session = self.broker.registrations["opencode"]
         session.inbox.append(
             Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
         )
@@ -198,7 +216,7 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ordinary_agent_is_still_told_to_restart_its_listener(self):
         data = await self.login(agent="claude-code")
-        session = self.broker.sessions["claude-code"]
+        session = self.broker.registrations["claude-code"]
         session.inbox.append(
             Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
         )
@@ -209,11 +227,11 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Подними новый listener", (await response.json())["rendered"])
 
 
-class InboxTests(unittest.IsolatedAsyncioTestCase):
+class InboxTests(StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCase):
     """Явная раздача накопленного: команда inbox и её ответы."""
 
     async def asyncSetUp(self):
-        self.broker = Broker(CONFIG)
+        self.broker = Broker(CONFIG, self.make_store_path())
         self.published: list[tuple[str, str, int]] = []
 
         async def publish(agent, text, depth):
@@ -248,7 +266,7 @@ class InboxTests(unittest.IsolatedAsyncioTestCase):
         pending = (await response.json())["pending"]
         self.assertEqual(len(pending), 2)
         self.assertIn("привет", pending[0])
-        self.assertFalse(self.broker.sessions["claude-code"].inbox)
+        self.assertFalse(self.broker.registrations["claude-code"].inbox)
 
     async def test_say_never_returns_the_queue_as_pending(self):
         data = await self.login()
@@ -260,14 +278,14 @@ class InboxTests(unittest.IsolatedAsyncioTestCase):
         body = await response.json()
         self.assertNotIn("pending", body)
         # Очередь при этом не потеряна: listener всё ещё ждёт её через /wait.
-        self.assertEqual(len(self.broker.sessions["claude-code"].inbox), 1)
+        self.assertEqual(len(self.broker.registrations["claude-code"].inbox), 1)
 
 
-class DepthLimitTests(unittest.IsolatedAsyncioTestCase):
+class DepthLimitTests(StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCase):
     """Предел глубины настраивается: шести звеньев мало для совместной работы."""
 
     async def asyncSetUp(self):
-        self.broker = Broker({**CONFIG, "max_depth": 20})
+        self.broker = Broker({**CONFIG, "max_depth": 20}, self.make_store_path())
         self.published: list[tuple[str, str, int]] = []
 
         async def publish(agent, text, depth):
@@ -286,7 +304,7 @@ class DepthLimitTests(unittest.IsolatedAsyncioTestCase):
     async def test_configured_limit_replaces_the_default(self):
         response = await self.client.post("/login", json={"agent": "claude-code"})
         data = await response.json()
-        session = self.broker.sessions["claude-code"]
+        session = self.broker.registrations["claude-code"]
         session.depth = MAX_DEPTH
         allowed = await self.client.post(
             "/say",
@@ -298,7 +316,7 @@ class DepthLimitTests(unittest.IsolatedAsyncioTestCase):
     async def test_envelope_shows_the_configured_limit(self):
         response = await self.client.post("/login", json={"agent": "claude-code"})
         data = await response.json()
-        session = self.broker.sessions["claude-code"]
+        session = self.broker.registrations["claude-code"]
         session.inbox.append(
             Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
         )
@@ -329,9 +347,9 @@ class EnvelopeTests(unittest.TestCase):
         self.assertEqual(Envelope.from_dict(original.as_dict()), original)
 
 
-class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
+class BrokerHttpTests(StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.broker = Broker(CONFIG)
+        self.broker = Broker(CONFIG, self.make_store_path())
         self.published: list[tuple[str, str, int]] = []
 
         async def publish(agent, text, depth):
@@ -368,8 +386,8 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # Отказ без срока провоцирует перехват: сессия видит «занято», не
         # знает, надолго ли, и тянется к --force.
         await self.login()
-        session = self.broker.sessions["claude-code"]
-        session.since = session.last_contact = time.time() - 60
+        session = self.broker.registrations["claude-code"]
+        session.registered_at = session.last_contact = time.time() - 60
         again = await self.client.post(
             "/login", json={"agent": "claude-code", "label": "вторая"}
         )
@@ -383,8 +401,8 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # свой запрос висеть, и опрос от него виден ещё минуту. Известно
         # только время последнего опроса — и когда слот освободится.
         await self.login()
-        session = self.broker.sessions["claude-code"]
-        session.since = session.last_contact = time.time() - 20
+        session = self.broker.registrations["claude-code"]
+        session.registered_at = session.last_contact = time.time() - 20
         session.listening_until = time.time() + 50
         again = await self.client.post(
             "/login", json={"agent": "claude-code", "label": "вторая"}
@@ -401,17 +419,17 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # запись, которую освобождать было некому. Три минуты полного молчания
         # живой сессии не бывает: и listener, и плагин опрашивают непрерывно.
         _, first = await self.login(label="прежняя")
-        stale = self.broker.sessions["claude-code"]
-        stale.since = stale.last_contact = time.time() - 10 * 60
+        stale = self.broker.registrations["claude-code"]
+        stale.registered_at = stale.last_contact = time.time() - 10 * 60
         response, second = await self.login(label="новая")
         self.assertEqual(response.status, 200)
         self.assertNotEqual(second["token"], first["token"])
-        self.assertEqual(self.broker.sessions["claude-code"].label, "новая")
+        self.assertEqual(self.broker.registrations["claude-code"].label, "новая")
 
     async def test_a_listening_session_keeps_its_slot(self):
         await self.login()
-        session = self.broker.sessions["claude-code"]
-        session.since = session.last_contact = time.time() - 10 * 60
+        session = self.broker.registrations["claude-code"]
+        session.registered_at = session.last_contact = time.time() - 10 * 60
         session.listening_until = time.time() + LISTEN_GRACE
         response, _ = await self.login(label="вторая")
         self.assertEqual(response.status, 409)
@@ -419,8 +437,8 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_session_still_handling_a_delivery_keeps_its_slot(self):
         # listener умирает при доставке, и сессии нужно время его поднять.
         await self.login()
-        session = self.broker.sessions["claude-code"]
-        session.since = session.last_contact = time.time() - 10 * 60
+        session = self.broker.registrations["claude-code"]
+        session.registered_at = session.last_contact = time.time() - 10 * 60
         session.last_delivery = time.time() - 30
         response, _ = await self.login(label="вторая")
         self.assertEqual(response.status, 409)
@@ -444,7 +462,9 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(body["reconnected"])
         self.assertEqual(body["token"], first["token"])
         # Метку обновляем: человек читает в status текущую работу.
-        self.assertEqual(self.broker.sessions["claude-code"].label, "после перезапуска")
+        self.assertEqual(
+            self.broker.registrations["claude-code"].label, "после перезапуска"
+        )
 
     async def test_reconnect_without_the_token_is_refused(self):
         await self.login()
@@ -485,7 +505,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queued_message_is_delivered_once(self):
         _, data = await self.login()
-        session = self.broker.sessions["claude-code"]
+        session = self.broker.registrations["claude-code"]
         session.inbox.append(
             Envelope("@human:local", "человек", "привет", "$e", "22:00", 0)
         )
@@ -507,7 +527,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         first = asyncio.create_task(self.client.get("/wait", params=params))
         second = asyncio.create_task(self.client.get("/wait", params=params))
         await asyncio.sleep(0.1)
-        session = self.broker.sessions["claude-code"]
+        session = self.broker.registrations["claude-code"]
         session.inbox.append(
             Envelope("@human:local", "человек", "одно", "$e", "22:00", 0)
         )
@@ -517,7 +537,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reply_depth_grows_and_is_capped(self):
         _, data = await self.login()
-        session = self.broker.sessions["claude-code"]
+        session = self.broker.registrations["claude-code"]
         session.depth = MAX_DEPTH - 1
         payload = {"agent": "claude-code", "token": data["token"], "text": "ответ"}
         allowed = await self.client.post("/say", json=payload)
@@ -533,7 +553,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # попало в комнату, человек его видел, а ни один агент не получил —
         # и обе стороны честно ждали друг друга.
         _, data = await self.login()
-        self.broker.sessions["opencode"] = Session(
+        self.broker.registrations["opencode"] = Registration(
             "opencode", "рядом", "t2", time.time()
         )
         response = await self.client.post(
@@ -550,7 +570,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_addressed_message_carries_no_warning(self):
         _, data = await self.login()
-        self.broker.sessions["opencode"] = Session(
+        self.broker.registrations["opencode"] = Registration(
             "opencode", "рядом", "t2", time.time()
         )
         response = await self.client.post(
@@ -567,7 +587,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # Ответ человеку на его же вопрос — не забытая адресация. Одинаковое
         # предупреждение на оба случая приучает не читать предупреждения.
         _, data = await self.login()
-        self.broker.sessions["opencode"] = Session(
+        self.broker.registrations["opencode"] = Registration(
             "opencode", "рядом", "t2", time.time()
         )
         response = await self.client.post(
@@ -600,7 +620,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         # Наблюдающий человек иначе увидит тишину: отказ уходит агенту, а в
         # комнате не появляется ничего, и непонятно, почему всё встало.
         _, data = await self.login()
-        self.broker.sessions["claude-code"].depth = MAX_DEPTH
+        self.broker.registrations["claude-code"].depth = MAX_DEPTH
         blocked = await self.client.post(
             "/say",
             json={"agent": "claude-code", "token": data["token"], "text": "ответ"},
@@ -641,7 +661,7 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.broker.on_message(
             types.SimpleNamespace(room_id="!room:local"), source
         )
-        self.assertFalse(self.broker.sessions["claude-code"].inbox)
+        self.assertFalse(self.broker.registrations["claude-code"].inbox)
         self.assertEqual(self.published, [])
 
     async def test_incoming_agent_message_carries_depth(self):
@@ -654,12 +674,12 @@ class BrokerHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.broker.on_message(
             types.SimpleNamespace(room_id="!room:local"), source
         )
-        envelope = self.broker.sessions["claude-code"].inbox[0]
+        envelope = self.broker.registrations["claude-code"].inbox[0]
         self.assertEqual(envelope.depth, 2)
         self.assertEqual(envelope.kind, "агент")
 
 
-class SeveralIdentitiesTests(unittest.IsolatedAsyncioTestCase):
+class SeveralIdentitiesTests(StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCase):
     """Одна программа, несколько личностей: два имени с delivery: plugin.
 
     Так работают две сессии одного процесса OpenCode: имя агента — участник
@@ -688,7 +708,7 @@ class SeveralIdentitiesTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         }
-        self.broker = Broker(config)
+        self.broker = Broker(config, self.make_store_path())
         self.published: list[tuple[str, str, int]] = []
 
         async def publish(agent, text, depth):
@@ -714,7 +734,7 @@ class SeveralIdentitiesTests(unittest.IsolatedAsyncioTestCase):
     async def test_both_names_connect_and_get_the_plugin_mode(self):
         self.assertEqual((await self.login("terra"))["mode"], "plugin")
         self.assertEqual((await self.login("helium"))["mode"], "plugin")
-        self.assertEqual(set(self.broker.sessions), {"terra", "helium"})
+        self.assertEqual(set(self.broker.registrations), {"terra", "helium"})
 
     async def test_message_reaches_only_the_name_it_addresses(self):
         await self.login("terra")
@@ -722,14 +742,14 @@ class SeveralIdentitiesTests(unittest.IsolatedAsyncioTestCase):
         await self.broker.on_message(
             types.SimpleNamespace(room_id="!room:local"), event("@terra привет")
         )
-        self.assertEqual(len(self.broker.sessions["terra"].inbox), 1)
-        self.assertEqual(len(self.broker.sessions["helium"].inbox), 0)
+        self.assertEqual(len(self.broker.registrations["terra"].inbox), 1)
+        self.assertEqual(len(self.broker.registrations["helium"].inbox), 0)
 
     async def test_each_name_waits_with_its_own_token(self):
         terra = await self.login("terra")
         helium = await self.login("helium")
         for agent in ("terra", "helium"):
-            session = self.broker.sessions[agent]
+            session = self.broker.registrations[agent]
             session.inbox.append(
                 Envelope("@human:local", "человек", f"для {agent}", "$e", "22:00", 0)
             )
@@ -757,7 +777,276 @@ class SeveralIdentitiesTests(unittest.IsolatedAsyncioTestCase):
         await self.client.post(
             "/logout", json={"agent": "terra", "token": terra["token"]}
         )
-        self.assertEqual(set(self.broker.sessions), {"helium"})
+        self.assertEqual(set(self.broker.registrations), {"helium"})
+
+
+class DurableRegistrationTests(
+    StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCase
+):
+    """Регистрации проходят через store: переживают рестарт брокера.
+
+    Рестарт здесь - новый Broker поверх того же файла store: именно так
+    живой брокер перезапускается, и именно это отличает восстановление от
+    памяти того же процесса.
+    """
+
+    async def asyncSetUp(self):
+        self.store_path = self.make_store_path()
+        self.broker = Broker(CONFIG, self.store_path)
+        self.published: list[tuple[str, str, int]] = []
+
+        async def publish(agent, text, depth):
+            self.published.append((agent, text, depth))
+            return "$published"
+
+        self.broker.publish = publish
+        self.client = TestClient(TestServer(self.broker.app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        for client in self.broker.clients.values():
+            await client.close()
+
+    async def restart_broker(self):
+        """Рестарт брокера вместе с сервером: HTTP уходит новому app.
+
+        Клиенты закрывать нельзя: их держит старый брокер, и nio на teardown
+        пожаловался бы на незакрытые сессии - поэтому закрывает новый tearDown,
+        который видит уже его self.broker.
+        """
+        self.broker = Broker(CONFIG, self.store_path)
+
+        async def publish(agent, text, depth):
+            self.published.append((agent, text, depth))
+            return "$published"
+
+        self.broker.publish = publish
+        await self.client.close()
+        self.client = TestClient(TestServer(self.broker.app()))
+        await self.client.start_server()
+        return self.broker
+
+    def stored_rows(self):
+        if not self.store_path.exists():
+            return []
+        with open_read_only(self.store_path) as store:
+            return load_registrations(store)
+
+    async def login(self, agent="claude-code", label="работа"):
+        response = await self.client.post(
+            "/login", json={"agent": agent, "label": label}
+        )
+        return response, await response.json() if response.status == 200 else {}
+
+    async def test_login_writes_the_row(self):
+        _, data = await self.login(label="метка")
+        (agent, label, token, registered_at, depth) = self.stored_rows()[0]
+        self.assertEqual(agent, "claude-code")
+        self.assertEqual(label, "метка")
+        self.assertEqual(token, data["token"])
+        self.assertEqual(depth, 0)
+
+    async def test_restart_restores_registered_at_and_depth_verbatim(self):
+        _, data = await self.login(label="прежняя")
+        session = self.broker.registrations["claude-code"]
+        session.depth = 3
+        with open_store(self.store_path) as store:
+            update_registration(store, "claude-code", depth=3)
+        restored_broker = await self.restart_broker()
+        restored = restored_broker.registrations["claude-code"]
+        self.assertEqual(restored.registered_at, session.registered_at)
+        self.assertEqual(restored.depth, 3)
+        self.assertEqual(restored.label, "прежняя")
+        self.assertEqual(restored.token, data["token"])
+
+    async def test_restored_registration_starts_not_listening_with_empty_inbox(self):
+        await self.login()
+        restored = await self.restart_broker()
+        registration = restored.registrations["claude-code"]
+        self.assertFalse(registration.inbox)
+        self.assertEqual(registration.open_waits, 0)
+        self.assertEqual(registration.listening_until, 0.0)
+        status = await (await self.client.get("/status")).text()
+        self.assertIn("НЕ СЛУШАЕТ", status)
+
+    async def test_reconnect_to_a_restored_registration_returns_its_token(self):
+        _, data = await self.login(label="до перезапуска")
+        await self.restart_broker()
+        response = await self.client.post(
+            "/login",
+            json={
+                "agent": "claude-code",
+                "label": "после перезапуска",
+                "reconnect": True,
+                "token": data["token"],
+            },
+        )
+        self.assertEqual(response.status, 200)
+        body = await response.json()
+        self.assertTrue(body["reconnected"])
+        self.assertEqual(body["token"], data["token"])
+        self.assertEqual(
+            self.broker.registrations["claude-code"].label, "после перезапуска"
+        )
+        (row_label,) = [row[1] for row in self.stored_rows()]
+        self.assertEqual(row_label, "после перезапуска")
+
+    async def test_reconnect_to_a_restored_registration_refuses_a_wrong_token(self):
+        await self.login()
+        await self.restart_broker()
+        response = await self.client.post(
+            "/login",
+            json={"agent": "claude-code", "reconnect": True, "token": "чужой"},
+        )
+        self.assertEqual(response.status, 409)
+        self.assertIn("токен не совпадает", await response.text())
+
+    async def test_reconnect_without_any_registration_says_so_plainly(self):
+        response = await self.client.post(
+            "/login",
+            json={
+                "agent": "claude-code",
+                "reconnect": True,
+                "token": "любой",
+            },
+        )
+        self.assertEqual(response.status, 409)
+        text = await response.text()
+        self.assertIn("не к чему", text)
+        self.assertIn("без --reconnect", text)
+        self.assertEqual(self.stored_rows(), [])
+
+    async def test_reconnect_after_a_stale_release_says_so_plainly(self):
+        # Слот, молчавший дольше предела, освободился ещё до входа: честный
+        # ответ - "регистрации нет", а не переподключение к трупу.
+        await self.login()
+        await self.restart_broker()
+        session = self.broker.registrations["claude-code"]
+        session.registered_at = session.last_contact = session.last_delivery = (
+            time.time() - 10 * 60
+        )
+        response = await self.client.post(
+            "/login",
+            json={"agent": "claude-code", "reconnect": True, "token": "какой-то"},
+        )
+        self.assertEqual(response.status, 409)
+        self.assertIn("не к чему", await response.text())
+        self.assertEqual(self.stored_rows(), [])
+
+    async def test_the_token_row_survives_a_broken_response(self):
+        # Строка токена обязана быть записана ДО ответа, который её отдаёт:
+        # ответ может умереть после записи, и тогда сессия, уже сохранившая
+        # токен на диск, обязана найти его в store после рестарта брокера.
+        # Поэтому рвём именно ответ; aiohttp превратит ошибку в 500.
+        def broken_response(*args, **kwargs):
+            raise RuntimeError("ответ не пережил доставку")
+
+        with patch("sessionchat.broker.web.json_response", broken_response):
+            response = await self.client.post(
+                "/login", json={"agent": "claude-code", "label": "срыв"}
+            )
+        self.assertEqual(response.status, 500)
+        rows = self.stored_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][2], self.broker.registrations["claude-code"].token)
+
+    async def test_concurrent_logins_produce_exactly_one_registration(self):
+        # Задачи стартуют одновременно; переключение им даёт await внутри
+        # _store_write. Тот, кто получил 200, обязан быть тем, чья строка
+        # легла в store: иначе проигравший уходит с токеном, которого
+        # в хранилище нет - ровно тот разрыв, ради которого стоит лок.
+        tasks = [
+            asyncio.create_task(
+                self.client.post(
+                    "/login",
+                    json={"agent": "claude-code", "label": f"попытка {n}"},
+                )
+            )
+            for n in range(5)
+        ]
+        responses = await asyncio.gather(*tasks)
+        statuses = sorted(response.status for response in responses)
+        self.assertEqual(statuses, [200, 409, 409, 409, 409])
+        rows = self.stored_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(self.broker.registrations), 1)
+        (winner,) = [response for response in responses if response.status == 200]
+        self.assertEqual((await winner.json())["token"], rows[0][2])
+
+    async def test_a_yielding_store_write_keeps_login_exactly_one_winner(self):
+        # Лок проверяется при точке переключения ВНУТРИ критической секции:
+        # запись в store начинается не сразу, и пока первая задача висит,
+        # остальные проходят проверку слота. Ровно так будет в task 03, когда
+        # между проверкой и вставкой появится await на seed подписки.
+        async def future_write(self, operation):
+            await asyncio.sleep(0.05)
+            with open_store(self.store_path) as store:
+                operation(store)
+
+        with patch.object(Broker, "_store_write", future_write):
+            tasks = [
+                asyncio.create_task(
+                    self.client.post(
+                        "/login",
+                        json={"agent": "claude-code", "label": f"гонка {n}"},
+                    )
+                )
+                for n in range(20)
+            ]
+            responses = await asyncio.gather(*tasks)
+        statuses = sorted(response.status for response in responses)
+        self.assertEqual(statuses[0], 200)
+        self.assertEqual(statuses[1:], [409] * 19)
+        for loser in [response for response in responses if response.status == 409]:
+            loser_text = await loser.text()
+            self.assertTrue(
+                "хранилище" in loser_text or "уже подключён" in loser_text,
+                loser_text,
+            )
+        rows = self.stored_rows()
+        self.assertEqual(len(rows), 1)
+        (winner,) = [response for response in responses if response.status == 200]
+        self.assertEqual((await winner.json())["token"], rows[0][2])
+        self.assertEqual(self.broker.registrations["claude-code"].token, rows[0][2])
+
+    async def test_logout_removes_the_row(self):
+        _, data = await self.login()
+        response = await self.client.post(
+            "/logout", json={"agent": "claude-code", "token": data["token"]}
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.stored_rows(), [])
+        self.assertEqual(self.broker.registrations, {})
+
+    async def test_force_logout_removes_the_row(self):
+        await self.login()
+        response = await self.client.post(
+            "/logout", json={"agent": "claude-code", "force": True}
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.stored_rows(), [])
+
+    async def test_a_stale_release_removes_the_row(self):
+        _, first = await self.login(label="труп")
+        await self.restart_broker()
+        session = self.broker.registrations["claude-code"]
+        session.registered_at = session.last_contact = session.last_delivery = (
+            time.time() - 10 * 60
+        )
+        response, second = await self.login(label="новая")
+        self.assertEqual(response.status, 200)
+        self.assertNotEqual(second["token"], first["token"])
+        rows = self.stored_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][1], "новая")
+        self.assertEqual(rows[0][2], second["token"])
+        self.assertEqual(self.broker.registrations["claude-code"].label, "новая")
+
+    async def test_a_missing_store_file_leaves_an_empty_registry(self):
+        self.assertFalse(Path(self.store_path).exists())
+        broker = Broker(CONFIG, self.store_path)
+        self.assertEqual(broker.registrations, {})
 
 
 if __name__ == "__main__":

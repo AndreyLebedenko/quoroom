@@ -27,6 +27,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import quote
 
 import yaml
@@ -49,8 +50,19 @@ from .protocol import (
     WAIT_SECONDS,
     Envelope,
 )
+from .store import (
+    DuplicateAgent,
+    delete_registration,
+    insert_registration,
+    load_registrations,
+    open_read_only,
+    open_store,
+    update_registration,
+)
 
 log = logging.getLogger("agentschat.broker")
+
+REGISTRATIONS_DB = Path(__file__).resolve().parent.parent / "state" / "agentschat.db"
 
 
 def bounded(needle: str, haystack: str) -> bool:
@@ -67,13 +79,13 @@ def bounded(needle: str, haystack: str) -> bool:
 
 
 @dataclass
-class Session:
+class Registration:
     """Подключённая живая сессия. Одна на агента: повторный вход — отказ."""
 
     agent: str
     label: str
     token: str
-    since: float
+    registered_at: float
     inbox: deque = field(default_factory=deque)
     sends: deque = field(default_factory=deque)
     open_waits: int = 0
@@ -141,7 +153,7 @@ class Session:
         now = time.time()
         if self.open_waits > 0 or now < self.listening_until:
             return False
-        last = max(self.since, self.last_delivery, self.last_contact)
+        last = max(self.registered_at, self.last_delivery, self.last_contact)
         return now - last > STALE_SECONDS
 
     def advice(self) -> str:
@@ -152,7 +164,7 @@ class Session:
         труп — регистрация от процесса, убитого минуту назад.
         """
         now = time.time()
-        last = max(self.since, self.last_delivery, self.last_contact)
+        last = max(self.registered_at, self.last_delivery, self.last_contact)
         quiet = int(now - last)
         # Освободится, когда кончится и фора слушателя, и счёт молчания.
         left = int(max(self.listening_until, last + STALE_SECONDS) - now)
@@ -180,7 +192,7 @@ class Session:
 
 
 class Broker:
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, store_path: Path | None = None):
         self.room = cfg["room_id"]
         self.port = int(cfg.get("sessionchat_port", DEFAULT_PORT))
         self.max_depth = int(cfg.get("max_depth", MAX_DEPTH))
@@ -216,9 +228,33 @@ class Broker:
             )
             self.clients[agent] = client
         self.user_ids = {a: c.user_id for a, c in self.clients.items()}
-        self.sessions: dict[str, Session] = {}
+        self.store_path = store_path or REGISTRATIONS_DB
+        self.registrations: dict[str, Registration] = self._restore_registrations()
+        self._login_locks: dict[str, asyncio.Lock] = {}
         self.reader = next(iter(self.clients.values()))
         self.started_ms = int(time.time() * 1000)
+
+    def _restore_registrations(self) -> dict[str, Registration]:
+        if not self.store_path.exists():
+            return {}
+        with open_read_only(self.store_path) as store:
+            rows = load_registrations(store)
+        restored = {}
+        for agent, label, token, registered_at, depth in rows:
+            restored[agent] = Registration(
+                agent,
+                label,
+                token,
+                registered_at,
+                depth=depth,
+            )
+            restored[agent].listener_kind = self.delivery_kinds.get(agent, "listener")
+            restored[agent].max_depth = self.max_depth
+        return restored
+
+    async def _store_write(self, operation) -> None:
+        with open_store(self.store_path) as store:
+            operation(store)
 
     # ---------------------------------------------------------------- Matrix
 
@@ -257,7 +293,7 @@ class Broker:
         except AttributeError:
             mentions = {}
         if "@room" in low or mentions.get("room") is True:
-            return list(self.sessions)
+            return list(self.registrations)
         pills = mentions.get("user_ids") or []
         found = []
         for agent, user_id in self.user_ids.items():
@@ -302,8 +338,8 @@ class Broker:
         for agent in self.addressees(body, event):
             if agent == origin:
                 continue  # сам себе не доставляем
-            session = self.sessions.get(agent)
-            if session is None:
+            registration = self.registrations.get(agent)
+            if registration is None:
                 if human:
                     await self.publish(
                         agent,
@@ -312,8 +348,8 @@ class Broker:
                         0,
                     )
                 continue
-            session.inbox.append(envelope)
-            session.signal.set()
+            registration.inbox.append(envelope)
+            registration.signal.set()
 
     async def publish(self, agent: str, text: str, depth: int) -> str:
         response = await self.clients[agent].room_send(
@@ -337,150 +373,217 @@ class Broker:
 
     # ------------------------------------------------------------------ HTTP
 
-    def session_of(self, data: dict) -> Session:
+    def registration_of(self, data: dict) -> Registration:
         agent = str(data.get("agent", ""))
-        session = self.sessions.get(agent)
-        if session is None or session.token != str(data.get("token", "")):
+        registration = self.registrations.get(agent)
+        if registration is None or registration.token != str(data.get("token", "")):
             raise web.HTTPConflict(text="сессия не подключена или токен неверен")
-        session.last_contact = time.time()
-        return session
+        registration.last_contact = time.time()
+        return registration
+
+    async def _release_stale(self, agent: str) -> Registration | None:
+        existing = self.registrations.get(agent)
+        if existing is None or not existing.stale():
+            return existing
+        quiet = int(
+            time.time()
+            - max(
+                existing.registered_at,
+                existing.last_delivery,
+                existing.last_contact,
+            )
+        )
+        log.info(
+            "слот %s освобождён: прежняя сессия молчала %sс (%s)",
+            agent,
+            quiet,
+            existing.label,
+        )
+        await self._delete_stored(agent)
+        self.registrations.pop(agent, None)
+        return None
+
+    def _refuse_taken_slot(self, agent: str, existing: Registration) -> NoReturn:
+        registered = datetime.fromtimestamp(existing.registered_at).strftime("%H:%M:%S")
+        raise web.HTTPConflict(
+            text=(
+                f"агент {agent} уже подключён с {registered} "
+                f"({existing.label}, {existing.state()}). "
+                f"{existing.advice()} "
+                "Не решай, что слот занят тобой же: метка и успешный "
+                "inbox этого не доказывают. Доказывает только токен — если "
+                "эта регистрация твоя, из неё же и заведена, повтори вход "
+                "с ключом --reconnect: брокер сверит токен и вернёт тебе "
+                "её. Не сверится — скажи человеку. Освободить немедленно "
+                f"может он: agentschat logout --agent {agent} --force"
+            )
+        )
 
     async def handle_login(self, request: web.Request) -> web.Response:
         data = await request.json()
         agent = str(data.get("agent", ""))
         if agent not in self.clients:
             raise web.HTTPNotFound(text=f"неизвестный агент: {agent}")
-        existing = self.sessions.get(agent)
-        if existing is not None and existing.stale():
-            quiet = int(
-                time.time()
-                - max(existing.since, existing.last_delivery, existing.last_contact)
-            )
-            log.info(
-                "слот %s освобождён: прежняя сессия молчала %sс (%s)",
-                agent,
-                quiet,
-                existing.label,
-            )
-            self.sessions.pop(agent, None)
-            existing = None
-        if existing is not None and data.get("reconnect"):
-            # Возврат к своей же регистрации после перезапуска CLI. Право на
-            # него подтверждает токен, а не рассуждение сессии о себе: файл с
-            # токеном переживает смерть процесса, и предъявить его может
-            # только тот, кто эту регистрацию и заводил. Ключ обязателен —
-            # молчаливое переподключение по совпадению токена увело бы слот
-            # при случайном повторном входе из соседнего окна.
-            if existing.token != str(data.get("token", "")):
-                raise web.HTTPConflict(
-                    text=(
-                        f"переподключиться к регистрации {agent} нельзя: токен "
-                        "не совпадает. Она заведена не этой сессией."
+        async with self._login_lock(agent):
+            existing = await self._release_stale(agent)
+            if data.get("reconnect"):
+                if existing is None:
+                    raise web.HTTPConflict(
+                        text=(
+                            f"переподключаться к регистрации {agent} не к чему: "
+                            "её нет. Повтори вход без --reconnect, и брокер "
+                            "заведёт новую."
+                        )
+                    )
+                if existing.token != str(data.get("token", "")):
+                    raise web.HTTPConflict(
+                        text=(
+                            f"переподключиться к регистрации {agent} нельзя: токен "
+                            "не совпадает. Она заведена не этой сессией."
+                        )
+                    )
+                existing.label = str(data.get("label", "")) or existing.label
+                existing.last_contact = time.time()
+                await self._store_write(
+                    lambda store: update_registration(
+                        store, agent, label=existing.label
                     )
                 )
-            existing.label = str(data.get("label", "")) or existing.label
-            existing.last_contact = time.time()
-            log.info("переподключение к регистрации %s (%s)", agent, existing.label)
+                log.info("переподключение к регистрации %s (%s)", agent, existing.label)
+                return web.json_response(
+                    {
+                        "token": existing.token,
+                        "room": self.room,
+                        "mode": existing.mode,
+                        "reconnected": True,
+                    }
+                )
+            if existing is not None:
+                self._refuse_taken_slot(agent, existing)
+            token = secrets.token_hex(16)
+            label = str(data.get("label", "")) or agent
+            registered_at = time.time()
+            registration = Registration(
+                agent,
+                label,
+                token,
+                registered_at,
+            )
+            registration.listener_kind = self.delivery_kinds.get(agent, "listener")
+            registration.max_depth = self.max_depth
+            try:
+                await self._store_write(
+                    lambda store: insert_registration(
+                        store, agent, label, token, registered_at, depth=0
+                    )
+                )
+            except DuplicateAgent:
+                # Память и store уже разошлись, и в store сидит чужая строка.
+                # Она держит слот: не создавая вторую регистрацию поверх неё,
+                # отказываем как за занятый слот.
+                self.registrations.pop(agent, None)
+                restored = self._restore_one(agent)
+                if restored is not None:
+                    self.registrations[agent] = restored
+                raise web.HTTPConflict(
+                    text=(
+                        f"агент {agent} уже имеет регистрацию в хранилище. "
+                        "Повтори вход с --reconnect, если токен совпадёт, "
+                        "или пусть человек освободит слот: "
+                        f"agentschat logout --agent {agent} --force"
+                    )
+                ) from None
+            self.registrations[agent] = registration
+            log.info("подключена сессия %s (%s)", agent, registration.label)
             return web.json_response(
                 {
-                    "token": existing.token,
+                    "token": token,
                     "room": self.room,
-                    "mode": existing.mode,
-                    "reconnected": True,
+                    "mode": registration.mode,
                 }
             )
-        if existing is not None:
-            since = datetime.fromtimestamp(existing.since).strftime("%H:%M:%S")
-            raise web.HTTPConflict(
-                text=(
-                    f"агент {agent} уже подключён с {since} "
-                    f"({existing.label}, {existing.state()}). "
-                    f"{existing.advice()} "
-                    "Не решай, что слот занят тобой же: метка и успешный "
-                    "inbox этого не доказывают. Доказывает только токен — если "
-                    "эта регистрация твоя, из неё же и заведена, повтори вход "
-                    "с ключом --reconnect: брокер сверит токен и вернёт тебе "
-                    "её. Не сверится — скажи человеку. Освободить немедленно "
-                    f"может он: agentschat logout --agent {agent} --force"
-                )
-            )
-        session = Session(
-            agent,
-            str(data.get("label", "")) or agent,
-            secrets.token_hex(16),
-            time.time(),
-        )
-        session.listener_kind = self.delivery_kinds.get(agent, "listener")
-        session.max_depth = self.max_depth
-        self.sessions[agent] = session
-        log.info("подключена сессия %s (%s)", agent, session.label)
-        return web.json_response(
-            {
-                "token": session.token,
-                "room": self.room,
-                "mode": session.mode,
-            }
-        )
+
+    def _login_lock(self, agent: str) -> asyncio.Lock:
+        if agent not in self._login_locks:
+            self._login_locks[agent] = asyncio.Lock()
+        return self._login_locks[agent]
 
     async def handle_logout(self, request: web.Request) -> web.Response:
         data = await request.json()
         agent = str(data.get("agent", ""))
         if not data.get("force"):
-            self.session_of(data)
-        self.sessions.pop(agent, None)
+            self.registration_of(data)
+        await self._delete_stored(agent)
+        self.registrations.pop(agent, None)
         log.info("отключена сессия %s", agent)
         return web.json_response({"ok": True})
 
+    async def _delete_stored(self, agent: str) -> None:
+        await self._store_write(lambda store: delete_registration(store, agent))
+
+    def _restore_one(self, agent: str) -> Registration | None:
+        if not self.store_path.exists():
+            return None
+        with open_read_only(self.store_path) as store:
+            rows = [row for row in load_registrations(store) if row[0] == agent]
+        if not rows:
+            return None
+        _, label, token, registered_at, depth = rows[0]
+        restored = Registration(agent, label, token, registered_at, depth=depth)
+        restored.listener_kind = self.delivery_kinds.get(agent, "listener")
+        restored.max_depth = self.max_depth
+        return restored
+
     async def handle_wait(self, request: web.Request) -> web.Response:
-        session = self.session_of(dict(request.query))
-        session.open_waits += 1
-        session.listening_until = time.time() + LISTEN_GRACE
+        registration = self.registration_of(dict(request.query))
+        registration.open_waits += 1
+        registration.listening_until = time.time() + LISTEN_GRACE
         try:
-            if not session.inbox:
-                session.signal.clear()
+            if not registration.inbox:
+                registration.signal.clear()
                 try:
-                    await asyncio.wait_for(session.signal.wait(), WAIT_SECONDS)
+                    await asyncio.wait_for(registration.signal.wait(), WAIT_SECONDS)
                 except asyncio.TimeoutError:
                     return web.Response(status=204)
-            if not session.inbox:
+            if not registration.inbox:
                 # Разбудили, но сообщение уже забрал другой listener на этой же
                 # сессии. Так бывает, когда токен из ~/.agentschat/<агент>.json
                 # прочитали два процесса. Пустое окно — честный ответ: клиент
                 # просто опросит ещё раз. Без этой проверки popleft падал с
                 # IndexError, и опоздавший получал 500.
                 return web.Response(status=204)
-            envelope = session.inbox.popleft()
-            session.depth = envelope.depth
-            session.last_delivery = time.time()
+            envelope = registration.inbox.popleft()
+            registration.depth = envelope.depth
+            registration.last_delivery = time.time()
             return web.json_response(
                 {
                     **envelope.as_dict(),
                     "rendered": envelope.render(
-                        session.restart_listener, session.max_depth
+                        registration.restart_listener, registration.max_depth
                     ),
                 }
             )
         finally:
-            session.open_waits -= 1
-            session.listening_until = time.time() + LISTEN_GRACE
+            registration.open_waits -= 1
+            registration.listening_until = time.time() + LISTEN_GRACE
 
     async def handle_inbox(self, request: web.Request) -> web.Response:
-        session = self.session_of(dict(request.query))
-        return web.json_response({"pending": session.drain()})
+        registration = self.registration_of(dict(request.query))
+        return web.json_response({"pending": registration.drain()})
 
     async def handle_say(self, request: web.Request) -> web.Response:
         data = await request.json()
-        session = self.session_of(data)
+        registration = self.registration_of(data)
         text = str(data.get("text", "")).strip()
         if not text:
             raise web.HTTPBadRequest(text="пустое сообщение")
-        depth = session.depth + 1
+        depth = registration.depth + 1
         if depth > self.max_depth:
             # Человек, который просто наблюдает, иначе увидит тишину и не
             # поймёт, что цепочка упёрлась в предел: отказ уходит агенту, а в
             # комнате не появляется ничего.
             await self.publish(
-                session.agent,
+                registration.agent,
                 f"(цепочка достигла предела глубины {self.max_depth} без "
                 "участия человека, дальше агенты продолжать не могут. "
                 "Напишите что-нибудь в комнату — это обнулит счётчик.)",
@@ -493,17 +596,17 @@ class Broker:
                     "человек. Об этом сказано в комнате, повторять не надо."
                 )
             )
-        if session.throttled():
+        if registration.throttled():
             raise web.HTTPTooManyRequests(
                 text=f"превышен предел {MAX_SENDS_PER_MINUTE} сообщений в минуту"
             )
-        session.sends.append(time.time())
+        registration.sends.append(time.time())
         # Сообщение без обращения попадает в комнату, но не доставляется никому:
         # человек видит его в Element, а агенты — нет. Отправитель при этом
         # уверен, что сказал. На живом прогоне так и вышло: backend объявил
         # протокол в пустоту, а frontend ждал его и не дождался.
-        reach = [a for a in self.addressees(text, None) if a != session.agent]
-        event_id = await self.publish(session.agent, text, depth)
+        reach = [a for a in self.addressees(text, None) if a != registration.agent]
+        event_id = await self.publish(registration.agent, text, depth)
         answer = {"event_id": event_id, "depth": depth}
         if not reach and self.addressed_to_a_person(text):
             # Обращение есть, просто не к агенту: ответ человеку на его же
@@ -513,7 +616,7 @@ class Broker:
                 "Человек видит его в комнате."
             )
         elif not reach:
-            others = [a for a in self.sessions if a != session.agent]
+            others = [a for a in self.registrations if a != registration.agent]
             answer["warning"] = (
                 "сообщение опубликовано, но НИ ОДИН агент его не получил: в нём "
                 "нет обращения. Адресуй явно — @имя или @room. Сейчас "
@@ -528,15 +631,21 @@ class Broker:
     async def handle_status(self, request: web.Request) -> web.Response:
         lines = []
         for agent in self.clients:
-            session = self.sessions.get(agent)
-            if session is None:
+            registration = self.registrations.get(agent)
+            if registration is None:
                 lines.append(f"{agent:<14} не подключён")
                 continue
-            quiet = int(time.time() - max(session.last_delivery, session.since))
-            since = datetime.fromtimestamp(session.since).strftime("%H:%M:%S")
+            quiet = int(
+                time.time()
+                - max(registration.last_delivery, registration.registered_at)
+            )
+            registered = datetime.fromtimestamp(registration.registered_at).strftime(
+                "%H:%M:%S"
+            )
             lines.append(
-                f"{session.agent:<14} {session.state():<12} {session.label} "
-                f"(подключена {since}, тишина {quiet}с)"
+                f"{registration.agent:<14} {registration.state():<12} "
+                f"{registration.label} "
+                f"(подключена {registered}, тишина {quiet}с)"
             )
         return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 
