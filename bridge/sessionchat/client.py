@@ -112,7 +112,7 @@ def do_login(args: argparse.Namespace) -> None:
     if data.get("mode") == "plugin":
         print(
             f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
-            "Связь держит плагин AgentsChat внутри самого OpenCode: он уже "
+            "Связь держит плагин Quoroom внутри самого OpenCode: он уже "
             "опрашивает брокера и вложит входящее сообщение прямо в эту сессию.\n"
             "Listener запускать НЕ надо — его роль исполняет плагин."
         )
@@ -302,7 +302,7 @@ def do_status(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="agentschat", description="AgentsChat session client"
+        prog="agentschat", description="Quoroom session client"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

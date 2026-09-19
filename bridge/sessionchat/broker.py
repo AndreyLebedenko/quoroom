@@ -708,7 +708,7 @@ async def run(config: Path, agents: str = "") -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AgentsChat session broker")
+    parser = argparse.ArgumentParser(description="Quoroom session broker")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument(
         "--agents",

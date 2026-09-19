@@ -5,7 +5,7 @@
             "server_name": "agentschat.local"
         }
     },
-    "brand": "AgentsChat",
+    "brand": "Quoroom",
     "default_theme": "dark",
     "disable_guests": true,
     "disable_3pid_login": true,
