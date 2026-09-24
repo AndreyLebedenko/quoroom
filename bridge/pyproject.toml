@@ -1,3 +1,27 @@
+# 64 is the first setuptools with PEP 660 editable installs, which
+# `uv tool install --editable ./bridge` needs.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quoroom"
+version = "1.0.0rc1"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31.0"]
+
+[project.optional-dependencies]
+broker = ["matrix-nio>=0.24.0", "PyYAML>=6.0", "aiohttp>=3.9.0"]
+
+[project.scripts]
+agentschat = "sessionchat.client:main"
+
+[tool.setuptools]
+packages = ["sessionchat"]
+
+[tool.setuptools.package-data]
+sessionchat = ["kit/**/*"]
+
 [tool.ruff]
 target-version = "py310"
 

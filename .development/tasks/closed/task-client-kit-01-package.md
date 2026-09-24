@@ -1,6 +1,6 @@
 # Task client-kit-01: Installable package
 
-**Status:** Not started.
+**Status:** Completed (2026-09-24).
 **Story:** `.development/tasks/story-client-kit.md`
 
 ## Summary
