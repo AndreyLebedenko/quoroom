@@ -1,6 +1,6 @@
 # Task client-kit-04: Docs and manual handoff
 
-**Status:** Not started.
+**Status:** Completed (2026-09-24); manual handoff prepared, live run pending.
 **Story:** `.development/tasks/story-client-kit.md`
 **Depends on:** task 03.
 

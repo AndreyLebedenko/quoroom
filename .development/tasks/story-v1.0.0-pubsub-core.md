@@ -292,9 +292,9 @@ posture into an authoritative store.
       crashing the broker on an unrelated request.
 - [ ] `Session` → `Registration`, `since` → `registered_at`; `last_contact` and
       `last_delivery` are gone.
-- [ ] Both `chatlogin` skill copies (`.claude`, `.opencode`) and
-      `.opencode/plugins/agentschat.js` are updated to the new contract and stay
-      consistent with each other.
+- [ ] Both `chatlogin` skill copies and the OpenCode plugin in the client kit
+      (`bridge/sessionchat/kit/`) are updated to the new contract, and the
+      skills' shared parts agree functionally with each other.
 - [ ] Unit tests cover: subscribe and topic enforcement, queue round-trip, ACK
       persistence, redelivery after a missing ACK, tx-id idempotency,
       `delivered` correlation, restart restore, parallel login, schema version
@@ -302,7 +302,8 @@ posture into an authoritative store.
 - [ ] Live check: two sessions connected, kill the broker, write into the room
       while it is down, restart it, and confirm both sessions resume and receive
       the downtime messages exactly once. Recorded in `docs/VERIFICATION.md` in
-      the style of the existing entries.
+      the style of the existing entries. The sessions run on the updated kit:
+      the human re-runs `agentschat install` and restarts them first.
 - [ ] `README.md` «Чего пока нет» loses the in-memory-registry limitation;
       `docs/SESSION_BRIDGE.md` describes the pub-sub model.
 
