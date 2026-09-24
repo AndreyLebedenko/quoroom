@@ -17,6 +17,8 @@ DEAF_SECONDS, процесс жив, но глух, а значит беспол
     agentschat inbox  --agent claude-code     # забрать очередь
     agentschat status
     agentschat logout --agent claude-code [--force]
+    agentschat install   [--claude] [--opencode] [--force]
+    agentschat uninstall [--claude] [--opencode] [--force]
 """
 
 import argparse
@@ -28,6 +30,7 @@ from pathlib import Path
 
 import requests
 
+from . import kit
 from .protocol import DEAF_SECONDS, DEFAULT_PORT, WAIT_SECONDS, Envelope
 
 STORE = Path.home() / ".agentschat"
@@ -300,6 +303,26 @@ def do_status(args: argparse.Namespace) -> None:
     print(response.text.rstrip())
 
 
+def do_install(args: argparse.Namespace) -> None:
+    clis = kit.chosen_clis(args.claude, args.opencode)
+    roots = kit.target_roots(clis, args.claude_dir, args.opencode_dir)
+    try:
+        steps = kit.install(STORE / "kit.json", roots, force=args.force)
+    except kit.KitConflict as refusal:
+        fail(str(refusal))
+    for step in steps:
+        print(step.line())
+    print(kit.install_summary(steps))
+
+
+def do_uninstall(args: argparse.Namespace) -> None:
+    clis = kit.chosen_clis(args.claude, args.opencode)
+    steps = kit.uninstall(STORE / "kit.json", kit.DEFAULT_ROOTS, clis, args.force)
+    for step in steps:
+        print(step.line())
+    print(kit.uninstall_summary(steps))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="agentschat", description="Quoroom session client"
@@ -347,6 +370,28 @@ def main() -> None:
     logout.add_argument("--agent", required=True)
     logout.add_argument("--force", action="store_true", help="освободить чужой слот")
     logout.set_defaults(run=do_logout)
+
+    install = sub.add_parser(
+        "install", help="разложить набор Quoroom в каталоги Claude Code и OpenCode"
+    )
+    install.add_argument("--claude", action="store_true", help="только Claude Code")
+    install.add_argument("--opencode", action="store_true", help="только OpenCode")
+    install.add_argument("--claude-dir", help=f"вместо {kit.DEFAULT_ROOTS['claude']}")
+    install.add_argument(
+        "--opencode-dir", help=f"вместо {kit.DEFAULT_ROOTS['opencode']}"
+    )
+    install.add_argument(
+        "--force", action="store_true", help="перезаписать чужие файлы"
+    )
+    install.set_defaults(run=do_install)
+
+    uninstall = sub.add_parser("uninstall", help="убрать установленный набор Quoroom")
+    uninstall.add_argument("--claude", action="store_true", help="только Claude Code")
+    uninstall.add_argument("--opencode", action="store_true", help="только OpenCode")
+    uninstall.add_argument(
+        "--force", action="store_true", help="удалить и изменённые вручную файлы"
+    )
+    uninstall.set_defaults(run=do_uninstall)
 
     args = parser.parse_args()
     args.run(args)

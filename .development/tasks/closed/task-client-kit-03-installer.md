@@ -1,6 +1,6 @@
 # Task client-kit-03: Installer
 
-**Status:** Not started.
+**Status:** Completed (2026-09-24).
 **Story:** `.development/tasks/story-client-kit.md`
 **Depends on:** task 02.
 
@@ -54,3 +54,15 @@ and OpenCode; `agentschat uninstall` takes back exactly what it laid.
       before (including a pre-existing unrelated file in the same directory).
 - [ ] A test proves a refused install writes nothing at all.
 - [ ] Full suite green; ruff clean.
+
+## Implementation notes
+
+- Uninstall has no directory flags and the manifest stores no root, so files
+  installed under a custom `--claude-dir` / `--opencode-dir` are removed by
+  their absolute path, but emptied directories are pruned only under the
+  default roots.
+- A listed file edited by the user is overwritten by the next install (the
+  update path). Per the story's givens, edits to installed copies are the
+  user's responsibility; uninstall still keeps them without `--force`.
+- Files dropped from a later kit are not cleaned by install; uninstall removes
+  them.
