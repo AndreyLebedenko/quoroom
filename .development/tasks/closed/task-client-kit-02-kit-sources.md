@@ -1,6 +1,6 @@
 # Task client-kit-02: Kit sources in the package
 
-**Status:** Not started.
+**Status:** Completed (2026-09-24).
 **Story:** `.development/tasks/story-client-kit.md`
 **Depends on:** task 01.
 

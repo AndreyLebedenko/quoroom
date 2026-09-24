@@ -17,6 +17,7 @@ the human runs in a foreign repository.
   `agentschat uninstall` + `uv tool uninstall quoroom`. Fallback without uv:
   `pipx install --editable`. Replace the old «скилл в `.claude/skills/`»
   passage and `bridge\agentschat.cmd status` with `agentschat status`.
+- `bridge/config.example.yaml` (~line 51) names `.opencode/plugins/agentschat.js`.
 - `README.md`: structure section and wherever `.claude/`, `.opencode/` are
   named as the skills' home.
 - `docs/SESSION_BRIDGE.md`: a section on the decision — kit installed per
