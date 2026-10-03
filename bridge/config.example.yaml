@@ -48,7 +48,8 @@ agents:
     access_token: "PASTE_TOKEN_HERE"
     device_id: "PASTE_DEVICE_ID_HERE"
     display_name: "OpenCode"
-    # Слушателем для OpenCode работает плагин .opencode/plugins/agentschat.js:
+    # Слушателем для OpenCode работает плагин agentschat.js, который
+    # agentschat install кладёт в каталог плагинов OpenCode пользователя:
     # он живёт внутри процесса OpenCode и вкладывает входящее прямо в сессию.
     delivery: "plugin"
 

@@ -30,3 +30,7 @@ bridge/broker.log
 /.idea/
 /.ollamassist/
 /graphify-out/
+
+# Сборка пакета quoroom (uv build / pip wheel)
+bridge/build/
+bridge/*.egg-info/

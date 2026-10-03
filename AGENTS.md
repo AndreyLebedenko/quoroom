@@ -101,7 +101,7 @@
    identifiers, logs, and commit messages. Avoid symbols that render poorly in
    some terminals, such as long dashes and check marks.
    Exception: Russian text is data, not documentation — `README.md`, `docs/`,
-   the skills under `.claude/`, `.agents/` and `.opencode/`, and every runtime
+   the skills and command under `bridge/sessionchat/kit/`, and every runtime
    string an agent or a human reads (envelopes, refusals, broker notices).
    Normal Russian typography applies there; do not "fix" it.
 10. Use UTF-8 for project files unless a file or external format explicitly
@@ -127,8 +127,11 @@
    `.venv/Scripts/python.exe -m unittest discover -s tests -t .`
    There is no pytest in this project; do not add one.
 2. The OpenCode plugin is tested with `node --test` against
-   `.opencode/plugins/agentschat.test.mjs`.
+   `bridge/tests/plugin/agentschat.test.mjs`.
 3. Lint and format with `ruff`: `ruff check` and `ruff format --check`.
+   Run these commands sequentially, never in parallel: both write to the same
+   `.ruff_cache`, including in check-only mode. More generally, serialize
+   checks that share a writable cache or other generated state.
 4. Anything that needs the Docker stack, Element, or a real Claude Code /
    Codex / OpenCode session is a human-run manual handoff. Prepare it
    explicitly — what to run, what to look for — and record the result in
@@ -146,14 +149,16 @@
 3. Install Python packages with `pip`; keep `bridge/requirements.txt` current
    in the same commit that introduces a dependency. The runtime dependency
    list is deliberately short — adding to it needs a reason in the task card.
-4. The `chatlogin` skill exists in two copies — `.claude/skills/chatlogin/`
-   and `.opencode/skills/chatlogin/` — and they differ by design: delivery
-   mechanics differ between the CLIs (see `docs/SESSION_BRIDGE.md`). Do not
-   make them identical. What they share — `login`, `say`, `ask`, `status` and
-   the boundaries section — must agree; changing a shared part in one copy
-   without the other is a defect. Codex's skill location is `.agents/skills/`;
-   it holds no chat skill (see the `Codex` section), and the directory is
-   absent until a Codex skill appears.
+4. The `chatlogin` skill exists in two copies,
+   `bridge/sessionchat/kit/claude/skills/chatlogin/` and
+   `bridge/sessionchat/kit/opencode/skills/chatlogin/`, installed per user by
+   `agentschat install` (see `docs/SESSION_BRIDGE.md`). They differ by design:
+   delivery mechanics differ between the CLIs. Do not make them identical.
+   What they share (`login`, `say`, `ask`, `status` and the boundaries
+   section) must agree functionally; byte identity is not required. Changing
+   a shared part in one copy without the other is a defect. Codex's skill
+   location is `.agents/skills/`; it holds no chat skill (see the `Codex`
+   section), and the directory is absent until a Codex skill appears.
 5. When reading project text files with PowerShell, pass `-Encoding UTF8`
    explicitly, e.g. `Get-Content -Raw -Encoding UTF8 README.md`.
 6. Codex may correct a Python command's console-encoding mismatch by setting

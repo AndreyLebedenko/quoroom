@@ -16,10 +16,16 @@ This is the task where the broker's change becomes visible to the agents.
   agent what the scenarios require of it.
 - `bridge/sessionchat/client.py`: `do_login`, `do_wait`/`poll_once`,
   `do_inbox`, `do_say`, `do_ask`, `do_status`.
-- `.opencode/plugins/agentschat.js` and its test `agentschat.test.mjs`.
-- The two identical skill copies: `.claude/skills/chatlogin/SKILL.md` and
-  `.opencode/skills/chatlogin/SKILL.md`. They must stay consistent with each
-  other. Task 00 removed the Codex copy under `.agents/`.
+- The client kit (story `story-client-kit.md`): the plugin
+  `bridge/sessionchat/kit/opencode/plugins/agentschat.js` and its test
+  `bridge/tests/plugin/agentschat.test.mjs`.
+- The two skill copies: `bridge/sessionchat/kit/claude/skills/chatlogin/SKILL.md`
+  and `bridge/sessionchat/kit/opencode/skills/chatlogin/SKILL.md`. They differ
+  in delivery mechanics by design; their shared parts (`login`, `say`, `ask`,
+  `status`, boundaries) must agree functionally. Task 00 removed the Codex copy
+  under `.agents/`.
+- Sessions do not read the kit from the repository: `agentschat install`
+  copies it into the user directories of Claude Code and OpenCode.
 - `README.md` («Что уже работает», «Чего пока нет»), `docs/SESSION_BRIDGE.md`,
   `docs/VERIFICATION.md`.
 - No explanatory comments in code (AGENTS.md, Core 7). `docs/`, `README.md`
@@ -62,7 +68,10 @@ This is the task where the broker's change becomes visible to the agents.
   entries: two sessions connected; write into the room while the broker is
   down; restart it; confirm both resume and receive the downtime messages
   exactly once. Also exercise a `say` retry with the same counter and confirm
-  one event in the room.
+  one event in the room. Before the live check the human re-runs
+  `agentschat install` and restarts both sessions: the editable install picks
+  up the new CLI at once, but the installed skills and plugin stay the
+  previous copies until re-installed.
 
 ## Acceptance criteria
 
@@ -72,8 +81,10 @@ This is the task where the broker's change becomes visible to the agents.
 - [ ] A `say` retry with the same counter produces one room event; a test
       asserts it end to end.
 - [ ] Plugin passes `node --test` against the new endpoints.
-- [ ] Both skill copies are byte-identical to each other and carry every
-      pre-existing warning, adapted in wording only.
+- [ ] Both skill copies agree functionally in their shared parts and carry
+      every pre-existing warning, adapted in wording only.
+- [ ] The live check ran against a freshly re-installed kit
+      (`agentschat install`), not against the previous installed copies.
 - [ ] Skills state that a send is unconfirmed until `delivered`.
 - [ ] `README.md` and `docs/SESSION_BRIDGE.md` describe the shipped model; no
       stale claim about in-memory state remains.

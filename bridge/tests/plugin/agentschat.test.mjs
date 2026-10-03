@@ -4,7 +4,7 @@
  * процессе живут под разными именами и не мешают друг другу, а исчезнувшая
  * сессия не оставляет за собой ни занятого слота, ни вечной привязки.
  *
- *     node --test .opencode/plugins/agentschat.test.mjs
+ *     node --test bridge/tests/plugin/agentschat.test.mjs
  *
  * Домашний каталог и адрес брокера плагин читает ОДИН раз, при загрузке
  * модуля. Поэтому и то и другое поднимается здесь до импорта и одно на все
@@ -72,7 +72,9 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r))
 process.env.AGENTSCHAT_URL = `http://127.0.0.1:${server.address().port}`
 
-const { AgentsChat } = await import("./agentschat.js")
+const { AgentsChat } = await import(
+  "../../sessionchat/kit/opencode/plugins/agentschat.js"
+)
 
 /** Состояние плагина живёт в globalThis, поэтому чистим его между проверками. */
 function fresh() {
@@ -84,10 +86,10 @@ function fresh() {
 
 const quiet = { session: { promptAsync: async () => {} } }
 
-async function login(hooks, callID, sessionID, agent) {
+async function login(hooks, callID, sessionID, agent, launcher = "agentschat") {
   await hooks["tool.execute.before"](
     { callID, sessionID },
-    { args: { command: `bridge\\agentschat.cmd login --agent ${agent} --label "тест"` } },
+    { args: { command: `${launcher} login --agent ${agent} --label "тест"` } },
   )
   await hooks["tool.execute.after"](
     { callID, sessionID },
@@ -177,6 +179,16 @@ test("привязка без токена не висит вечно", async ()
   await new Promise((r) => setTimeout(r, 40 * 25))
   assert.equal(state.bindings.has("terra"), false, "привязка снята")
   assert.ok(!asked.some((a) => a.startsWith("terra/")), "брокера не дёргали без токена")
+
+  await hooks.dispose()
+})
+
+test("старый вызов по пути bridge\\agentschat.cmd тоже привязывает сессию", async () => {
+  fresh()
+  const hooks = await AgentsChat({ client: quiet })
+  await login(hooks, "c1", "ses-terra", "terra", "bridge\\agentschat.cmd")
+
+  assert.equal(globalThis.__agentschat.bindings.get("terra")?.sessionID, "ses-terra")
 
   await hooks.dispose()
 })
