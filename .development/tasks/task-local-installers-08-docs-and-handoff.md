@@ -17,8 +17,9 @@ checks for Windows and the Linux container.
 
 ## Boundary
 
-- `docs/INSTALL.md`, `README.md`, and `docs/VERIFICATION.md` (pending
-  section only). No code. `docs/SESSION_BRIDGE.md` belongs to task 01.
+- `docs/INSTALL.md`, `README.md`, `docs/ARCHITECTURE.md`, and
+  `docs/VERIFICATION.md` (pending section only). No code.
+  `docs/SESSION_BRIDGE.md` belongs to task 01.
 
 ## Requirements
 
@@ -29,6 +30,10 @@ checks for Windows and the Linux container.
 - README: links to `install.ps1` / `install.sh` and states the verified
   scope exactly: Windows, and Linux verified in an Ubuntu 24.04 container,
   not native Linux.
+- `docs/ARCHITECTURE.md`: the installer as a new part (Russian): the shared
+  layer and the two shells, the step model (state from checks, human steps),
+  ownership records and the rule for pre-existing resources, purge
+  confirmation before any destructive step, and the exit codes.
 - `docs/VERIFICATION.md`: a pending handoff for the two live scenarios from
   the story (Windows, both roles; Linux container, both roles), each with
   the commands to run and what to observe. The Windows scenario follows the
