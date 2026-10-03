@@ -1,6 +1,6 @@
 # Task local-installers-02: Shared setup core
 
-**Status:** Planned.
+**Status:** Completed (2026-10-03).
 **Story:** `.development/tasks/story-local-installers.md`
 **Depends on:** nothing in code; read the whole story first, because every
 later task builds on the interfaces defined here.
@@ -66,13 +66,13 @@ add those on top of it.
 
 ## Acceptance criteria
 
-- [ ] Each argument rule, including the invalid combinations, has a test.
-- [ ] Tests prove: a completed step is not re-applied; an interrupted run
+- [x] Each argument rule, including the invalid combinations, has a test.
+- [x] Tests prove: a completed step is not re-applied; an interrupted run
       resumes from checks; a failed step yields the failure report and a
       nonzero exit; a human step stops with its instruction.
-- [ ] Tests prove a registered secret is absent from stdout, stderr, and a
+- [x] Tests prove a registered secret is absent from stdout, stderr, and a
       raised exception's text.
-- [ ] Tests prove confirmation cancel leaves state unchanged and an
+- [x] Tests prove confirmation cancel leaves state unchanged and an
       unrecorded resource is reported, not deleted.
-- [ ] A test proves the package imports only the standard library.
-- [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+- [x] A test proves the package imports only the standard library.
+- [x] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
