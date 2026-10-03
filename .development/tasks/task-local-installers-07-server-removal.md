@@ -31,6 +31,10 @@ together, on top of the shared layer and the ownership records of task 06.
   `config.yaml`, broker state under `bridge/state/`, and leaf certificates
   the installer generated. The mkcert root CA and the hosts entry are never
   touched; the report says they remain and how to remove them by hand.
+- Discovery of broker state under `bridge/state/` never covers the server
+  ownership record or the saved bot passwords: the passwords are recorded
+  targets and would otherwise be listed and deleted twice. Keep the server
+  record outside that directory.
 - Only resources in the server role's ownership record are removed.
   Resources that existed before the first install run are not in it; they
   are reported as kept, with the reason, and never deleted.
@@ -46,6 +50,9 @@ together, on top of the shared layer and the ownership records of task 06.
       directories, including cancel, partial install, repeat removal, and
       an unrecorded resource. These are the Windows functional flows of
       this role.
+- [ ] Test: the real role's discovery, run against a tree that holds every
+      role's record, the saved bot passwords, and participant data, targets
+      none of them.
 - [ ] Functional flow in the task 04 environment: remove keeps data and
       reinstall reuses it; confirmed purge removes only the server role's
       data; observations reported in the handoff.

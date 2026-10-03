@@ -64,6 +64,11 @@ agent CLIs, and the broker address.
   deleted while it still has entries, because those entries protect files
   the user edited; `uninstall` already deletes it when empty. Any other file
   there is reported and kept.
+- Discovery for purge matches only the broker token files `<agent>.json`;
+  `kit.json` is excluded by name, not by luck of the pattern. Keep the
+  participant ownership record where that discovery cannot match it. The
+  core already excludes every role's record from discovered targets; the
+  role must not rely on that alone.
 
 ## Acceptance criteria
 
@@ -73,6 +78,10 @@ agent CLIs, and the broker address.
 - [ ] Tests: repeat install changes nothing; install after a partial run
       continues; removal after a partial install works and is repeatable;
       purge with a kept edited kit file keeps `kit.json`.
+- [ ] Test: the real role's discovery, run against a home that holds every
+      role's record, `kit.json`, and server data, targets none of them.
+- [ ] Test: the parser built from `built_in_roles()` has no conflicting
+      options.
 - [ ] Functional flow in the task 04 environment: participant install,
       repeat, remove, purge; observations reported in the handoff.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
