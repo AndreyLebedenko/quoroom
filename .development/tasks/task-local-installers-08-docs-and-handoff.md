@@ -38,7 +38,11 @@ checks for Windows and the Linux container.
   the story (Windows, both roles; Linux container, both roles), each with
   the commands to run and what to observe. The Windows scenario follows the
   story's limits for the owner's live installation; the Linux scenario
-  follows the story's live access path. Results are recorded only after
+  follows the story's live access path. The lab's 443 guard reads the
+  English state names of `netstat` (`LISTEN`/`LISTENING`); on a localized
+  Windows only its Docker-ports check is reliable, so the handoff tells the
+  human to stop the Windows stack first and confirm 443 is free. Results
+  are recorded only after
   the human runs them.
 
 ## Acceptance criteria

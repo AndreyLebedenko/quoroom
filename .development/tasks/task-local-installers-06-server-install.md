@@ -76,5 +76,8 @@ mechanisms support.
       a run interrupted after registration and before `config.yaml` was
       written recovers the token by login; secrets never appear in output.
 - [ ] Functional flow in the task 04 environment, with its room helper:
-      server install, repeat; observations reported in the handoff.
+      server install, repeat; observations reported in the handoff. The
+      human steps (hosts entry, `mkcert -install`) are performed the way the
+      human would, through `tools/linux-container/run.sh exec-root`, never
+      by the installer. Document `exec-root` in that directory's README.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
