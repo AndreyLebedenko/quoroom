@@ -48,6 +48,10 @@ checks for Windows and the Linux container.
 ## Acceptance criteria
 
 - [ ] Every command in the docs matches the implemented flags.
+- [ ] The participant's final report says what to restart and then the
+      `/chatlogin` step (since task 05 the restart line comes from
+      `agentschat install`'s own summary mid-run; check the human can still
+      find it, and adjust the wording if not).
 - [ ] The handoff is complete enough for the human to run it without this
       conversation.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
