@@ -1,6 +1,6 @@
 # Task local-installers-03: Entry points install.ps1 and install.sh
 
-**Status:** Planned.
+**Status:** Completed (2026-10-03).
 **Story:** `.development/tasks/story-local-installers.md`
 **Depends on:** task 02.
 
@@ -42,14 +42,29 @@ and hand every argument to the shared layer, returning its exit code.
 
 ## Acceptance criteria
 
-- [ ] Tests run each script with a stub shared layer and prove: arguments
+- [x] Tests run each script with a stub shared layer and prove: arguments
       pass through unchanged, including values with spaces; the exit code
       propagates (zero and nonzero); the repository path with spaces and
       Cyrillic works.
-- [ ] Tests prove the missing-Python path exits nonzero with the
+- [x] Tests prove the missing-Python path exits nonzero with the
       instruction and does not start Python.
-- [ ] A test that needs a shell absent on the current machine is skipped
+- [x] A test that needs a shell absent on the current machine is skipped
       with a stated reason, never silently passed.
-- [ ] `install.ps1` tests run under `powershell.exe` (5.1); also under
+- [x] `install.ps1` tests run under `powershell.exe` (5.1); also under
       `pwsh` when present.
-- [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+- [x] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Implementation notes
+
+- Exit code 9 is the shells' own: no suitable Python, or the shared layer
+  missing. Codes 0-4 belong to the core and pass through unchanged.
+- `install.ps1` starts Python through `ProcessStartInfo` so arguments arrive
+  byte-exact under Windows PowerShell 5.1. Consequence for task 08:
+  PowerShell-level redirection of `install.ps1` (`*> log`) does not capture
+  the installer's output.
+- The probe answers `quoroom-python=` + base64 of `sys.executable`; the
+  launch uses that absolute path. This survives Cyrillic profile paths on a
+  Russian-locale console and `.bat` launchers that echo their commands.
+- Both shells replace `PYTHONPATH` with `bridge/` for the child only.
+- After three review returns the last two fixes were made by the
+  orchestrator on the owner's decision (AGENTS.md 0.7).
