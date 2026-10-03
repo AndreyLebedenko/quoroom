@@ -1,7 +1,6 @@
-# Task: Cross-platform installation for servers and participants
+# Story: Cross-platform local installation for servers and participants
 
-**Status:** Planned; implementation is blocked on the implementation gate below.
-**Story:** None. Standalone task.
+**Status:** In progress (branch `feat/local-installers`). Implementation gate resolved 2026-10-03.
 **Depends on:** The per-user client kit (completed).
 
 ## Summary
@@ -12,7 +11,7 @@ participant role, and reaches a working installation without manually
 coordinating several configuration files. Both entry points expose equivalent
 choices, checks, and outcomes, including role-scoped removal.
 
-This task covers the local scenario only: everything runs on one machine, as
+This story covers the local scenario only: everything runs on one machine, as
 the locality contract in `AGENTS.md` requires. The server role hosts the
 Matrix infrastructure and broker. The participant role hosts the client kit
 and the human's existing Claude Code or OpenCode sessions. The two roles stay
@@ -31,6 +30,28 @@ its own, and a machine may have both.
 - Current source and verification records take precedence over assumptions
   about which planned broker features have already shipped.
 
+## Task sequence
+
+Tasks run in this order; each depends on the ones before it unless noted.
+The requirements below are the contract; a task card names which part of it
+the task owns.
+
+1. `task-local-installers-01-cli-broker-url.md` - the CLI reads the full
+   broker URL from `AGENTSCHAT_URL`. Independent of the rest.
+2. `task-local-installers-02-setup-core.md` - the shared Python layer: role
+   and flag parsing, the step model, failure reporting, ownership records,
+   redaction, confirmation.
+3. `task-local-installers-03-entry-points.md` - `install.ps1` and
+   `install.sh`.
+4. `task-local-installers-04-linux-container.md` - the disposable Ubuntu
+   24.04 + `docker:dind` environment and its runner.
+5. `task-local-installers-05-participant-role.md` - participant install,
+   removal, and purge.
+6. `task-local-installers-06-server-install.md` - server install.
+7. `task-local-installers-07-server-removal.md` - server removal and purge.
+8. `task-local-installers-08-docs-and-handoff.md` - `docs/INSTALL.md`,
+   README, and the prepared live handoff.
+
 ## Approved direction
 
 - Support Windows and Linux from the first installer release.
@@ -38,7 +59,7 @@ its own, and a machine may have both.
 - The broker address is a parameter with a local default. Do not add code or
   tests that reject a non-local address: a shared deployment is a planned
   later extension, and it must be addable without reworking this installer.
-  This task does not implement, document, or verify a shared deployment.
+  This story does not implement, document, or verify a shared deployment.
 - Matrix access tokens stay with the broker only (locality contract, item 2).
   This is a security rule, not a locality rule, and it applies unchanged.
 - Use a shared Python implementation for configuration, client-kit setup,
@@ -68,8 +89,16 @@ Before implementation, the project owner must approve and the card must record:
      `docker` directory, so it would act on the live Windows stack, and a
      purge would delete its room history. The live result is recorded as
      "Linux verified in an Ubuntu 24.04 container", not as native Linux:
-     the hosts check, browser certificate trust, and apt prerequisites on a
-     Linux desktop stay unverified.
+     the hosts check and browser certificate trust on a Linux desktop stay
+     unverified.
+   - Prerequisite procedures. Proposed 2026-10-03, pending approval. Task 04
+     exercises the Ubuntu one; task 08 documents both.
+     - Windows: Docker Desktop with the WSL2 backend, running;
+       `winget install Python.Python.3.11 astral-sh.uv FiloSottile.mkcert`.
+     - Ubuntu 24.04: `apt install python3 python3-venv pipx mkcert
+       libnss3-tools docker.io docker-compose-v2 curl procps git`
+       (`python3-venv` for the server virtualenv, `curl` for `start.sh`,
+       `procps` for `pgrep` in `stop.sh`, `libnss3-tools` for mkcert).
 2. How the installer handles privileged steps: the hosts entry for the server
    name (`docs/INSTALL.md`, step 1) and installing the mkcert root CA into the
    system trust store (step 2), on both platforms.
@@ -82,7 +111,28 @@ Before implementation, the project owner must approve and the card must record:
    - Approved 2026-10-03. The CLI reads the full broker URL from
      `AGENTSCHAT_URL`, default `http://127.0.0.1:8770`, the same variable and
      default as the OpenCode plugin. `AGENTSCHAT_PORT` is removed, with no
-     fallback. This client change is in scope for this task.
+     fallback. This client change is in scope for this story.
+4. Resources that exist before the installer's first run. Proposed
+   2026-10-03, pending approval: they are validated and reused, never adopted
+   into an ownership record, so `--remove` and `--purge` report and keep
+   them. Without this rule, a purge on a machine set up by hand (the owner's
+   Windows machine) would delete configuration and room history the
+   installer never created.
+5. Live Linux access path. Proposed 2026-10-03, pending approval: for the
+   live Linux scenario the human stops the Windows stack, the task 04 runner
+   publishes the dind engine's 443 to the host's 443, and Element opens in the
+   Windows browser at `https://agentschat.local` with a certificate warning
+   the human accepts (the container's mkcert CA is not trusted by Windows).
+   Without this, no browser can reach the container's Element: the server
+   name resolves to the host's loopback, where the Windows stack answers.
+6. Limits of the Windows live scenario. Proposed 2026-10-03, pending
+   approval: it runs on the owner's existing installation. It covers install
+   and repeat (existing state validated, nothing overwritten), participant
+   remove and reinstall, and server remove (stack stopped, data kept) and
+   reinstall. Server purge is not run live on Windows: one Docker engine
+   holds one stack under the fixed container and project names, so a
+   "disposable" Windows install would share the live volumes. Purge is
+   verified live in the Linux container only.
 
 ## Boundary
 
