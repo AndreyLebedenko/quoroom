@@ -23,6 +23,7 @@ MAX_DEPTH = 6
 MAX_SENDS_PER_MINUTE = 20
 
 DEFAULT_PORT = 8770
+DEFAULT_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
 
 
 @dataclass(frozen=True)
