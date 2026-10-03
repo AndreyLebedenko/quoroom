@@ -1,6 +1,6 @@
 # Task local-installers-04: Disposable Linux environment
 
-**Status:** Planned.
+**Status:** Completed (2026-10-03).
 **Story:** `.development/tasks/story-local-installers.md`
 **Depends on:** task 03.
 
@@ -59,12 +59,12 @@ scenario.
 
 ## Acceptance criteria
 
-- [ ] The runner brings the environment up, runs `install.sh --help` inside
+- [x] The runner brings the environment up, runs `install.sh --help` inside
       the test machine, and tears down cleanly, also after a failure.
-- [ ] Verified while running: the host's Windows stack containers and
+- [x] Verified while running: the host's Windows stack containers and
       volumes are untouched (`docker ps`, `docker volume ls` before/after).
-- [ ] Verified: an ignored file present in the host checkout is absent in
+- [x] Verified: an ignored file present in the host checkout is absent in
       the test machine's copy; an uncommitted tracked change is present.
-- [ ] `tools/linux-container/README.md` (Russian) states how to run it, how
+- [x] `tools/linux-container/README.md` (Russian) states how to run it, how
       to open a shell, and how to publish 443 for the live scenario.
-- [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+- [x] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
