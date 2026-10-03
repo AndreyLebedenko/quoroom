@@ -1,0 +1,29 @@
+name: quoroom-linux-lab
+
+services:
+  dind:
+    image: docker:dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["--host=tcp://0.0.0.0:2375", "--tls=false"]
+    volumes:
+      - lab-home:/home/lab
+
+  machine:
+    image: ubuntu:24.04
+    depends_on:
+      - dind
+    network_mode: "service:dind"
+    environment:
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      DEBIAN_FRONTEND: noninteractive
+      LANG: C.UTF-8
+      QUOROOM_LAB: "1"
+    volumes:
+      - lab-home:/home/lab
+    tty: true
+    stdin_open: true
+
+volumes:
+  lab-home:
