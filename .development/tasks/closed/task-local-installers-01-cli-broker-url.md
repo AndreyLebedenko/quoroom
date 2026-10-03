@@ -1,6 +1,6 @@
 # Task local-installers-01: CLI reads the full broker URL
 
-**Status:** Planned.
+**Status:** Completed (2026-10-03).
 **Story:** `.development/tasks/story-local-installers.md`
 **Depends on:** nothing.
 
@@ -39,7 +39,7 @@ removed with no fallback.
 
 ## Acceptance criteria
 
-- [ ] Tests: default URL; override; trailing slash; a non-local URL accepted.
-- [ ] Test: the CLI default equals the plugin's `BROKER` default.
-- [ ] No reference to `AGENTSCHAT_PORT` remains in code, kit, or docs.
-- [ ] Full Python suite, `node --test`, `ruff check`, `ruff format --check` green.
+- [x] Tests: default URL; override; trailing slash; a non-local URL accepted.
+- [x] Test: the CLI default equals the plugin's `BROKER` default.
+- [x] No reference to `AGENTSCHAT_PORT` remains in code, kit, or docs.
+- [x] Full Python suite, `node --test`, `ruff check`, `ruff format --check` green.
