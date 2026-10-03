@@ -91,7 +91,7 @@ Before implementation, the project owner must approve and the card must record:
      "Linux verified in an Ubuntu 24.04 container", not as native Linux:
      the hosts check and browser certificate trust on a Linux desktop stay
      unverified.
-   - Prerequisite procedures. Proposed 2026-10-03, pending approval. Task 04
+   - Prerequisite procedures. Approved 2026-10-03. Task 04
      exercises the Ubuntu one; task 08 documents both.
      - Windows: Docker Desktop with the WSL2 backend, running;
        `winget install Python.Python.3.11 astral-sh.uv FiloSottile.mkcert`.
@@ -112,27 +112,36 @@ Before implementation, the project owner must approve and the card must record:
      `AGENTSCHAT_URL`, default `http://127.0.0.1:8770`, the same variable and
      default as the OpenCode plugin. `AGENTSCHAT_PORT` is removed, with no
      fallback. This client change is in scope for this story.
-4. Resources that exist before the installer's first run. Proposed
-   2026-10-03, pending approval: they are validated and reused, never adopted
+4. Resources that exist before the installer's first run. Approved
+   2026-10-03: they are validated and reused, never adopted
    into an ownership record, so `--remove` and `--purge` report and keep
    them. Without this rule, a purge on a machine set up by hand (the owner's
    Windows machine) would delete configuration and room history the
    installer never created.
-5. Live Linux access path. Proposed 2026-10-03, pending approval: for the
+5. Live Linux access path. Approved 2026-10-03: for the
    live Linux scenario the human stops the Windows stack, the task 04 runner
    publishes the dind engine's 443 to the host's 443, and Element opens in the
    Windows browser at `https://agentschat.local` with a certificate warning
    the human accepts (the container's mkcert CA is not trusted by Windows).
    Without this, no browser can reach the container's Element: the server
    name resolves to the host's loopback, where the Windows stack answers.
-6. Limits of the Windows live scenario. Proposed 2026-10-03, pending
-   approval: it runs on the owner's existing installation. It covers install
-   and repeat (existing state validated, nothing overwritten), participant
+6. Limits of the Windows live scenario. Approved 2026-10-03: it runs on the
+   owner's existing installation. It covers install and repeat (existing state validated, nothing overwritten), participant
    remove and reinstall, and server remove (stack stopped, data kept) and
    reinstall. Server purge is not run live on Windows: one Docker engine
    holds one stack under the fixed container and project names, so a
    "disposable" Windows install would share the live volumes. Purge is
    verified live in the Linux container only.
+
+## Review workflow
+
+Approved by the owner 2026-10-03; it replaces the per-task human review of
+the standard task-card workflow for this story only. A task's implementer
+stops before committing and reports. The orchestrator has the diff reviewed
+by a review agent and approves or returns it. On approval the implementer
+commits on the task branch, the orchestrator merges it into
+`feat/local-installers` and closes the task card. The owner reviews the
+whole story once, before `feat/local-installers` is merged into `master`.
 
 ## Boundary
 
