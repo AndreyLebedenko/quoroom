@@ -1,9 +1,8 @@
 # Task: Cross-platform installation for servers and participants
 
-**Status:** Planned; implementation is blocked on the connection contract below.
+**Status:** Planned; implementation is blocked on the implementation gate below.
 **Story:** None. Standalone task.
-**Depends on:** The per-user client kit and an approved, implemented remote
-client-broker connection contract.
+**Depends on:** The per-user client kit (completed).
 
 ## Summary
 
@@ -13,9 +12,12 @@ participant role, and reaches a working installation without manually
 coordinating several configuration files. Both entry points expose equivalent
 choices, checks, and outcomes, including role-scoped removal.
 
-The server hosts the Matrix infrastructure and broker. A participant machine
-hosts the client kit and the human's existing Claude Code or OpenCode sessions.
-Docker is required only for the server role. One machine can have both roles.
+This task covers the local scenario only: everything runs on one machine, as
+the locality contract in `AGENTS.md` requires. The server role hosts the
+Matrix infrastructure and broker. The participant role hosts the client kit
+and the human's existing Claude Code or OpenCode sessions. The two roles stay
+separate even on one host: each can be installed, verified, and removed on
+its own, and a machine may have both.
 
 ## Context you need
 
@@ -32,7 +34,13 @@ Docker is required only for the server role. One machine can have both roles.
 ## Approved direction
 
 - Support Windows and Linux from the first installer release.
-- Offer local and shared deployment scenarios explicitly.
+- Local scenario only: the server and participant roles run on the same host.
+- The broker address is a parameter with a local default. Do not add code or
+  tests that reject a non-local address: a shared deployment is a planned
+  later extension, and it must be addable without reworking this installer.
+  This task does not implement, document, or verify a shared deployment.
+- Matrix access tokens stay with the broker only (locality contract, item 2).
+  This is a security rule, not a locality rule, and it applies unchanged.
 - Use a shared Python implementation for configuration, client-kit setup,
   preservation of existing installations, and diagnostics. Shell entry
   points handle prerequisite checks and platform-specific preparation.
@@ -43,34 +51,53 @@ Docker is required only for the server role. One machine can have both roles.
 
 ## Implementation gate
 
-Before implementation, the project owner must approve and document:
+Before implementation, the project owner must approve and the card must record:
 
-1. The remote broker address and discovery/configuration mechanism used by
-   both the CLI and the OpenCode plugin.
-2. TLS termination and certificate trust for the client-broker connection,
-   including the distinction between local and shared deployments.
-3. Participant authentication and its binding to permitted agent identities,
-   including how a participant obtains credentials without Matrix tokens.
-4. The supported Windows shell and Linux distribution/version baseline,
-   with the prerequisite installation procedure for each.
-
-Remote broker support must exist and have a documented verification result
-before this task configures it. HTTPS access to Element or Matrix alone does
-not satisfy this prerequisite. The current single-machine locality contract
-in project documentation must be revised explicitly for the approved shared
-deployment model. This task does not choose or implement that model.
+1. The supported Windows shell and Linux distribution/version baseline, with
+   the prerequisite installation procedure for each.
+   - Windows: approved 2026-10-03. Windows PowerShell 5.1 is the minimum;
+     `install.ps1` must also run unchanged on PowerShell 7.x, so it uses no
+     construct that 5.1 lacks.
+   - Linux: approved 2026-10-03. Ubuntu 24.04 LTS with Docker Engine and the
+     Docker Compose v2 plugin. No native Linux machine is available, so both
+     the functional flows and the live scenario run in a disposable
+     `ubuntu:24.04` container paired with a `docker:dind` engine. The server
+     role starts its stack inside that engine. Running the Linux server role
+     against the host's Docker Desktop engine is forbidden: the compose file
+     fixes `container_name` values and the project name derives from the
+     `docker` directory, so it would act on the live Windows stack, and a
+     purge would delete its room history. The live result is recorded as
+     "Linux verified in an Ubuntu 24.04 container", not as native Linux:
+     the hosts check, browser certificate trust, and apt prerequisites on a
+     Linux desktop stay unverified.
+2. How the installer handles privileged steps: the hosts entry for the server
+   name (`docs/INSTALL.md`, step 1) and installing the mkcert root CA into the
+   system trust store (step 2), on both platforms.
+   - Approved 2026-10-03. The installer only checks these steps. When a check
+     fails, it prints the platform-specific instructions for the human to
+     perform them, stops with a nonzero exit code, and states how to resume.
+     A repeat run re-checks them. The installer never performs them itself and
+     never requests elevation.
+3. The form of the broker address parameter.
+   - Approved 2026-10-03. The CLI reads the full broker URL from
+     `AGENTSCHAT_URL`, default `http://127.0.0.1:8770`, the same variable and
+     default as the OpenCode plugin. `AGENTSCHAT_PORT` is removed, with no
+     fallback. This client change is in scope for this task.
 
 ## Boundary
 
-- Installation/removal entry points, shared setup logic, focused tests, and installation
-  documentation only.
+- Installation/removal entry points, shared setup logic, focused tests, and
+  installation documentation only. The single exception is the CLI's broker
+  address parameter (implementation gate, item 3).
 - No changes to message routing, delivery guarantees, room membership models,
-  or the client-broker authentication protocol.
-- Multi-room support, federation, macOS, public package publishing, and a
-  general service manager are outside this task.
+  or the client-broker protocol and its authentication.
+- Out of scope: shared (multi-machine) deployment, remote broker support,
+  TLS for the client-broker connection, participant credential distribution,
+  mixed-OS setups, multi-room support, federation, macOS, public package
+  publishing, and a general service manager.
 - Do not install, authorize, or launch agent CLI sessions for the user.
 - Reuse existing start/stop mechanisms where they meet the approved platform
-  contract. Surface missing platform support rather than hiding it in setup.
+  baseline. Surface missing platform support rather than hiding it in setup.
 
 ## Requirements
 
@@ -98,24 +125,26 @@ deployment model. This task does not choose or implement that model.
 ### Server role
 
 - Check the supported Docker environment and broker prerequisites.
-- Collect and validate the deployment mode, address, and configuration values
-  required by the approved connection contract.
+- Collect and validate the configuration values the server needs, including
+  the broker address parameter with its local default.
 - Prepare configuration from maintained examples and guide certificate,
   account, and room setup. Automate steps supported by existing mechanisms;
   clearly identify remaining human steps and verify their results.
 - Start the infrastructure and broker using the supported lifecycle commands.
 - Verify readiness of both infrastructure and broker before reporting success.
-- Provide the participant connection details without exposing Matrix tokens.
+- Report the broker address the participant role must use, without exposing
+  Matrix tokens.
 
 ### Participant role
 
 - Install the client CLI and selected Claude Code / OpenCode kit using the
   existing package and kit installation mechanisms.
-- Configure the chosen server and participant credentials through the approved
-  connection contract, consistently for the CLI and plugin.
-- Verify connectivity, certificate trust, and authentication. Distinguish these
-  failures from an agent session that has not yet joined the room.
-- Require neither Docker nor server configuration files on this machine.
+- Configure the broker address consistently for the CLI and the plugin, using
+  the local default unless the human supplies another value.
+- Verify that the broker answers at that address. Distinguish an unreachable
+  broker from an agent session that has not yet joined the room.
+- Require neither Docker nor server configuration files for this role, even
+  when the server role is installed on the same machine.
 - Report any required shell/session restart and the next `/chatlogin` step.
 
 ### Removal
@@ -136,8 +165,8 @@ deployment model. This task does not choose or implement that model.
   explicit confirmation before destructive actions. Cancellation leaves state
   unchanged. `--purge` without `--remove` is invalid.
 - Determine ownership before deletion; unknown ownership is a reported conflict,
-  not permission to delete. Purging a participant must not delete server data
-  or another participant's state.
+  not permission to delete. Purging the participant role must not delete
+  server data, and purging the server role must not delete participant state.
 - Removal must work after a partial installation and be safe to repeat. Check
   only prerequisites needed for the requested cleanup, not those for a fresh
   installation. Report incomplete cleanup and retained resources accurately.
@@ -148,27 +177,28 @@ Automated tests must use temporary installation roots and mocked system/network
 boundaries; they must not modify the real home directory, trust store, hosts
 file, or running Docker stack. Use the project's existing test tools.
 
-Cover role selection, configuration validation, repeat runs, partial setup,
-conflicting files, missing prerequisites, paths with spaces and Unicode,
-connection failures, credential redaction, and propagation of failures through
-both shell entry points. Include functional installation flows for each role
-and platform against controlled dependencies. Run the full Python suite, the
-OpenCode plugin tests, `ruff check`, and `ruff format --check`.
+Cover role selection, configuration validation, the broker address parameter
+and its default, repeat runs, partial setup, conflicting files, missing
+prerequisites, paths with spaces and Unicode, connection failures, credential
+redaction, and propagation of failures through both shell entry points.
+Include functional installation flows for each role and platform against
+controlled dependencies. Run the full Python suite, the OpenCode plugin tests,
+`ruff check`, and `ruff format --check`.
 
 Cover removal of each role and both roles, partial installations, repeat
 removal, retained-role dependencies, modified kit files, and default data
-preservation. Test purge confirmation and cancellation, invalid flag combinations,
-ownership conflicts, deletion boundaries, and cleanup failures. Include
-functional removal and purge flows on both platforms using disposable fixtures.
+preservation. Test purge confirmation and cancellation, invalid flag
+combinations, ownership conflicts, deletion boundaries, and cleanup failures.
+Include functional removal and purge flows on both platforms using disposable
+fixtures.
 
-Prepare a human-run handoff for all four installation scenarios: Windows server,
-Windows participant, Linux server, and Linux participant. Include a local
-server-plus-participant setup and a mixed-OS shared deployment with agents on
-different machines. Exercise both supported agent CLIs outside the Quoroom
-repository and confirm human-to-agent and agent-to-agent exchange in both
-directions. Re-run installation and confirm existing configuration survives.
-On a disposable installation, verify removal preserves data and reinstall can
-reuse it; verify confirmed purge removes only the selected installation's data.
+Prepare a human-run handoff for two live scenarios: Windows with both roles
+on one machine, and Linux with both roles on one machine. In each, exercise
+both supported agent CLIs outside the Quoroom repository and confirm
+human-to-agent and agent-to-agent exchange in both directions. Re-run
+installation and confirm existing configuration survives. On a disposable
+installation, verify removal preserves data and reinstall can reuse it;
+verify confirmed purge removes only the selected role's data.
 
 Record actual versions, commands, observations, and dates in
 `docs/VERIFICATION.md`. Automated success and a prepared handoff do not mean
@@ -176,10 +206,11 @@ the live scenarios have passed; retain that distinction in release claims.
 
 ## Acceptance criteria
 
-- [ ] The implementation gate is resolved and linked to approved project docs.
+- [ ] The implementation gate is resolved and recorded in this card.
 - [ ] `install.ps1` and `install.sh` provide equivalent server/participant flows.
 - [ ] Shared behavior has one Python implementation and reuses the client kit.
-- [ ] Local installation and shared deployment follow the approved contract.
+- [ ] The broker address is a parameter with a local default, applied
+      consistently to the CLI and the plugin; nothing rejects a non-local value.
 - [ ] Participant installation does not require Docker or expose Matrix tokens.
 - [ ] Repeat and interrupted runs preserve existing state and report conflicts.
 - [ ] Both entry points support role-scoped `--remove`, preserving data by default.
@@ -194,8 +225,8 @@ the live scenarios have passed; retain that distinction in release claims.
       privileged steps, reruns, `--remove`, `--purge`, and retained data.
 - [ ] README links to the installation entry points and states the verified
       platform scope. User-facing documentation remains Russian.
-- [ ] The four-scenario and mixed-OS live handoff is prepared; observed results
-      are recorded separately from pending checks.
+- [ ] The Windows and Linux live handoff is prepared; observed results are
+      recorded separately from pending checks.
 
 ## Handoff
 
