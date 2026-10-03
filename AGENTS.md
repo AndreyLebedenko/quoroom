@@ -129,6 +129,9 @@
 2. The OpenCode plugin is tested with `node --test` against
    `bridge/tests/plugin/agentschat.test.mjs`.
 3. Lint and format with `ruff`: `ruff check` and `ruff format --check`.
+   Run these commands sequentially, never in parallel: both write to the same
+   `.ruff_cache`, including in check-only mode. More generally, serialize
+   checks that share a writable cache or other generated state.
 4. Anything that needs the Docker stack, Element, or a real Claude Code /
    Codex / OpenCode session is a human-run manual handoff. Prepare it
    explicitly — what to run, what to look for — and record the result in

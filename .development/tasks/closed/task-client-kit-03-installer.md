@@ -30,8 +30,8 @@ and OpenCode; `agentschat uninstall` takes back exactly what it laid.
   [--opencode-dir D] [--force]`. With neither `--claude` nor `--opencode`,
   both are installed.
 - A manifest `~/.agentschat/kit.json` (location injectable) records, per
-  installed file: absolute target path and sha256 of what was written, plus
-  the package version.
+  installed file: absolute target path, sha256 of what was written, and target
+  CLI. Recording the package version is not required.
 - Install copies each kit file to `<target>/<relative path>`, creating
   directories. For an existing target file:
   - listed in the manifest -> overwritten (that is the update path);
