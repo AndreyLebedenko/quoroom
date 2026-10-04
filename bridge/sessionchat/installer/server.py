@@ -6,15 +6,29 @@ import json
 import os
 import re
 import secrets
+import shlex
+import shutil
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .boundaries import Boundaries, WINDOWS
+from .ownership import PurgeTarget, prune_record_home
+from .report import Left, left_lines
 from .roles import Role, RoleOptions
-from .steps import NeedsHuman, Run, State
+from .steps import (
+    FoundStep,
+    NeedsHuman,
+    OwnedStep,
+    Run,
+    State,
+    approved,
+    report_kept,
+    unapproved,
+    unlink,
+)
 
 ROLE = "server"
 INSTALLER_HOME = ".quoroom"
@@ -33,6 +47,16 @@ CERT_KIND = "cert"
 FILE_KIND = "file"
 VOLUME_KIND = "volume"
 PASSWORDS_KIND = "passwords"
+STATE_KIND = "state"
+BROKER_DB = "agentschat.db"
+BROKER_PID = "broker.pid"
+BROKER_STATE_FILES = (
+    BROKER_DB,
+    f"{BROKER_DB}-wal",
+    f"{BROKER_DB}-shm",
+    f"{BROKER_DB}-journal",
+    BROKER_PID,
+)
 ACCOUNTS_FILE = "server-accounts.json"
 CONFIG_NAME = "config.yaml"
 CONFIG_EXAMPLE = "config.example.yaml"
@@ -42,8 +66,18 @@ TOML_NAME = "continuwuity.toml"
 TOML_EXAMPLE = "continuwuity.toml.example"
 CERT_NAME = "agentschat.local"
 CERT_KEY = "agentschat.local-key"
+BROKER_LOG = "broker.log"
+KIND_WORDS = {
+    FILE_KIND: "файлы конфигурации сервера",
+    CERT_KIND: "сертификаты",
+    PASSWORDS_KIND: "сохранённые пароли ботов",
+    STATE_KIND: "состояние брокера",
+    VENV_KIND: "окружение bridge/.venv",
+}
+INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
 ISSUED = re.compile(r"using the registration token ([A-Za-z0-9]+)")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+IMAGE = re.compile(r"^\s*image:\s*(\S+)", re.M)
 SEQUENCE = 0x30
 CONTEXT_0 = 0xA0
 UTC_TIME = 0x17
@@ -53,6 +87,7 @@ TOML_KEY = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 READY_TRIES = 30
 READY_DELAY = 2.0
 START_TRIES = 15
+SILENCE_TRIES = 15
 GATEWAY_STATUSES = (502, 503, 504)
 
 
@@ -115,6 +150,96 @@ def host_script(run: Run) -> Path:
 
 def accounts_path(run: Run) -> Path:
     return run.boundaries.repo / "bridge" / STATE_DIR / ACCOUNTS_FILE
+
+
+def state_dir(run: Run) -> Path:
+    return run.boundaries.repo / "bridge" / STATE_DIR
+
+
+def broker_log(run: Run) -> Path:
+    return run.boundaries.repo / "bridge" / BROKER_LOG
+
+
+def stop_log_path(run: Run) -> Path:
+    return run.boundaries.repo / "bridge" / LOGS_DIR / "stop.log"
+
+
+def broker_state(run: Run) -> list[str]:
+    directory = state_dir(run)
+    passwords = set(run.ownership_of(ROLE).of_kind(PASSWORDS_KIND))
+    return [
+        str(directory / name)
+        for name in BROKER_STATE_FILES
+        if (directory / name).is_file() and str(directory / name) not in passwords
+    ]
+
+
+def kept_while_up(run: Run) -> tuple[Path, ...]:
+    return (
+        toml_path(run),
+        cert_path(run),
+        cert_key_path(run),
+        env_path(run),
+        docker_dir(run) / "element" / "config.json",
+        docker_dir(run) / "caddy" / "Caddyfile",
+    )
+
+
+def owned_toml(run: Run) -> bool:
+    return ours(run, FILE_KIND, toml_path(run))
+
+
+def foreign_files(run: Run) -> tuple[str, ...]:
+    wanted = (
+        env_path(run),
+        toml_path(run),
+        config_path(run),
+        cert_path(run),
+        cert_key_path(run),
+        accounts_path(run),
+    )
+    ownership = run.ownership_of(ROLE)
+    return tuple(
+        str(path)
+        for path in wanted
+        if path.is_file()
+        and not any(
+            ownership.owns(kind, str(path))
+            for kind in (FILE_KIND, CERT_KIND, PASSWORDS_KIND)
+        )
+    )
+
+
+def install_logs(run: Run) -> list[Left]:
+    files = tuple(
+        str(path)
+        for path in (logs_path(run), broker_log(run), stop_log_path(run))
+        if path.is_file()
+    )
+    if not files:
+        return []
+    return [
+        Left(
+            "логи установщика остались: карточка снятия не относит их к очистке",
+            files,
+        ),
+        Left(f"удалить их: {removal_command(run, files)}"),
+    ]
+
+
+def removal_command(run: Run, files: Sequence[str]) -> str:
+    if run.boundaries.platform == WINDOWS:
+        quoted = ", ".join("'" + name.replace("'", "''") + "'" for name in files)
+        return f"Remove-Item -Force -LiteralPath {quoted}"
+    return "rm -f " + " ".join(shlex.quote(name) for name in files)
+
+
+def compose_images(run: Run) -> list[str]:
+    try:
+        text = compose_file(run).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return list(dict.fromkeys(IMAGE.findall(text)))
 
 
 def logs_path(run: Run) -> Path:
@@ -182,6 +307,43 @@ def text_of(run: Run, argv: Sequence[str]) -> str:
 
 def lines_of(run: Run, argv: Sequence[str]) -> list[str]:
     return [line for line in text_of(run, argv).splitlines() if line.strip()]
+
+
+def broker_answers(run: Run) -> bool:
+    return run.boundaries.probe(f"{BROKER_URL}/status").status is not None
+
+
+def docker_answers(run: Run) -> bool:
+    try:
+        return run.boundaries.run(["docker", "info"]).returncode == 0
+    except OSError:
+        return False
+
+
+def containers(run: Run) -> list[str]:
+    return lines_of(run, compose_argv(run, "ps", "-a", "-q"))
+
+
+def volume_exists(run: Run, name: str) -> bool:
+    try:
+        return run.boundaries.run(["docker", "volume", "inspect", name]).returncode == 0
+    except OSError:
+        return False
+
+
+def project_name(run: Run) -> str:
+    return str(
+        _json(text_of(run, compose_argv(run, "config", "--format", "json"))).get("name")
+        or ""
+    )
+
+
+def project_volumes(run: Run) -> list[str]:
+    argv = ["docker", "volume", "ls", "--format", "{{.Name}}"]
+    name = project_name(run)
+    if name:
+        argv += ["--filter", f"label=com.docker.compose.project={name}"]
+    return lines_of(run, argv)
 
 
 def ca_bundle(run: Run) -> str:
@@ -474,21 +636,10 @@ class InfrastructureStep:
         )
 
     def project(self, run: Run) -> str:
-        return str(
-            _json(text_of(run, compose_argv(run, "config", "--format", "json"))).get(
-                "name"
-            )
-            or ""
-        )
+        return project_name(run)
 
     def volumes(self, run: Run) -> set[str]:
-        argv = ["docker", "volume", "ls", "--format", "{{.Name}}"]
-        if self.project(run):
-            argv += [
-                "--filter",
-                f"label=com.docker.compose.project={self.project(run)}",
-            ]
-        return set(lines_of(run, argv))
+        return set(project_volumes(run))
 
     def record_new(self, run: Run, before: set[str]) -> None:
         declared = set(lines_of(run, compose_argv(run, "config", "--volumes")))
@@ -1052,21 +1203,278 @@ def compose_failure(what: str, done) -> str:
     return f"{what} закончился с кодом {done.returncode}: {lines[-1] if lines else 'без вывода'}"
 
 
+@dataclass
+class Stand:
+    containers_gone: bool = False
+
+
+@dataclass
+class StopStandStep:
+    name: str = "Остановить брокер и стенд"
+    sleep: Callable[[float], None] = time.sleep
+    stand: Stand = field(default_factory=Stand)
+    tried: bool = False
+
+    def check(self, run: Run) -> State:
+        if broker_answers(run):
+            return State.TODO
+        if not docker_answers(run):
+            if self.tried:
+                return State.DONE
+            run.warn_once(
+                "stand-unseen",
+                "Docker-демон не отвечает, контейнеры стенда не проверены: "
+                "снять их и убедиться нечем, а брокер уже молчит.",
+            )
+            return State.TODO
+        if containers(run):
+            return State.TODO
+        self.stand.containers_gone = True
+        return State.DONE
+
+    def apply(self, run: Run) -> None:
+        self.stop_broker(run)
+        self.wait_for_silence(run)
+        self.down(run)
+        self.tried = True
+
+    def argv(self, run: Run) -> list[str]:
+        if run.boundaries.platform == WINDOWS:
+            return [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(run.boundaries.repo / "stop.ps1"),
+                "-KeepDocker",
+            ]
+        return ["sh", str(run.boundaries.repo / "stop.sh"), "--keep-docker"]
+
+    def stop_broker(self, run: Run) -> None:
+        done = run.boundaries.run(self.argv(run), output=stop_log_path(run))
+        if done.returncode != 0:
+            raise RuntimeError(
+                f"{compose_failure('стоп-скрипт', done)}. "
+                f"Полный вывод: {stop_log_path(run)}"
+            )
+
+    def wait_for_silence(self, run: Run) -> None:
+        for _ in range(SILENCE_TRIES):
+            if not broker_answers(run):
+                return
+            self.sleep(1)
+        script = "stop.ps1" if run.boundaries.platform == WINDOWS else "stop.sh"
+        raise RuntimeError(
+            f"Брокер не перестал отвечать на {BROKER_URL}/status за "
+            f"{SILENCE_TRIES}с: остановите его сам {script} и повторите."
+        )
+
+    def down(self, run: Run) -> None:
+        try:
+            done = run.boundaries.run(compose_argv(run, "down"))
+        except OSError as error:
+            run.warn_once("stack-down", f"docker недоступен, стенд не опущен: {error}")
+            return
+        if done.returncode == 0:
+            self.stand.containers_gone = True
+            return
+        if not docker_answers(run):
+            run.warn_once(
+                "stand-left-up",
+                "Docker-демон не отвечает, контейнеры стенда остались поднятыми.",
+            )
+            return
+        raise RuntimeError(compose_failure("docker compose down", done))
+
+
+@dataclass(frozen=True)
+class VenvRemoveStep:
+    name: str = "Убрать bridge/.venv"
+    python: str = sys.executable
+
+    def targets(self, run: Run) -> list[PurgeTarget]:
+        return [
+            PurgeTarget(ROLE, VENV_KIND, id)
+            for id in run.ownership_of(ROLE).of_kind(VENV_KIND)
+        ]
+
+    def check(self, run: Run) -> State:
+        targets = self.targets(run)
+        report_kept(run, self.name, unapproved(run, targets))
+        return State.TODO if approved(run, targets) else State.DONE
+
+    def apply(self, run: Run) -> None:
+        for target in approved(run, self.targets(run)):
+            self.drop(run, target.id)
+            run.forget(ROLE, VENV_KIND, target.id)
+            prune_record_home(run.ownership_of(ROLE).path)
+
+    def drop(self, run: Run, id: str) -> None:
+        path = Path(id)
+        if not path.exists():
+            return
+        if self.holding(venv_dir(run)):
+            raise NeedsHuman(
+                f"bridge/.venv убрать нельзя: установщик запущен её же "
+                f"интерпретатором {self.python}. Выйдите из этого окружения и "
+                "повторите ту же команду."
+            )
+        shutil.rmtree(path)
+
+    def holding(self, directory: Path) -> bool:
+        try:
+            return Path(self.python).resolve().is_relative_to(directory.resolve())
+        except OSError:
+            return False
+
+
+@dataclass(frozen=True)
+class MountedStep:
+    name: str
+    kind: str
+    stand: Stand
+    delete: Callable[["Run", str], None] = unlink
+
+    def targets(self, run: Run) -> list[PurgeTarget]:
+        return [
+            PurgeTarget(ROLE, self.kind, id)
+            for id in run.ownership_of(ROLE).of_kind(self.kind)
+        ]
+
+    def still_mounted(self, run: Run, target: PurgeTarget) -> bool:
+        if self.stand.containers_gone:
+            return False
+        kept = {path.resolve() for path in kept_while_up(run)}
+        return Path(target.id).resolve() in kept
+
+    def deletable(self, run: Run) -> list[PurgeTarget]:
+        return [
+            target
+            for target in self.targets(run)
+            if not self.still_mounted(run, target)
+        ]
+
+    def check(self, run: Run) -> State:
+        targets = self.deletable(run)
+        for target in self.targets(run):
+            if self.still_mounted(run, target):
+                run.warn_once(
+                    f"mounted:{self.name}:{target.id}",
+                    f"{self.name}: {target.id} оставлен: контейнеры стенда подняты, "
+                    "а этот файл им нужен: он смонтирован внутрь или задаёт проект compose.",
+                )
+        report_kept(run, self.name, unapproved(run, targets))
+        return State.TODO if approved(run, targets) else State.DONE
+
+    def apply(self, run: Run) -> None:
+        for target in approved(run, self.deletable(run)):
+            self.delete(run, target.id)
+            run.forget(ROLE, self.kind, target.id)
+
+
+@dataclass(frozen=True)
+class VolumeRemoveStep:
+    name: str = "Удалить тома стенда"
+
+    def targets(self, run: Run) -> list[PurgeTarget]:
+        return [
+            PurgeTarget(ROLE, VOLUME_KIND, id)
+            for id in run.ownership_of(ROLE).of_kind(VOLUME_KIND)
+        ]
+
+    def check(self, run: Run) -> State:
+        targets = self.targets(run)
+        report_kept(run, self.name, unapproved(run, targets))
+        return State.TODO if approved(run, targets) else State.DONE
+
+    def apply(self, run: Run) -> None:
+        targets = approved(run, self.targets(run))
+        if targets and not docker_answers(run):
+            raise RuntimeError(kept_volumes(targets))
+        for target in targets:
+            if not volume_exists(run, target.id):
+                run.forget(ROLE, VOLUME_KIND, target.id)
+                continue
+            done = run.boundaries.run(["docker", "volume", "rm", target.id])
+            if done.returncode != 0:
+                raise RuntimeError(volume_failure(target.id, done))
+            run.forget(ROLE, VOLUME_KIND, target.id)
+            prune_record_home(run.ownership_of(ROLE).path)
+
+
+def volume_failure(name: str, done) -> str:
+    return (
+        f"{compose_failure('docker volume rm ' + name, done)}. Том остался в системе."
+    )
+
+
+def kept_volumes(targets: Sequence[PurgeTarget]) -> str:
+    return (
+        "тома стенда не удалены ("
+        + ", ".join(target.id for target in targets)
+        + "): Docker-демон не отвечает, и контейнеры остались поднятыми, поэтому "
+        "файлы, смонтированные в них, тоже оставлены. Запустите Docker и повторите "
+        "ту же команду: очистка доделает остальное."
+    )
+
+
+def found_broker_state(run: Run) -> list[str]:
+    return broker_state(run) if owned_toml(run) else []
+
+
+def broker_state_step() -> FoundStep:
+    return FoundStep("Удалить состояние брокера", ROLE, STATE_KIND, found_broker_state)
+
+
+def remove_steps(
+    stand: Stand, sleep: Callable[[float], None], python: str = sys.executable
+) -> tuple:
+    return (
+        StopStandStep(sleep=sleep, stand=stand),
+        VenvRemoveStep(python=python),
+    )
+
+
+def purge_steps(stand: Stand) -> tuple:
+    return (
+        broker_state_step(),
+        MountedStep("Убрать конфигурацию стенда", FILE_KIND, stand),
+        MountedStep("Убрать сертификаты", CERT_KIND, stand),
+        OwnedStep("Убрать сохранённые пароли", ROLE, PASSWORDS_KIND),
+        VolumeRemoveStep(),
+    )
+
+
 def server_role(
     python: str = sys.executable, sleep: Callable[[float], None] = time.sleep
 ) -> Role:
     people = HumanAccountStep()
+    stand = Stand()
     return Role(
         name=ROLE,
         record_path=record_path,
         install=steps(python, sleep, people),
-        purge_consequence=(
-            "тома compose с данными комнаты исчезнут: переписка будет удалена "
-            "безвозвратно."
-        ),
-        report=lambda run: report(run, people),
+        remove=remove_steps(stand, sleep, python),
+        purge=purge_steps(stand),
+        purge_consequence=server_consequence,
+        report=lambda run: report(run, people, stand),
         add_options=add_options,
     )
+
+
+def server_consequence(targets: Sequence[PurgeTarget]) -> str:
+    kinds = {target.kind for target in targets if target.role == ROLE}
+    named = [words for kind, words in KIND_WORDS.items() if kind in kinds]
+    parts = [", ".join(named) + " исчезнут"] if named else []
+    if VOLUME_KIND in kinds:
+        parts.append(
+            "тома compose с данными комнаты исчезнут: переписка будет удалена "
+            "безвозвратно"
+        )
+    else:
+        parts.append("переписка в комнате на сервере останется на месте")
+    return "; ".join(parts) + "."
 
 
 def steps(
@@ -1126,12 +1534,12 @@ def add_options(options: RoleOptions) -> None:
     )
 
 
-def report(run: Run, people: HumanAccountStep) -> None:
+def report(run: Run, people: HumanAccountStep, stand: Stand) -> None:
     if run.plan.remove:
-        raise RuntimeError(
-            "Удаление роли сервера ещё не реализовано: оно описано в карточке "
-            "local-installers-07 и появится отдельным изменением."
-        )
+        prune_record_home(record_path(run.boundaries))
+        for line in removal_lines(run, stand):
+            run.say(line)
+        return
     run.say(f"Брокер для участников: {BROKER_URL}")
     run.say(f"Сервер Matrix и Element Web: {server_url()}")
     if people.became_admin:
@@ -1144,6 +1552,136 @@ def report(run: Run, people: HumanAccountStep) -> None:
         "Дальше в каждой сессии CLI вызвать /chatlogin. Остановить всё: "
         + ("stop.ps1" if run.boundaries.platform == WINDOWS else "stop.sh")
     )
+
+
+def removal_lines(run: Run, stand: Stand) -> list[str]:
+    kept = kept_items(run)
+    return [
+        *(
+            ["Убрано не всё, осталось в системе:", *left_lines(kept)]
+            if kept
+            else ["Стенд остановлен, установка сервера снята."]
+        ),
+        *stand_lines(stand),
+        *trust_lines(run),
+        hosts_line(run),
+        *image_lines(run),
+        "Поставить обратно: "
+        + INSTALL_ENTRY.get(run.boundaries.platform, "install.sh")
+        + f" --role {ROLE}",
+    ]
+
+
+def hosts_line(run: Run) -> str:
+    where = (
+        r"C:\Windows\System32\drivers\etc\hosts"
+        if run.boundaries.platform == WINDOWS
+        else "/etc/hosts"
+    )
+    return (
+        f"Строка «127.0.0.1 {SERVER_NAME}» в {where} осталась: уберите её, "
+        "если имя больше не нужно машине."
+    )
+
+
+def kept_items(run: Run) -> list[Left]:
+    items = [
+        *_volumes_left(run),
+        *[_recorded_left(run)],
+        *[_foreign_left(run)],
+        *[_state_left(run)],
+        *install_logs(run),
+    ]
+    return [item for item in items if item is not None]
+
+
+def _recorded_left(run: Run) -> Left | None:
+    ownership = run.ownership_of(ROLE)
+    files = tuple(
+        id
+        for kind in (FILE_KIND, CERT_KIND, PASSWORDS_KIND, VENV_KIND)
+        for id in ownership.of_kind(kind)
+    )
+    if not files:
+        return None
+    return Left("остались записи установщика: их удалит --purge", files)
+
+
+def _volumes_left(run: Run) -> list[Left]:
+    if not docker_answers(run):
+        return [
+            Left("тома стенда остались: Docker-демон не отвечает, прочитать их нечем.")
+        ]
+    names = project_volumes(run)
+    if not names:
+        return []
+    ownership = run.ownership_of(ROLE)
+    mine = tuple(name for name in names if ownership.owns(VOLUME_KIND, name))
+    theirs = tuple(name for name in names if name not in mine)
+    return [
+        item
+        for item in (
+            Left("тома compose с данными сервера оставлены: их удалит --purge", mine),
+            Left("тома стенда не записаны за установщиком, поэтому оставлены", theirs),
+        )
+        if item.files
+    ]
+
+
+def _foreign_left(run: Run) -> Left | None:
+    files = foreign_files(run)
+    if not files:
+        return None
+    return Left("остались: стенд собран вручную, установщик их не записывал", files)
+
+
+def _state_left(run: Run) -> Left | None:
+    files = tuple(broker_state(run))
+    if not files:
+        return None
+    return Left(
+        "состояние брокера осталось: эти файлы создаёт брокер, установщик их не "
+        "записывает и удаляет только рядом с записанным continuwuity.toml",
+        files,
+    )
+
+
+def stand_lines(stand: Stand) -> list[str]:
+    if stand.containers_gone:
+        return [
+            "Контейнеры стенда и его сеть сняты, хотя они и не записывались: "
+            "это не данные, их создаёт и поднимает start."
+        ]
+    return ["Контейнеры стенда остались: Docker-демон не отвечал, снять их было нечем."]
+
+
+def trust_lines(run: Run) -> list[str]:
+    root = caroot(run)
+    if not root:
+        return []
+    command = (
+        "mkcert -uninstall"
+        if run.boundaries.platform == WINDOWS
+        else f'CAROOT="{root}" mkcert -uninstall (от root)'
+    )
+    return [
+        f"Корень mkcert остался: {root}. Он общий для всех проектов машины, "
+        "поэтому установщик его не трогает.",
+        f"Убрать его вручную ({command}) можно, но это сломает все прочие "
+        f"сертификаты mkcert и оставит файлы в {root}.",
+    ]
+
+
+def image_lines(run: Run) -> list[str]:
+    images = tuple(compose_images(run))
+    if not images:
+        return []
+    return [
+        "Образы стенда остались: "
+        + ", ".join(images)
+        + ". Они общие для других проектов, поэтому установщик их не удаляет.",
+        "Убрать их: " + ", ".join(f"docker image rm {image}" for image in images),
+    ]
 
 
 def certificate_note(run: Run) -> str:

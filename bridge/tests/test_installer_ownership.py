@@ -194,7 +194,7 @@ class PurgeOrderTests(InstallerTestCase):
                     lambda run, id: self.log.append(f"delete:{id}"),
                 ),
             ),
-            consequence="история комнаты исчезнет",
+            consequence=lambda targets: "история комнаты исчезнет",
         )
 
     def participant_role(self):

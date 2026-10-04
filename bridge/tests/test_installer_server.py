@@ -7,6 +7,8 @@ import json
 import os
 import secrets as server_secrets
 import re
+import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -22,16 +24,21 @@ from tests.installer_fakes import (
     InstallerTestCase,
     boundaries,
     completed,
+    make_run,
 )
 from sessionchat.installer.boundaries import Probe
 from sessionchat.installer.main import DONE, FAILED, HUMAN, main
 from sessionchat.installer.options import parse
-from sessionchat.installer.ownership import Ownership
-from sessionchat.installer.roles import built_in_roles
+from sessionchat.installer.ownership import Ownership, PurgeTarget
+from sessionchat.installer.participant import participant_consequence
+from sessionchat.installer.roles import built_in_roles, consequence_of
+from sessionchat.installer.steps import Plan
 from sessionchat.installer.server import (
     BROKER_PORT,
     SERVER_NAME,
     not_after,
+    removal_command,
+    server_consequence,
     server_role,
 )
 
@@ -76,6 +83,12 @@ class Machine:
         self.down_probes = 0
         self.colour_around_the_token = False
         self.closed_status = [403]
+        self.containers: list[str] = []
+        self.stop_argv: list[str] = []
+        self.stop_code = 0
+        self.stop_log = ""
+        self.fail_down = ""
+        self.busy_volumes: set[str] = set()
 
     def __call__(self, argv, stdin=None, output=None):
         argv = [str(part) for part in argv]
@@ -88,7 +101,7 @@ class Machine:
         if any(Path(part).name == "installer_host.py" for part in argv):
             return self.host(argv, stdin or "")
         if name in ("sh", "bash", "powershell.exe", "pwsh"):
-            return self.start(argv, output)
+            return self.script(argv, output)
         if name in ("python", "python.exe"):
             return self.python(argv)
         if name == "curl":
@@ -113,7 +126,7 @@ class Machine:
                 completed("v2.29.0") if self.present["compose"] else self._no("compose")
             )
         if argv[1] == "volume":
-            return completed("\n".join(sorted(self.volumes)))
+            return self.volume(argv)
         if argv[1] != "compose":
             return self._no("docker compose")
         assert argv[2] == "-f", argv
@@ -139,13 +152,56 @@ class Machine:
                 "docker_caddy-data",
                 "docker_caddy-config",
             }
+            self.containers = [
+                "agentschat-continuwuity",
+                "agentschat-element",
+                "agentschat-caddy",
+            ]
             self.server_up = True
             return completed("Container agentschat-caddy Started")
         if rest == ["restart", "continuwuity"]:
             self.down_probes = 2
             return completed("Container agentschat-continuwuity Started")
+        if rest == ["ps", "-a", "-q"]:
+            if not self.present["daemon"]:
+                return self._no("docker compose ps")
+            return completed("\n".join(self.containers))
+        if rest == ["down"]:
+            if not self.present["daemon"]:
+                return completed(
+                    "",
+                    "error during connect: cannot connect to the Docker daemon",
+                    1,
+                )
+            if self.fail_down:
+                return completed("", self.fail_down, 1)
+            self.containers = []
+            self.server_up = False
+            return completed("Container agentschat-caddy Removed")
         if rest[:1] == ["logs"]:
             return self.logs()
+        return self._no(" ".join(rest))
+
+    def volume(self, argv):
+        rest = argv[2:]
+        if rest[:1] == ["ls"]:
+            if not self.present["daemon"]:
+                return self._no("docker volume ls")
+            return completed("\n".join(sorted(self.volumes)))
+        if rest[:1] == ["inspect"]:
+            return completed("[]") if rest[1] in self.volumes else self._no("volume")
+        if rest[:1] == ["rm"]:
+            name = rest[1]
+            if name not in self.volumes:
+                return completed(
+                    "", f"Error response from daemon: no such volume: {name}", 1
+                )
+            if name in self.busy_volumes:
+                return completed(
+                    "", f"Error response from daemon: volume {name} is in use", 1
+                )
+            self.volumes.discard(name)
+            return completed(name)
         return self._no(" ".join(rest))
 
     def logs(self):
@@ -210,6 +266,21 @@ class Machine:
                 argv, self.start_code, self.stdout_log, ""
             )
         return completed(self.stdout_log, "", self.start_code)
+
+    def script(self, argv, output):
+        stopped = any(Path(part).name in ("stop.sh", "stop.ps1") for part in argv)
+        return self.stop(argv, output) if stopped else self.start(argv, output)
+
+    def stop(self, argv, output):
+        self.stop_argv = [str(part) for part in argv]
+        if self.stop_code == 0:
+            self.broker_up = False
+            (self.repo / "bridge" / "state" / "broker.pid").unlink(missing_ok=True)
+        if output is not None:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            Path(output).write_text(self.stop_log, encoding="utf-8")
+            return subprocess.CompletedProcess(argv, self.stop_code, self.stop_log, "")
+        return completed(self.stop_log, "", self.stop_code)
 
     def host(self, argv, stdin):
         command = argv[[Path(p).name for p in argv].index("installer_host.py") + 1]
@@ -1773,11 +1844,726 @@ class ReportTests(ServerCase):
             self.stdout(given).replace("\\", "/"),
         )
 
-    def test_a_removal_run_fails_and_says_it_is_not_implemented_yet(self):
-        self.ready()
-        code, given = self.install("--remove")
+
+class RemovalCase(ServerCase):
+    def setUp(self):
+        super().setUp()
+        self.venv_python = None
+
+    def installed(self, *flags, **values):
+        code, given = self.install(
+            "--admin-user", ADMIN, "--room-id", ROOM, *flags, secret=lambda p: "typed"
+        )
+        self.assertEqual(code, DONE, self.stderr(given))
+        return given
+
+    def state_file(self, name: str = "agentschat.db") -> Path:
+        return self.path(f"bridge/state/{name}")
+
+    def write_state(self, name: str = "agentschat.db") -> Path:
+        path = self.state_file(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("db", encoding="utf-8")
+        return path
+
+    def forgotten(self, kind: str, id: str) -> None:
+        ownership = Ownership.load(self.record_file())
+        ownership.forget(kind, id)
+        ownership.save()
+
+    def venv(self) -> Path:
+        return self.path("bridge/.venv")
+
+    def remove(self, *flags, **values):
+        given = self.given(**values)
+        code = main(["--role", ROLE, "--remove", *flags], given, self.roles())
+        return code, given
+
+    def purge(self, *flags, **values):
+        values.setdefault("stdin", "PURGE\n")
+        return self.remove("--purge", *flags, **values)
+
+
+class StopStandTests(RemovalCase):
+    def test_the_windows_stop_script_runs_with_the_docker_flag_kept(self):
+        self.installed(platform="windows")
+        code, given = self.remove(platform="windows")
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(
+            any("stop.ps1" in part for part in self.machine.stop_argv), self.machine.log
+        )
+        self.assertIn("-KeepDocker", self.machine.stop_argv)
+
+    def test_the_posix_stop_script_runs_with_the_docker_flag_kept(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("--keep-docker", self.machine.stop_argv)
+
+    def test_the_stop_script_output_goes_to_a_file(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(self.path("bridge/logs/stop.log").is_file())
+
+    def test_a_failing_stop_script_names_its_own_last_line(self):
+        self.installed()
+        self.machine.stop_code = 1
+        self.machine.stop_log = "Stop-Process : Отказано в доступе"
+        code, given = self.remove()
         self.assertEqual(code, FAILED)
-        self.assertIn("local-installers-07", self.stderr(given))
+        self.assertIn("Отказано в доступе", self.stderr(given))
+
+    def test_the_stack_goes_down_through_compose_with_its_file_and_no_volumes(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        down = [line for line in self.machine.log if " down" in line]
+        self.assertEqual(len(down), 1, self.machine.log)
+        self.assertIn("-f", down[0])
+        self.assertIn(
+            str(self.path("docker/docker-compose.yml")).replace("\\", "/"),
+            down[0].replace("\\", "/"),
+        )
+        self.assertNotIn("-v", down[0])
+        self.assertEqual(self.machine.containers, [])
+        self.assertFalse(self.machine.server_up)
+
+    def test_a_container_that_only_exited_is_still_taken_down(self):
+        self.installed()
+        self.machine.broker_up = False
+        self.machine.containers = ["agentschat-continuwuity"]
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(self.machine.stop_argv)
+        self.assertEqual(self.machine.containers, [])
+
+    def test_the_run_waits_for_the_broker_to_go_silent(self):
+        self.installed()
+        self.slept.clear()
+        asked = [0]
+
+        def probe(url: str) -> Probe:
+            if not url.endswith("/status"):
+                return self.probe(url)
+            asked[0] += 1
+            return Probe(200, None) if asked[0] <= 3 else Probe(None, "отказано")
+
+        code, given = self.remove(probe=probe)
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertEqual(self.slept, [1, 1])
+        self.assertEqual(self.machine.containers, [])
+
+    def test_the_silence_timeout_names_the_stop_script_of_the_platform(self):
+        self.installed()
+        code, given = self.remove(probe=lambda url: Probe(200, None))
+        self.assertEqual(code, FAILED)
+        self.assertIn("не перестал отвечать", self.stderr(given))
+        self.assertIn("stop.sh", self.stderr(given))
+        code, given = self.remove(
+            platform="windows", probe=lambda url: Probe(200, None)
+        )
+        self.assertEqual(code, FAILED)
+        self.assertIn("stop.ps1", self.stderr(given))
+
+    def test_the_daemon_down_with_a_silent_broker_warns_about_the_containers(self):
+        self.installed()
+        self.machine.broker_up = False
+        self.machine.present["daemon"] = False
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("контейнеры стенда не проверены", self.stderr(given))
+        self.assertIn("Остановить брокер и стенд: готово.", self.stdout(given))
+        self.assertNotIn("Остановить брокер и стенд: уже сделано.", self.stdout(given))
+
+    def test_a_daemon_that_cannot_answer_still_removes_the_venv(self):
+        self.installed()
+        self.machine.present["daemon"] = False
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(self.venv().exists())
+
+    def test_a_down_that_fails_for_another_reason_is_a_failure(self):
+        self.installed()
+        self.machine.fail_down = "Error response from daemon: network not found"
+        code, given = self.remove()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина:", self.stderr(given))
+        self.assertIn("network not found", self.stderr(given))
+
+    def test_the_stand_is_stopped_before_the_venv_is_touched(self):
+        names = [step.name for step in server_role().remove]
+        self.assertEqual(names, ["Остановить брокер и стенд", "Убрать bridge/.venv"])
+
+    def test_the_containers_gone_flag_is_set_when_there_were_none(self):
+        self.installed()
+        self.machine.broker_up = False
+        self.machine.containers = []
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(self.toml().exists())
+
+
+class VenvRemovalTests(RemovalCase):
+    def test_the_recorded_venv_is_deleted_and_forgotten(self):
+        self.installed()
+        self.assertTrue(self.recorded())
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(self.venv().exists())
+        self.assertFalse([kind for kind, _ in self.recorded() if kind == "venv"])
+
+    def test_a_venv_that_existed_before_the_installer_is_left_alone(self):
+        self.venv().mkdir(parents=True)
+        self.installed()
+        self.forgotten("venv", str(self.venv()))
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(self.venv().is_dir())
+
+    def test_a_venv_deleted_outside_counts_as_deleted(self):
+        self.installed()
+        shutil.rmtree(self.venv())
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertNotIn("venv", [kind for kind, _ in self.recorded()])
+
+    def test_an_interpreter_inside_the_venv_is_a_human_step(self):
+        self.installed()
+        self.venv_python = self.venv() / "Scripts" / "python.exe"
+        code, given = self.remove()
+        self.assertEqual(code, HUMAN)
+        self.assertIn("установщик запущен её же интерпретатором", self.stdout(given))
+        self.assertTrue(self.venv().is_dir())
+        self.assertIn("venv", [kind for kind, _ in self.recorded()])
+
+    def roles(self):
+        python = self.venv_python or sys.executable
+        return (server_role(python=python, sleep=self.slept.append),)
+
+
+class MountedFileTests(RemovalCase):
+    def test_the_configuration_is_deleted_and_forgotten(self):
+        self.installed()
+        self.assertTrue(self.config().is_file())
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(self.config().exists())
+        self.assertFalse(self.path("docker/.env").exists())
+        self.assertFalse(self.toml().exists())
+        self.assertEqual(self.recorded(), [])
+
+    def test_the_mounted_files_survive_a_purge_while_the_stand_is_up(self):
+        self.installed()
+        self.machine.broker_up = False
+        self.machine.present["daemon"] = False
+        code, given = self.purge()
+        self.assertEqual(code, FAILED)
+        self.assertTrue(self.toml().is_file())
+        self.assertTrue(self.path("docker/caddy/certs/agentschat.local.pem").is_file())
+        self.assertTrue(self.path("docker/.env").is_file())
+        self.assertFalse(self.config().exists())
+        self.assertFalse(self.accounts_file().exists())
+
+    def test_the_env_file_survives_only_while_the_stand_is_up(self):
+        self.installed()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(self.path("docker/.env").exists())
+
+    def test_the_warning_names_the_file_it_keeps_and_why(self):
+        self.installed()
+        self.machine.broker_up = False
+        self.machine.present["daemon"] = False
+        _, given = self.purge()
+        self.assertIn("continuwuity.toml оставлен", self.stderr(given))
+        self.assertIn(
+            "смонтирован внутрь или задаёт проект compose", self.stderr(given)
+        )
+
+    def test_a_certificate_that_existed_before_is_not_deleted(self):
+        certs = self.path("docker/caddy/certs")
+        certs.mkdir(parents=True)
+        foreign = certs / "someone-else.pem"
+        foreign.write_text("cert", encoding="utf-8")
+        self.installed()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(foreign.is_file())
+        self.assertFalse(self.path("docker/caddy/certs/agentschat.local.pem").exists())
+
+    def test_the_config_of_a_hand_built_stand_is_not_deleted(self):
+        self.installed()
+        self.forgotten("file", str(self.config()))
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(self.config().is_file())
+
+
+class BrokerStateTests(RemovalCase):
+    def test_the_state_is_deleted_when_the_toml_is_recorded(self):
+        self.installed()
+        database = self.write_state()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(database.exists())
+
+    def test_the_state_siblings_go_with_it(self):
+        self.installed()
+        names = ("agentschat.db-wal", "agentschat.db-shm", "agentschat.db-journal")
+        for name in names:
+            self.write_state(name)
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(self.state_file().exists())
+        for name in names:
+            self.assertFalse(self.state_file(name).exists())
+
+    def test_the_state_is_kept_when_the_toml_was_never_recorded(self):
+        self.installed()
+        database = self.write_state()
+        self.forgotten("file", str(self.toml()))
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(database.is_file())
+        self.assertIn(str(database), self.stdout(given))
+        self.assertIn("continuwuity.toml", self.stdout(given))
+
+    def test_the_passwords_file_is_never_discovered_as_state(self):
+        self.installed()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("Удалить состояние брокера: уже сделано.", self.stdout(given))
+        self.assertIn("Убрать сохранённые пароли: готово.", self.stdout(given))
+        self.assertFalse(self.accounts_file().exists())
+
+    def test_a_file_recorded_as_passwords_is_never_discovered_as_state(self):
+        self.installed()
+        database = self.write_state()
+        ownership = Ownership.load(self.record_file())
+        ownership.forget("passwords", str(self.accounts_file()))
+        ownership.record("passwords", str(database))
+        ownership.save()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("Удалить состояние брокера: уже сделано.", self.stdout(given))
+        self.assertIn("Убрать сохранённые пароли: готово.", self.stdout(given))
+
+    def test_a_foreign_file_in_the_state_directory_is_never_named(self):
+        self.installed()
+        note = self.write_state("notes.txt")
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(note.is_file())
+        self.assertNotIn("notes.txt", self.stdout(given) + self.stderr(given))
+
+    def test_the_state_step_runs_before_the_toml_is_forgotten(self):
+        names = [step.name for step in server_role().purge]
+        self.assertLess(
+            names.index("Удалить состояние брокера"),
+            names.index("Убрать конфигурацию стенда"),
+        )
+
+
+class VolumeTests(RemovalCase):
+    def test_the_recorded_volumes_are_removed_and_forgotten(self):
+        self.installed()
+        self.assertEqual(len(self.machine.volumes), 3)
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertEqual(self.machine.volumes, set())
+        self.assertEqual(self.recorded(), [])
+
+    def test_a_volume_removed_outside_counts_as_deleted(self):
+        self.installed()
+        self.machine.volumes -= {"docker_caddy-config"}
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertEqual(self.machine.volumes, set())
+        self.assertEqual(self.recorded(), [])
+
+    def test_a_volume_in_use_fails_with_the_dockers_own_line(self):
+        self.installed()
+        self.machine.busy_volumes = {"docker_caddy-data"}
+        code, given = self.purge()
+        self.assertEqual(code, FAILED)
+        self.assertIn("is in use", self.stderr(given))
+        self.assertIn("docker_caddy-data", self.machine.volumes)
+        self.assertIn(("volume", "docker_caddy-data"), self.recorded())
+
+    def test_the_volume_step_is_the_last_one(self):
+        self.assertEqual(server_role().purge[-1].name, "Удалить тома стенда")
+
+    def test_the_daemon_down_fails_naming_the_volumes_and_the_repeat(self):
+        self.installed()
+        self.machine.broker_up = False
+        self.machine.present["daemon"] = False
+        code, given = self.purge()
+        self.assertEqual(code, FAILED)
+        self.assertIn("docker_continuwuity-data", self.stderr(given))
+        self.assertIn("Запустите Docker и повторите", self.stderr(given))
+        self.assertFalse(self.config().exists())
+        self.assertFalse(self.venv().exists())
+
+    def test_plain_remove_with_the_daemon_down_keeps_every_file(self):
+        self.installed()
+        self.machine.broker_up = False
+        self.machine.present["daemon"] = False
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertTrue(self.toml().is_file())
+        self.assertTrue(self.config().is_file())
+        self.assertTrue(self.accounts_file().is_file())
+        self.assertEqual(len(self.machine.volumes), 3)
+
+
+class ConfirmationTests(RemovalCase):
+    def test_the_purge_question_lists_the_venv(self):
+        self.installed()
+        _, given = self.purge()
+        self.assertIn(
+            str(self.venv()), given.stderr.getvalue() + given.stdout.getvalue()
+        )
+
+    def test_a_refused_purge_changes_nothing(self):
+        self.installed()
+        before = self.toml().read_text(encoding="utf-8")
+        recorded = self.recorded()
+        code, given = self.remove("--purge", stdin="\n")
+        self.assertEqual(code, 4)
+        self.assertIn("ничего не изменено", self.stderr(given))
+        self.assertEqual(self.toml().read_text(encoding="utf-8"), before)
+        self.assertEqual(self.recorded(), recorded)
+        self.assertTrue(self.machine.volumes)
+
+    def test_a_repeat_purge_finishes_clean(self):
+        self.installed()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertEqual(self.recorded(), [])
+        self.assertFalse(self.record_file().exists())
+
+    def test_a_repeat_remove_finishes_clean(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("Остановить брокер и стенд: уже сделано.", self.stdout(given))
+
+
+class RemovalReportTests(RemovalCase):
+    def test_an_installer_made_remove_names_no_unrecorded_volumes(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertNotIn("тома стенда не записаны", self.stdout(given))
+        self.assertNotIn("стенд собран вручную", self.stdout(given))
+
+    def test_the_report_names_the_volumes_it_kept(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("тома compose с данными сервера оставлены", self.stdout(given))
+        self.assertIn("docker_continuwuity-data", self.stdout(given))
+
+    def test_the_report_names_the_configuration_and_the_passwords_it_kept(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn(str(self.accounts_file()), self.stdout(given))
+
+    def test_the_report_names_the_logs_with_the_command_to_remove_them(self):
+        self.installed()
+        self.path("bridge/broker.log").write_text("log", encoding="utf-8")
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("логи установщика остались", self.stdout(given))
+        self.assertIn(str(self.path("bridge/broker.log")), self.stdout(given))
+        self.assertIn(
+            f"rm -f {shlex.quote(str(self.path('bridge/logs/start.log')))}",
+            self.stdout(given),
+        )
+
+    def test_the_windows_log_command_is_the_powershell_one(self):
+        self.installed(platform="windows")
+        code, given = self.remove(platform="windows")
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("Remove-Item -Force", self.stdout(given))
+
+    def test_the_linux_mkcert_line_carries_the_caroot_form(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn(
+            f'CAROOT="{self.home / "mkcert"}" mkcert -uninstall (от root)',
+            self.stdout(given),
+        )
+        self.assertIn("сломает все прочие сертификаты", self.stdout(given))
+
+    def test_the_windows_mkcert_line_has_no_caroot(self):
+        self.installed(platform="windows")
+        code, given = self.remove(platform="windows")
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("mkcert -uninstall", self.stdout(given))
+        self.assertNotIn("CAROOT", self.stdout(given))
+
+    def test_the_report_names_the_hosts_line(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn(f"127.0.0.1 {SERVER_NAME}", self.stdout(given))
+
+    def test_the_report_names_the_images_and_their_command(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("ghcr.io/continuwuity/continuwuity:latest", self.stdout(given))
+        self.assertIn("docker image rm caddy:2-alpine", self.stdout(given))
+
+    def test_the_report_says_the_containers_went_although_nothing_recorded_them(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("хотя они и не записывались", self.stdout(given))
+
+    def test_a_hand_built_stand_reports_everything_it_left(self):
+        self.toml().parent.mkdir(parents=True, exist_ok=True)
+        self.toml().write_text("registration_token = 'x'\n", encoding="utf-8")
+        self.accounts_file().parent.mkdir(parents=True, exist_ok=True)
+        self.accounts_file().write_text("{}", encoding="utf-8")
+        self.machine.volumes = {"docker_continuwuity-data"}
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        text = self.stdout(given)
+        self.assertIn(str(self.toml()), text)
+        self.assertIn(str(self.accounts_file()), text)
+        self.assertIn("docker_continuwuity-data", text)
+        self.assertIn("не записаны за установщиком", text)
+
+    def test_the_report_names_how_to_put_it_back(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("install.sh --role server", self.stdout(given))
+
+    def test_the_windows_report_names_the_powershell_entry(self):
+        self.installed(platform="windows")
+        code, given = self.remove(platform="windows")
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertIn("install.ps1 --role server", self.stdout(given))
+
+    def test_the_report_names_no_secret(self):
+        self.installed()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertNotIn("typed", self.stdout(given))
+        self.assertNotIn("token-claude-code", self.stdout(given))
+
+    def test_a_full_purge_prunes_the_installer_home(self):
+        self.installed()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse((self.home / ".quoroom").exists())
+
+    def test_an_install_that_never_reached_the_volumes_prunes_the_installer_home(self):
+        self.installed()
+        ownership = Ownership.load(self.record_file())
+        for name in ownership.of_kind("volume"):
+            ownership.forget("volume", name)
+        ownership.save()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertEqual(self.recorded(), [])
+        self.assertFalse((self.home / ".quoroom").exists())
+
+    def test_volumes_removed_outside_still_prune_the_installer_home(self):
+        self.installed()
+        self.machine.volumes -= set(self.machine.volumes)
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertEqual(self.recorded(), [])
+        self.assertFalse((self.home / ".quoroom").exists())
+
+    def test_a_plain_remove_prunes_the_installer_home_of_a_bare_record(self):
+        self.installed()
+        ownership = Ownership.load(self.record_file())
+        for kind in ("venv", "file", "cert", "passwords", "volume"):
+            for name in ownership.of_kind(kind):
+                ownership.forget(kind, name)
+        ownership.save()
+        code, given = self.remove()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse((self.home / ".quoroom").exists())
+
+
+class CrossRoleTests(RemovalCase):
+    def participant_data(self) -> tuple[Path, Path]:
+        store = self.home / ".agentschat"
+        store.mkdir(parents=True, exist_ok=True)
+        session = store / "claude.json"
+        session.write_text("{}", encoding="utf-8")
+        record = self.home / ".quoroom" / "installer" / "participant.json"
+        ownership = Ownership(record)
+        ownership.record("session", str(session))
+        ownership.save()
+        return record, session
+
+    def test_both_roles_put_the_participant_first(self):
+        plan = parse(
+            ["--role", "both", "--remove", "--purge"], self.given(), built_in_roles()
+        )
+        self.assertEqual(plan.roles, ("participant", "server"))
+
+    def test_the_server_discovery_targets_nothing_of_the_participant(self):
+        self.installed()
+        record, session = self.participant_data()
+        given = self.given()
+        ownerships = {
+            role.name: Ownership.load(role.record_path(given))
+            for role in built_in_roles()
+        }
+        run = make_run(given, ownerships=ownerships, remove=True, purge=True)
+        server, _ = built_in_roles()
+        targets = [
+            target
+            for step in server.destructive(Plan(("server",), True, True))
+            for target in step.targets(run)
+        ]
+        self.assertTrue(targets)
+        for target in targets:
+            self.assertNotIn(".agentschat", target.id)
+            self.assertNotEqual(target.role, "participant")
+        self.assertTrue(session.is_file())
+        self.assertTrue(record.is_file())
+
+    def test_a_server_purge_leaves_the_participant_record_and_its_data(self):
+        self.installed()
+        record, session = self.participant_data()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        self.assertFalse(self.record_file().exists())
+        self.assertTrue(record.is_file())
+        self.assertTrue(session.is_file())
+
+
+class ConsequenceTests(RemovalCase):
+    def targets(self, *entries: tuple[str, str, str]) -> tuple[PurgeTarget, ...]:
+        return tuple(PurgeTarget(*entry) for entry in entries)
+
+    def test_a_server_purge_with_volumes_says_the_room_is_destroyed(self):
+        text = server_consequence(
+            self.targets(("server", "volume", "docker_caddy-data"))
+        )
+        self.assertIn("переписка будет удалена безвозвратно", text)
+
+    def test_a_server_purge_without_volumes_does_not_mention_the_room(self):
+        text = server_consequence(
+            self.targets(
+                ("server", "file", str(self.path("bridge/config.yaml"))),
+                ("server", "cert", str(self.path("docker/caddy/certs/a.pem"))),
+            )
+        )
+        self.assertNotIn("переписка будет удалена", text)
+        self.assertIn("переписка в комнате на сервере останется на месте", text)
+
+    def test_the_participant_alone_says_the_room_stays(self):
+        text = participant_consequence(
+            self.targets(("participant", "session", str(self.home / ".agentschat/x")))
+        )
+        self.assertIn("только новым входом", text)
+        self.assertIn("Переписка в комнате на сервере останется на месте", text)
+
+    def test_the_participant_says_nothing_about_the_room_beside_the_server(self):
+        text = participant_consequence(
+            self.targets(
+                ("participant", "session", str(self.home / ".agentschat/x")),
+                ("server", "volume", "docker_caddy-data"),
+            )
+        )
+        self.assertIn("только новым входом", text)
+        self.assertNotIn("останется на месте", text)
+
+    def test_both_roles_with_volumes_do_not_contradict_themselves(self):
+        targets = self.targets(
+            ("participant", "session", str(self.home / ".agentschat/x")),
+            ("server", "volume", "docker_caddy-data"),
+        )
+        text = consequence_of(built_in_roles(), targets)
+        self.assertIn("переписка будет удалена безвозвратно", text)
+        self.assertNotIn("останется на месте", text)
+
+    def test_both_roles_without_volumes_do_not_contradict_themselves(self):
+        targets = self.targets(
+            ("participant", "session", str(self.home / ".agentschat/x")),
+            ("server", "file", str(self.path("bridge/config.yaml"))),
+        )
+        text = consequence_of(built_in_roles(), targets)
+        self.assertIn("останется на месте", text)
+        self.assertNotIn("переписка будет удалена", text)
+
+    def test_the_question_of_a_server_purge_without_volumes_is_honest(self):
+        self.installed()
+        ownership = Ownership.load(self.record_file())
+        for name in ownership.of_kind("volume"):
+            ownership.forget("volume", name)
+        ownership.save()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        text = self.stderr(given) + self.stdout(given)
+        self.assertIn("переписка в комнате на сервере останется на месте", text)
+        self.assertNotIn("переписка будет удалена", text)
+
+    def test_the_question_of_a_server_purge_with_volumes_says_it_is_destroyed(self):
+        self.installed()
+        code, given = self.purge()
+        self.assertEqual(code, DONE, self.stderr(given))
+        text = self.stderr(given) + self.stdout(given)
+        self.assertIn("переписка будет удалена безвозвратно", text)
+        self.assertNotIn("останется на месте", text)
+
+    def test_both_roles_with_only_server_targets_say_nothing_of_sessions(self):
+        targets = self.targets(("server", "volume", "docker_caddy-data"))
+        text = consequence_of(built_in_roles(), targets)
+        self.assertNotIn("файлы сессий", text)
+
+    def test_both_roles_with_only_participant_targets_say_nothing_of_the_server(self):
+        targets = self.targets(
+            ("participant", "session", str(self.home / ".agentschat/x"))
+        )
+        text = consequence_of(built_in_roles(), targets)
+        self.assertNotIn("сертификаты", text)
+        self.assertEqual(text.count("останется на месте"), 1)
+
+    def test_a_server_purge_of_the_venv_alone_names_only_the_venv(self):
+        text = server_consequence(
+            self.targets(("server", "venv", str(self.path("bridge/.venv"))))
+        )
+        self.assertIn("bridge/.venv", text)
+        self.assertNotIn("сертификаты", text)
+        self.assertNotIn("пароли", text)
+        self.assertIn("останется на месте", text)
+
+
+class RemovalCommandTests(ServerCase):
+    def given(self, platform: str):
+        return type("Given", (), {"boundaries": type("B", (), {"platform": platform})})
+
+    def test_the_posix_command_keeps_a_path_with_spaces_whole(self):
+        files = ["/home/lab/Репо с пробелом/bridge/broker.log", "/tmp/it's.log"]
+        command = removal_command(self.given("linux"), files)
+        self.assertEqual(shlex.split(command), ["rm", "-f", *files])
+
+    def test_the_powershell_command_passes_every_path_as_one_literal_list(self):
+        files = [r"C:\Репо с пробеломroker.log", r"C:\it's\start.log"]
+        command = removal_command(self.given("windows"), files)
+        self.assertEqual(
+            command,
+            r"Remove-Item -Force -LiteralPath 'C:\Репо с пробеломroker.log', "
+            r"'C:\it''s\start.log'",
+        )
 
 
 class RegistryTests(ServerCase):

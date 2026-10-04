@@ -12,6 +12,8 @@ from pathlib import Path
 from .. import kit
 from .boundaries import Boundaries, WINDOWS
 from .errors import UsageError
+from .ownership import PurgeTarget, prune_record_home
+from .report import Left, left_lines
 from .roles import Role, RoleOptions
 from .steps import FoundStep, NeedsHuman, Run, State
 
@@ -28,11 +30,12 @@ URL_DEST = "participant_broker_url"
 CLAUDE_DEST = "participant_claude"
 OPENCODE_DEST = "participant_opencode"
 PATHEXT = ".COM;.EXE;.BAT;.CMD"
-PURGE_CONSEQUENCE = (
+SERVER_ROLE = "server"
+SESSION_TEXT = (
     "файлы сессий исчезнут вместе с их токенами: вернуться в комнату получится "
-    "только новым входом через agentschat login. Переписка в комнате на сервере "
-    "останется на месте."
+    "только новым входом через agentschat login."
 )
+ROOM_SAFE = " Переписка в комнате на сервере останется на месте."
 CONFLICT = "установка отменена"
 BOTH = "оба"
 INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
@@ -151,12 +154,6 @@ class KitInstallStep:
         self.handled = True
 
 
-@dataclass(frozen=True)
-class Left:
-    text: str
-    files: tuple[str, ...] = ()
-
-
 @dataclass
 class Removal:
     uninstalled: bool = False
@@ -233,7 +230,7 @@ class PackageRemoveStep:
                 "нет: убираю запись, ничего не удаляя."
             )
         run.forget(ROLE, PACKAGE_KIND, tool_name)
-        prune_installer_home(run)
+        prune_record_home(record_path(run.boundaries))
 
 
 @dataclass(frozen=True)
@@ -246,6 +243,12 @@ class BrokerStep:
     def apply(self, run: Run) -> None:
         error = run.boundaries.probe(f"{broker_url(run)}/status").error
         raise RuntimeError(broker_refusal(run, error))
+
+
+def participant_consequence(targets: Sequence[PurgeTarget]) -> str:
+    if any(target.role == SERVER_ROLE for target in targets):
+        return SESSION_TEXT
+    return SESSION_TEXT + ROOM_SAFE
 
 
 def participant_role(version: tuple[int, int] | None = None) -> Role:
@@ -265,7 +268,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
             PackageRemoveStep(removal=removal),
         ),
         purge=(session_step(),),
-        purge_consequence=PURGE_CONSEQUENCE,
+        purge_consequence=participant_consequence,
         report=partial(report, removal=removal),
         add_options=add_options,
     )
@@ -588,17 +591,6 @@ def tool_instruction(run: Run) -> str:
     )
 
 
-def prune_installer_home(run: Run) -> None:
-    for directory in (
-        record_path(run.boundaries).parent,
-        run.boundaries.home / INSTALLER_HOME,
-    ):
-        try:
-            directory.rmdir()
-        except OSError:
-            continue
-
-
 def report(run: Run, removal: Removal) -> None:
     if not run.plan.remove:
         _reported_installed(run)
@@ -642,7 +634,7 @@ def removal_lines(run: Run, removal: Removal) -> list[str]:
             )
         )
     lines = (
-        ["Убрано не всё, осталось в системе:", *_left_lines(left)]
+        ["Убрано не всё, осталось в системе:", *left_lines(left)]
         if left
         else ["Набор и пакет убраны."]
     )
@@ -652,14 +644,6 @@ def removal_lines(run: Run, removal: Removal) -> list[str]:
     entry = INSTALL_ENTRY.get(run.boundaries.platform, "install.sh")
     lines.append(f"Поставить обратно: {entry} --role participant")
     return lines
-
-
-def _left_lines(left: Sequence[Left]) -> list[str]:
-    return [
-        line
-        for item in left
-        for line in (f"    {item.text}", *(f"        {path}" for path in item.files))
-    ]
 
 
 def _session_files_line(run: Run, removal: Removal) -> str:

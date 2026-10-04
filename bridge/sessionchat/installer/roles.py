@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .boundaries import Boundaries
+from .ownership import PurgeTarget
 from .steps import Destructive, FoundStep, Plan, Run, Step
 
 INSTALL_ORDER = ("server", "participant")
@@ -37,6 +38,10 @@ def no_report(run: Run) -> None:
     return None
 
 
+def unrestorable(targets: Sequence[PurgeTarget]) -> str:
+    return DEFAULT_CONSEQUENCE
+
+
 @dataclass(frozen=True)
 class Role:
     name: str
@@ -44,7 +49,7 @@ class Role:
     install: tuple[Step, ...] = ()
     remove: tuple[Step, ...] = ()
     purge: tuple[Step, ...] = ()
-    purge_consequence: str = ""
+    purge_consequence: Callable[[Sequence[PurgeTarget]], str] = unrestorable
     report: Callable[[Run], None] = no_report
     add_options: Callable[[RoleOptions], None] = no_options
 
@@ -78,8 +83,8 @@ class Role:
             step for step in self.purge if isinstance(step, Destructive)
         )
 
-    def consequence(self) -> str:
-        return self.purge_consequence or DEFAULT_CONSEQUENCE
+    def consequence(self, targets: Sequence[PurgeTarget]) -> str:
+        return self.purge_consequence(targets) or DEFAULT_CONSEQUENCE
 
 
 def built_in_roles() -> tuple[Role, ...]:
@@ -97,6 +102,11 @@ def order(names: Sequence[str], remove: bool) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def consequence_of(roles: Sequence[Role]) -> str:
-    said = [role.consequence() for role in roles if role.purge]
+def consequence_of(roles: Sequence[Role], targets: Sequence[PurgeTarget]) -> str:
+    owners = {target.role for target in targets}
+    said = [
+        role.consequence(targets)
+        for role in roles
+        if role.purge and role.name in owners
+    ]
     return " ".join(dict.fromkeys(said)) or DEFAULT_CONSEQUENCE

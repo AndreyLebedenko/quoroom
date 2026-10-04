@@ -14,7 +14,8 @@ from subprocess import CompletedProcess
 from sessionchat.installer.boundaries import Boundaries, Probe, WINDOWS
 from sessionchat.installer.confirmation import Confirmation
 from sessionchat.installer.ownership import Ownership
-from sessionchat.installer.roles import Role
+from sessionchat.installer.ownership import PurgeTarget
+from sessionchat.installer.roles import Role, unrestorable
 from sessionchat.installer.secrets import Secrets
 from sessionchat.installer.steps import (
     NeedsHuman,
@@ -136,7 +137,7 @@ def role(
     install: Sequence[Step] = (),
     remove: Sequence[Step] = (),
     purge: Sequence[Step] = (),
-    consequence: str = "",
+    consequence: Callable[[Sequence[PurgeTarget]], str] | None = None,
     add_options: Callable | None = None,
     report: Callable | None = None,
     record: str | None = None,
@@ -152,7 +153,7 @@ def role(
         install=tuple(install),
         remove=tuple(remove),
         purge=tuple(purge),
-        purge_consequence=consequence,
+        purge_consequence=consequence or unrestorable,
         report=report or (lambda run: None),
         add_options=add_options or (lambda options: None),
     )
