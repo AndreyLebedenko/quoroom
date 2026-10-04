@@ -1710,11 +1710,14 @@ class BuiltInRolesTests(ParticipantCase):
         self.assertEqual(plan.roles, (ROLE,))
         self.assertEqual(plan.answers[ROLE][participant.URL_DEST], "http://127.0.0.1:9")
 
-    def test_the_built_in_roles_are_the_participant(self):
-        self.assertEqual([role.name for role in built_in_roles()], [ROLE])
+    def test_the_built_in_roles_start_with_the_server(self):
+        self.assertEqual([role.name for role in built_in_roles()], ["server", ROLE])
+
+    def role_by_name(self, name: str):
+        return next(role for role in built_in_roles() if role.name == name)
 
     def test_the_record_of_the_participant_lives_outside_the_client_store(self):
-        record = built_in_roles()[0].record_path(self.given())
+        record = self.role_by_name(ROLE).record_path(self.given())
         self.assertNotIn(STORE, record.parts)
 
     def test_the_default_broker_of_the_role_is_the_documented_one(self):

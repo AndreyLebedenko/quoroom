@@ -56,9 +56,11 @@ def boundaries(
     interactive: bool = False,
     repo: Path | None = None,
     env: dict[str, str] | None = None,
-    run: Callable[[Sequence[str]], CompletedProcess] | None = None,
+    run: Callable[..., CompletedProcess] | None = None,
     probe: Callable[[str], Probe] | None = None,
     platform: str = WINDOWS,
+    resolve: Callable[[str], Sequence[str]] | None = None,
+    secret: Callable[[str], str] | None = None,
 ) -> Boundaries:
     return Boundaries(
         repo=repo or home,
@@ -67,9 +69,11 @@ def boundaries(
         stdin=Input(stdin, interactive),
         stdout=io.StringIO(),
         stderr=io.StringIO(),
-        run=run or (lambda argv: completed()),
+        run=run or (lambda argv, **kwargs: completed()),
         probe=probe or (lambda url: Probe(200, None)),
         platform=platform,
+        resolve=resolve or (lambda name: ("127.0.0.1",)),
+        secret=secret or (lambda prompt: ""),
     )
 
 
