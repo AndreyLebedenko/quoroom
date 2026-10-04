@@ -1,6 +1,6 @@
 # Task local-installers-05: Participant role
 
-**Status:** Planned.
+**Status:** Completed (2026-10-04).
 **Story:** `.development/tasks/story-local-installers.md`
 **Depends on:** tasks 01-04.
 
@@ -72,16 +72,29 @@ agent CLIs, and the broker address.
 
 ## Acceptance criteria
 
-- [ ] Tests for each requirement above with mocked subprocesses, network,
+- [x] Tests for each requirement above with mocked subprocesses, network,
       a temporary home, and a temporary `UV_TOOL_DIR`; none touches the real
       home directory. These are the Windows functional flows of this role.
-- [ ] Tests: repeat install changes nothing; install after a partial run
+- [x] Tests: repeat install changes nothing; install after a partial run
       continues; removal after a partial install works and is repeatable;
       purge with a kept edited kit file keeps `kit.json`.
-- [ ] Test: the real role's discovery, run against a home that holds every
+- [x] Test: the real role's discovery, run against a home that holds every
       role's record, `kit.json`, and server data, targets none of them.
-- [ ] Test: the parser built from `built_in_roles()` has no conflicting
+- [x] Test: the parser built from `built_in_roles()` has no conflicting
       options.
-- [ ] Functional flow in the task 04 environment: participant install,
+- [x] Functional flow in the task 04 environment: participant install,
       repeat, remove, purge; observations reported in the handoff.
-- [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+- [x] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Implementation notes
+
+- Merged as 656c66f; six review rounds.
+- Decisions taken in review:
+  - The kit refresh runs `agentschat install` only for CLIs whose manifest
+    entries all match by digest. Edited files are reported, never
+    overwritten.
+  - The package and its record are kept only while the manifest holds a
+    CLI that the run did not name. A full `--remove` removes the package
+    and reports kept edited files as calling a missing `agentschat`.
+- Moved to task 08: a participant `--purge` narrowed by a CLI flag still
+  deletes every agent's token files; the repeat-removal wording.
