@@ -46,6 +46,45 @@ python3 python3-venv pipx mkcert libnss3-tools docker.io docker-compose-v2 curl 
 ./run.sh scenario verify-shared-home
 ```
 
+## Человеческие шаги: exec-root
+
+Шаги, которые установщик только проверяет, в лаборатории выполняет человек -
+так же, как на своей машине, иначе проверка ничего не доказывает. Внутри
+машины нет `sudo`, а таких шагов два: строка в hosts и `mkcert -install`.
+`exec-root` запускает команду от root:
+
+```sh
+./run.sh up
+printf '127.0.0.1 agentschat.local\n' | ./run.sh exec-root \
+    'grep -q agentschat.local /etc/hosts || cat >> /etc/hosts'
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role server --admin-user <имя>'
+CAROOT=$(./run.sh exec 'mkcert -CAROOT')
+./run.sh exec-root "CAROOT=$CAROOT mkcert -install"
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role server --admin-user <имя>'
+```
+
+Порядок важен и повторяет установщик. Строка в hosts нужна раньше всего: без неё
+`agentschat.local` в машине не резолвится. Первый запуск установщика останавливается
+на доверии к сертификату, потому что CA ещё не создан: сертификат выпускает сам
+установщик от пользователя `lab`, и только после этого `mkcert -install` от root
+с тем же `CAROOT` доверяет именно ему. Если выпустить сертификат заранее и от
+root, корень окажется его, и `lab` не сможет им выпустить свой: файл ключа ему
+недоступен.
+
+Второй запуск продолжает с места остановки и доводит установку до следующего
+человеческого шага - комнаты: её создаёт человек в Element, в лаборатории вместо
+него `room-helper.py` под `exec` (шаг человека, R4). Третий запуск с `--room-id`
+заканчивает установку и печатает отчёт.
+
+`CAROOT` смотрим у пользователя `lab` (`/home/lab/.local/share/mkcert`): CA
+появляется при первом выпуске, а не при вызове `-CAROOT`. Имя `CAROOT` в команде
+обязательно: под rootом свой CA (`/root/.local/share/mkcert`) он установил бы не
+тот, которым подписан выпущенный сертификат, и доверия не было бы.
+
+Отдельного выпуска сертификата человек не делает: это шаг установщика, и
+`mkcert -install` доверяет уже выпущенному. `exec-root` требует поднятое
+окружение (`./run.sh up` выше) и, в отличие от `scenario`, оставляет его живым.
+
 `exec` работает и с вводом, так что подтверждения можно подавать так:
 
 ```sh

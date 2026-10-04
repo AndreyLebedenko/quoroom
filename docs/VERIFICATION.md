@@ -48,6 +48,46 @@ General, запросы от имени двух существующих акк
 показал ошибку сравнения — «пропавшими» были события до якоря. Полное
 чтение вперёд от начала комнаты даёт ровно все события после `m.room.create`.
 
+# Функциональный прогон в лаборатории: homeserver и Caddy - 4 октября 2026
+
+Лаборатория `tools/linux-container`: Ubuntu 24.04 на своём `docker:dind`, HOME
+`/home/lab`, порты хоста не публиковались. Образ
+`ghcr.io/continuwuity/continuwuity:latest`, сам себя называющий conduwuit
+26.9.1. Это функциональный прогон в лаборатории, а не живой сценарий из
+истории: живой прогон делает человек с Element в браузере, и его ждёт задача
+08. Что установщик делал на этих данных - в отчёте задачи
+[.development/reports/task-local-installers-06-server-install.md](../.development/reports/task-local-installers-06-server-install.md).
+
+Живой стенд Windows при этом не трогали: `agentschat-caddy`,
+`agentschat-element` и `agentschat-continuwuity` остались подняты, 14 томов и
+7 сетей до и после, остатков `quoroom-linux-lab` нет.
+
+Внешние факты, ради которых эта запись и ведётся:
+
+1. **Серверный токен регистрации приходит в лог.** На свежей базе настроенный в
+   `continuwuity.toml` токен первый аккаунт не регистрирует, а сервер печатает
+   свой: `using the registration token <issued-token>`. Настроенный токен
+   начинает работать после первого аккаунта. Подробности и доказательства -
+   [.development/bugreports/registration-token-first-account.md](../.development/bugreports/registration-token-first-account.md).
+2. **Идентификаторы комнат у свежего Continuwuity идут без домена.**
+   Комната, созданная для прогона, это `!sA9OkuYMoPu9zQG6qZ-S7Gba8HNS2JbfGoAZmgqwXy8`,
+   без `:agentschat.local`. Вход в такую комнату с дописанным доменом идёт по
+   федерации и падает с `M_UNKNOWN No server available to assist in joining`,
+   даже для пользователя, который уже в комнате. Псевдоним, наоборот, всегда
+   называет сервер.
+3. **Caddy отвечает `502`, пока homeserver перезапускается.** Ответ шлюза нельзя
+   считать признаком поднявшегося сервера.
+4. **`GET /register/available` отвечает `200 {"available": true}` для свободного
+   имени и `400 M_USER_IN_USE` для занятого**, без авторизации.
+5. **Закрытая регистрация отвечает `403 M_FORBIDDEN "This server is not
+   accepting registrations at this time."`**, и этот признак отличается от `401`
+   неверного токена. Список способов регистрации (`flows` в ответе UIA) и
+   `available` при этом не меняются, и для проверки не годятся.
+
+Что живьём не проверено: Windows (ветка `platform="windows"` покрыта только
+тестами), Element в браузере, сервер, собранный руками. Разбор срока
+сертификата - в отчёте задачи local-installers-06.
+
 # Проверка моста — 6 сентября 2026
 
 > **Отменено.** Проверки относятся к мосту первого поколения

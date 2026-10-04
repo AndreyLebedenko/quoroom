@@ -84,8 +84,9 @@ class Role:
 
 def built_in_roles() -> tuple[Role, ...]:
     from .participant import participant_role
+    from .server import server_role
 
-    return (participant_role(),)
+    return (server_role(), participant_role())
 
 
 def order(names: Sequence[str], remove: bool) -> tuple[str, ...]:
