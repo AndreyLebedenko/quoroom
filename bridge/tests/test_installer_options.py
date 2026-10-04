@@ -5,7 +5,6 @@ import unittest
 from tests.installer_fakes import InstallerTestCase, Marker, option, role
 from sessionchat.installer.main import DONE, USAGE, main
 from sessionchat.installer.options import NO_ROLES, UsageError, parse
-from sessionchat.installer.roles import built_in_roles
 
 
 def both_roles():
@@ -224,13 +223,13 @@ class ExitCodeTests(InstallerTestCase):
 
     def test_a_build_without_roles_says_so_instead_of_pretending(self):
         given = self.boundaries()
-        code = main([], given, built_in_roles())
+        code = main([], given, ())
         self.assertEqual(code, USAGE)
         self.assertIn(NO_ROLES, given.stderr.getvalue())
 
     def test_help_works_in_a_build_without_roles(self):
         given = self.boundaries()
-        code = main(["--help"], given, built_in_roles())
+        code = main(["--help"], given, ())
         self.assertEqual(code, DONE)
 
     def test_a_successful_run_exits_zero(self):

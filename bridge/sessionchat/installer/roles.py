@@ -83,7 +83,9 @@ class Role:
 
 
 def built_in_roles() -> tuple[Role, ...]:
-    return ()
+    from .participant import participant_role
+
+    return (participant_role(),)
 
 
 def order(names: Sequence[str], remove: bool) -> tuple[str, ...]:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from collections.abc import Callable, Mapping, Sequence
@@ -22,6 +24,17 @@ from sessionchat.installer.steps import (
     State,
     Step,
 )
+
+SH = shutil.which("sh")
+
+
+def posix_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    text = str(path)
+    if len(text) > 1 and text[1] == ":":
+        return f"/{text[0].lower()}{text[2:]}".replace("\\", "/")
+    return text.replace("\\", "/")
 
 
 class Input(io.StringIO):
@@ -199,6 +212,7 @@ def make_run(
 
 
 __all__ = [
+    "SH",
     "FileMarker",
     "InstallerTestCase",
     "Marker",
@@ -207,6 +221,7 @@ __all__ = [
     "make_run",
     "option",
     "owned_remover",
+    "posix_path",
     "recorded",
     "role",
 ]
