@@ -1,6 +1,6 @@
 # Task local-installers-06: Server role install
 
-**Status:** Planned.
+**Status:** Completed (2026-10-04).
 **Story:** `.development/tasks/story-local-installers.md`
 **Depends on:** tasks 02-04.
 
@@ -69,15 +69,42 @@ mechanisms support.
 
 ## Acceptance criteria
 
-- [ ] Tests for each requirement with mocked Docker, subprocesses, network,
+- [x] Tests for each requirement with mocked Docker, subprocesses, network,
       and temporary directories; no real hosts file, trust store, or stack.
       These are the Windows functional flows of this role.
-- [ ] Tests: repeat run registers nothing twice and keeps existing files;
+- [x] Tests: repeat run registers nothing twice and keeps existing files;
       a run interrupted after registration and before `config.yaml` was
       written recovers the token by login; secrets never appear in output.
-- [ ] Functional flow in the task 04 environment, with its room helper:
+- [x] Functional flow in the task 04 environment, with its room helper:
       server install, repeat; observations reported in the handoff. The
       human steps (hosts entry, `mkcert -install`) are performed the way the
       human would, through `tools/linux-container/run.sh exec-root`, never
       by the installer. Document `exec-root` in that directory's README.
-- [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+- [x] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Implementation notes
+
+- Merged as fe68ab8. One design round with two revisions, then four code
+  review rounds.
+- Decisions taken in review:
+  - The installer registers accounts and edits `continuwuity.toml` only
+    when that file is in the server ownership record. On a hand-built
+    server, a missing account or open registration is a human step.
+    Accounts are never recorded.
+  - Account existence is checked with `GET /register/available`.
+  - The human registers first with the configured token. The token
+    continuwuity prints at first start is read from the logs only after a
+    401 "Invalid registration token", and only for that account.
+  - Registration closure is the file value plus a probe with a wrong token
+    (403).
+  - Missing `user_id`, `access_token` and `device_id` are inserted under an
+    agent the human declared, even in a `config.yaml` the installer did not
+    create. Existing values other than `PASTE_` placeholders are a conflict.
+  - Core additions in `boundaries.py`: `run(stdin=, output=)` with DEVNULL
+    stdin by default, `resolve`, `secret`, `Probe.untrusted`. PyYAML and
+    requests stay in `bridge/installer_host.py` under the venv.
+- Room ids: fresh continuwuity issues `!opaque` ids with no server part;
+  both forms are accepted and none is rewritten.
+- Not verified live: Windows, the no-echo password prompt and the
+  interactive name prompt (the lab has no tty), Element. These are left for
+  the human's live scenarios in task 08.
