@@ -23,7 +23,8 @@ checks for Windows and the Linux container.
 - `docs/INSTALL.md`, `README.md`, `docs/ARCHITECTURE.md`, and
   `docs/VERIFICATION.md` (pending section only), and the comment on
   `registration_token` in `docker/continuwuity/continuwuity.toml.example`.
-  No code.
+  Code only for the participant report wording items in the acceptance
+  criteria (`participant.py` and its tests).
   `docs/SESSION_BRIDGE.md` belongs to task 01.
 
 ## Requirements
@@ -53,8 +54,19 @@ checks for Windows and the Linux container.
   English state names of `netstat` (`LISTEN`/`LISTENING`); on a localized
   Windows only its Docker-ports check is reliable, so the handoff tells the
   human to stop the Windows stack first and confirm 443 is free. Results
-  are recorded only after
-  the human runs them.
+  are recorded only after the human runs them.
+- The Windows handoff also covers, from tasks 06-07:
+  - the interactive admin name prompt and the no-echo password prompt,
+    which the lab could not reach (no tty);
+  - the owner's server is hand-built: the installer registers nothing and
+    edits no config there, and open registration
+    (`allow_registration = true`) stops every server run with exit 3 until
+    the human closes it; say how;
+  - `--role server --remove` on a hand-built server stops the stack and
+    removes its containers and network, and keeps everything else;
+  - `stop.ps1` finds the broker by command line machine-wide, so a removal
+    run from another checkout stops the live broker; run the scenario from
+    the live checkout only.
 
 ## Acceptance criteria
 
