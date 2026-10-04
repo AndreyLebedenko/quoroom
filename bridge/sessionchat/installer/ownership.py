@@ -16,6 +16,14 @@ class PurgeTarget:
     id: str
 
 
+def prune_record_home(path: Path) -> None:
+    for directory in (path.parent, path.parent.parent):
+        try:
+            directory.rmdir()
+        except OSError:
+            continue
+
+
 @dataclass
 class Ownership:
     path: Path

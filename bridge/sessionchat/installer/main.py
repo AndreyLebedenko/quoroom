@@ -53,7 +53,7 @@ def main(argv: Sequence[str], boundaries: Boundaries, roles: Sequence[Role]) -> 
         )
         targets = _targets(selected, plan, run)
         if plan.purge:
-            _confirmed(run, targets, consequence_of(selected))
+            _confirmed(run, targets, consequence_of(selected, targets))
     except Cancelled:
         boundaries.stderr.write("Отменено человеком, ничего не изменено.\n")
         return CANCELLED
