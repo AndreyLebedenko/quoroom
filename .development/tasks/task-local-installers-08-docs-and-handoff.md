@@ -26,7 +26,10 @@ checks for Windows and the Linux container.
 - `docs/INSTALL.md`: both platforms, both roles, prerequisites per platform,
   the human steps (hosts, mkcert root CA) with exact commands, reruns,
   `--remove`, `--purge`, and what is retained. The manual procedure stays
-  available as a fallback.
+  available as a fallback. State that a participant `--purge` deletes the
+  broker token files of every agent even when `--claude` or `--opencode`
+  narrows the removal (task 05 review, round 4; the confirmation lists
+  them).
 - README: links to `install.ps1` / `install.sh` and states the verified
   scope exactly: Windows, and Linux verified in an Ubuntu 24.04 container,
   not native Linux.
@@ -52,6 +55,10 @@ checks for Windows and the Linux container.
       `/chatlogin` step (since task 05 the restart line comes from
       `agentschat install`'s own summary mid-run; check the human can still
       find it, and adjust the wording if not).
+- [ ] A repeat participant `--remove` after the package is already gone
+      does not say "вернуться в комнату можно новым входом": that wording
+      depends on `Removal.package_gone`, which only the run that removed the
+      package sets (task 05 review, round 6). Fix the wording with a test.
 - [ ] The handoff is complete enough for the human to run it without this
       conversation.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
