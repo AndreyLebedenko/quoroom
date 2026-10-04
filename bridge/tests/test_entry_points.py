@@ -11,6 +11,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from tests.installer_fakes import SH, posix_path
 from sessionchat.installer.main import CANCELLED, DONE, FAILED, HUMAN, USAGE
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -18,7 +19,6 @@ PWSH_51 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / (
     r"System32\WindowsPowerShell\v1.0\powershell.exe"
 )
 PWSH_7 = shutil.which("pwsh")
-SH = shutil.which("sh")
 CORE_CODES = (DONE, FAILED, USAGE, HUMAN, CANCELLED)
 MISSING_PYTHON = 9
 PROBE_MARKER = "quoroom-python="
@@ -71,15 +71,6 @@ def seven() -> str | None:
 
 def shell() -> str | None:
     return None if SH else "posix sh не найден в PATH"
-
-
-def posix_path(path: Path) -> str:
-    if os.name != "nt":
-        return str(path)
-    text = str(path)
-    if len(text) > 1 and text[1] == ":":
-        return f"/{text[0].lower()}{text[2:]}".replace("\\", "/")
-    return text.replace("\\", "/")
 
 
 class EntryPointCase(unittest.TestCase):
