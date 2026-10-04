@@ -14,15 +14,23 @@ checks for Windows and the Linux container.
 - Story: "Verification", "Acceptance criteria", "Handoff".
 - AGENTS.md: `README.md` and `docs/` are Russian; VERIFICATION records what
   was run, what was observed, and the date.
+- `.development/bugreports/registration-token-first-account.md` (task 06):
+  continuwuity rejects the configured `registration_token` until the first
+  account is created with the token it prints at first start.
 
 ## Boundary
 
 - `docs/INSTALL.md`, `README.md`, `docs/ARCHITECTURE.md`, and
-  `docs/VERIFICATION.md` (pending section only). No code.
+  `docs/VERIFICATION.md` (pending section only), and the comment on
+  `registration_token` in `docker/continuwuity/continuwuity.toml.example`.
+  No code.
   `docs/SESSION_BRIDGE.md` belongs to task 01.
 
 ## Requirements
 
+- `docs/INSTALL.md` step 3a and the `continuwuity.toml.example` comment
+  match the first-account behaviour in the task 06 bugreport; close that
+  bugreport.
 - `docs/INSTALL.md`: both platforms, both roles, prerequisites per platform,
   the human steps (hosts, mkcert root CA) with exact commands, reruns,
   `--remove`, `--purge`, and what is retained. The manual procedure stays
