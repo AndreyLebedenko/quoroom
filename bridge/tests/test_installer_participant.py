@@ -146,7 +146,8 @@ class Machine:
     def refusal_words(self) -> str:
         return str(
             kit.KitConflict(
-                [kit.Step(kit.Action.CONFLICT, self.target_for("claude"), "claude")]
+                [kit.Step(kit.Action.CONFLICT, self.target_for("claude"), "claude")],
+                "ru",
             )
         )
 
@@ -506,7 +507,7 @@ class PackageInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
         self.assertNotIn(f"{self.uv_bin} install", self.machine.log)
@@ -526,11 +527,11 @@ class PackageInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
         self.assertNotIn(
-            f"{self.uv_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.uv_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -574,7 +575,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -614,7 +615,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.uv_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.uv_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -629,7 +630,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install("--claude")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -637,7 +638,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install("--opencode")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -646,7 +647,7 @@ class KitInstallTests(ParticipantCase):
         self.assertEqual(code, DONE)
         self.assertIn("Какие CLI получают набор?", given.stdout.getvalue())
         self.assertIn(
-            f"{self.pipx_bin} install --claude {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -654,7 +655,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install(stdin="3\n", interactive=True)
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -685,7 +686,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -716,7 +717,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -727,11 +728,11 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
         self.assertNotIn(
-            f"{self.uv_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.uv_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -741,7 +742,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install("--opencode")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -751,7 +752,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -790,7 +791,7 @@ class KitInstallTests(ParticipantCase):
         self.machine.log.clear()
         self.install()
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -800,7 +801,7 @@ class KitInstallTests(ParticipantCase):
         self.machine.log.clear()
         self.install()
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -810,7 +811,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install("--opencode")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
         self.assertIn("моя правка", self.machine.kit_text("claude"))
@@ -819,7 +820,7 @@ class KitInstallTests(ParticipantCase):
         code, _ = self.install(platform="windows")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.home / 'pipx' / 'bin' / 'agentschat.exe'} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.home / 'pipx' / 'bin' / 'agentschat.exe'} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -905,7 +906,7 @@ class KitReportTests(ParticipantCase):
         code, _ = self.remove()
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} uninstall --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} uninstall --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -1195,7 +1196,7 @@ class RemovalTests(ParticipantCase):
         code, _ = self.remove()
         self.assertEqual(code, DONE)
         kit = self.machine.log.index(
-            f"{self.pipx_bin} uninstall --claude --opencode {participant.JSON_FLAG}"
+            f"{self.pipx_bin} uninstall --lang ru --claude --opencode {participant.JSON_FLAG}"
         )
         package = self.machine.log.index("pipx uninstall quoroom")
         self.assertLess(kit, package)
@@ -1205,7 +1206,7 @@ class RemovalTests(ParticipantCase):
         code, _ = self.remove("--opencode")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} uninstall --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} uninstall --lang ru --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 

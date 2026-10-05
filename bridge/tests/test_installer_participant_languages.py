@@ -38,17 +38,6 @@ BROKER = "http://10.0.0.5:8770"
 OFFLINE = Probe(None, "connection refused")
 
 
-class RecordingMachine(Machine):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.spoken: set[str] = set()
-
-    def agentschat(self, argv):
-        done = super().agentschat(argv)
-        self.spoken.update(f"{done.stdout}\n{done.stderr}".splitlines())
-        return done
-
-
 @dataclass
 class RunSpy:
     name: str = "spy"
@@ -73,7 +62,7 @@ def watched(role, spy: RunSpy):
 class ParticipantLanguageCase(ParticipantCase):
     def setUp(self):
         super().setUp()
-        self.machine = RecordingMachine(self.home)
+        self.machine = Machine(self.home)
         self.spy = RunSpy()
 
     def roles(self):
@@ -90,11 +79,8 @@ class ParticipantLanguageCase(ParticipantCase):
         self.machine.installed_by.add("pipx")
         self.machine.seed_kit(["claude"])
 
-    def own_words(self, given) -> str:
-        shown = given.stdout.getvalue() + given.stderr.getvalue()
-        return "\n".join(
-            line for line in shown.splitlines() if line not in self.machine.spoken
-        )
+    def everything(self, given) -> str:
+        return given.stdout.getvalue() + given.stderr.getvalue()
 
 
 class Scenarios(ParticipantLanguageCase):
@@ -249,12 +235,12 @@ class Scenarios(ParticipantLanguageCase):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(self, name)))
 
-    def test_the_installers_own_words_are_english_in_every_scenario(self):
+    def test_everything_the_installer_prints_is_english_in_every_scenario(self):
         for name, expected in self.TABLE:
             with self.subTest(name=name):
                 code, given = self.run_fresh(name, "en")
                 self.assertEqual(code, expected, given.stderr.getvalue())
-                shown = self.own_words(given)
+                shown = self.everything(given)
                 self.assertTrue(shown)
                 self.assertIsNone(CYRILLIC.search(shown), shown)
 
@@ -271,7 +257,7 @@ class Scenarios(ParticipantLanguageCase):
 
 class EnglishOutputTests(ParticipantLanguageCase):
     def assert_english(self, given):
-        shown = self.own_words(given)
+        shown = self.everything(given)
         self.assertTrue(shown)
         self.assertIsNone(CYRILLIC.search(shown), shown)
 
@@ -399,7 +385,23 @@ class EnglishOutputTests(ParticipantLanguageCase):
         code, _ = self.install(stdin="both\n", interactive=True, lang="en")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang en --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
+
+    def test_the_client_is_asked_to_answer_in_the_language_of_the_run(self):
+        code, _ = self.install("--claude", lang="ru")
+        self.assertEqual(code, DONE)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude {participant.JSON_FLAG}",
+            self.machine.log,
+        )
+
+    def test_a_russian_run_asks_an_english_client_to_answer_in_russian(self):
+        code, _ = self.install("--lang", "ru", lang="en")
+        self.assertEqual(code, DONE)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -418,7 +420,7 @@ class RussianOutputTests(ParticipantLanguageCase):
         code, _ = self.install(stdin="оба\n", interactive=True, lang="ru")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -426,7 +428,7 @@ class RussianOutputTests(ParticipantLanguageCase):
         code, _ = self.install(stdin="both\n", interactive=True, lang="ru")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -613,7 +615,7 @@ class KitFailureTests(ParticipantLanguageCase):
     ):
         refusal = str(
             kit.KitConflict(
-                [kit.Step(kit.Action.CONFLICT, Path("some-file"), "claude")]
+                [kit.Step(kit.Action.CONFLICT, Path("some-file"), "claude")], "ru"
             )
         )
         for lang in LANGUAGES:

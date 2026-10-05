@@ -59,10 +59,12 @@ class ClientLanguageTestCase(unittest.TestCase):
         self.catalogue = write_catalogue(
             self.catalogue_dir,
             {
+                **client.CATALOGUE.templates("en"),
                 "failure_line": "ERR-EN {message}",
                 "probe": "English probe {name}",
             },
             {
+                **client.CATALOGUE.templates("ru"),
                 "failure_line": "ERR-RU {message}",
                 "probe": "Русская проба {name}",
             },

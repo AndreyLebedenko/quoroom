@@ -33,6 +33,7 @@ OPENCODE_DEST = "participant_opencode"
 PATHEXT = ".COM;.EXE;.BAT;.CMD"
 SERVER_ROLE = "server"
 JSON_FLAG = "--json"
+LANGUAGE_FLAG = "--lang"
 INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
 
 
@@ -143,7 +144,13 @@ class KitInstallStep:
         clis = self.refreshable(run)
         if clis:
             result = run.boundaries.run(
-                [str(agentchat(run)), "install", *cli_flags(clis), JSON_FLAG]
+                [
+                    str(agentchat(run)),
+                    "install",
+                    *language_flags(run),
+                    *cli_flags(clis),
+                    JSON_FLAG,
+                ]
             )
             if result.returncode != 0:
                 raise RuntimeError(kit_failure(run, result, kit.COMMAND_INSTALL))
@@ -179,7 +186,13 @@ class KitRemoveStep:
             run.warn(run.t("participant.agentschat_missing", manifest=KIT_MANIFEST))
         else:
             result = run.boundaries.run(
-                [str(path), "uninstall", *cli_flags(self.removal.asked), JSON_FLAG]
+                [
+                    str(path),
+                    "uninstall",
+                    *language_flags(run),
+                    *cli_flags(self.removal.asked),
+                    JSON_FLAG,
+                ]
             )
             if result.returncode != 0:
                 raise RuntimeError(kit_failure(run, result, kit.COMMAND_UNINSTALL))
@@ -525,6 +538,10 @@ def asked_clis(run: Run) -> tuple[str, ...]:
 
 def cli_flags(clis: Sequence[str]) -> list[str]:
     return [f"--{cli}" for cli in clis]
+
+
+def language_flags(run: Run) -> list[str]:
+    return [LANGUAGE_FLAG, run.boundaries.lang]
 
 
 def kit_report(run: Run, result, command: str) -> kit.Report:

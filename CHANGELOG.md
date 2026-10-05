@@ -14,6 +14,10 @@
   and `install.sh` print before Python starts.
 - Participant role: installs the `quoroom` client and the per-user kit
   (`agentschat install`) for Claude Code and OpenCode.
+- The kit commands speak the language of the run: `agentschat install` and
+  `agentschat uninstall` take `--lang en|ru`, and the participant installer
+  passes its own `--lang` to the client. Under `--json` they answer with one
+  document of codes, which is the same in both languages.
 - Server role: Continuwuity, Element Web, Caddy with a local TLS certificate,
   the broker, accounts for the human and the bot agents.
 - Removal and purge per role, with ownership records so the installer touches
@@ -48,6 +52,7 @@
 - Registrations surviving a broker restart are covered by unit tests only, not
   tried live; messages queued at restart are lost.
 - `docs/` is written in Russian.
-- `agentschat install` and `agentschat login` print Russian text, so a
-  participant install shows a Russian block inside an English run.
+- `agentschat login` prints Russian text, so a participant install still shows a
+  Russian block inside an English run. `agentschat install` and
+  `agentschat uninstall` follow the language of the run.
 - Open bug reports are in `.development/bugreports/`.

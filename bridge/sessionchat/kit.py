@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from importlib.resources.abc import Traversable
 
+from .i18n import Catalogue
+
 CLIS = ("claude", "opencode")
 CLI_NAMES = {"claude": "Claude Code", "opencode": "OpenCode"}
 DEFAULT_ROOTS = {
@@ -19,6 +21,7 @@ DEFAULT_ROOTS = {
     "opencode": Path.home() / ".config" / "opencode",
 }
 KIT = files(__package__) / "kit"
+CATALOGUE = Catalogue("sessionchat", "client_messages")
 
 
 class Action(Enum):
@@ -39,16 +42,9 @@ COMMAND_UNINSTALL = "uninstall"
 CODE_NONE = "none"
 CODE_CONFLICT = "conflict"
 
-DISPLAY_RU = {
-    Action.INSTALL: "установлен",
-    Action.UPDATE: "обновлён",
-    Action.OVERWRITE: "перезаписан",
-    Action.UNCHANGED: "без изменений",
-    Action.CONFLICT: "занят чужим файлом",
-    Action.REMOVE: "удалён",
-    Action.KEEP: "оставлен (изменён вручную)",
-    Action.GONE: "уже нет",
-}
+
+def action_key(action: Action) -> str:
+    return f"kit.action.{action.value}"
 
 
 @dataclass(frozen=True)
@@ -71,8 +67,13 @@ class Step:
     cli: str
     content: bytes = b""
 
-    def line(self) -> str:
-        return f"{DISPLAY_RU[self.action]}  {self.target}"
+    def line(self, lang: str) -> str:
+        return CATALOGUE.text(
+            lang,
+            "kit.step_line",
+            action=CATALOGUE.text(lang, action_key(self.action)),
+            target=self.target,
+        )
 
 
 @dataclass(frozen=True)
@@ -136,15 +137,11 @@ def conflicts(steps: Iterable[Step]) -> list[Step]:
 
 
 class KitConflict(Exception):
-    def __init__(self, steps: list[Step]):
+    def __init__(self, steps: list[Step], lang: str):
         self.steps = steps
+        self.lang = lang
         listed = "\n".join(f"    {step.target}" for step in steps)
-        super().__init__(
-            "установка отменена, ничего не записано. Эти файлы уже существуют, "
-            "отличаются от набора Quoroom и установлены не им:\n"
-            f"{listed}\n"
-            "Чтобы перезаписать их, повторите с --force: agentschat install --force"
-        )
+        super().__init__(CATALOGUE.text(lang, "kit.conflict", files=listed))
 
     @property
     def targets(self) -> list[Path]:
@@ -237,10 +234,12 @@ def plan_install(
     return steps
 
 
-def apply_install(steps: list[Step], manifest: dict[Path, Entry]) -> dict[Path, Entry]:
+def apply_install(
+    steps: list[Step], manifest: dict[Path, Entry], lang: str
+) -> dict[Path, Entry]:
     refused = conflicts(steps)
     if refused:
-        raise KitConflict(refused)
+        raise KitConflict(refused, lang)
     updated = dict(manifest)
     for step in steps:
         if step.action in WRITES:
@@ -255,10 +254,12 @@ def install(
     roots: dict[str, Path],
     force: bool = False,
     source: Traversable = KIT,
+    *,
+    lang: str,
 ) -> list[Step]:
     manifest = load_manifest(manifest_path)
     steps = plan_install(roots, manifest, force, source)
-    save_manifest(manifest_path, apply_install(steps, manifest))
+    save_manifest(manifest_path, apply_install(steps, manifest, lang))
     return steps
 
 
@@ -305,6 +306,8 @@ def uninstall(
     roots: dict[str, Path],
     clis: tuple[str, ...] = CLIS,
     force: bool = False,
+    *,
+    lang: str,
 ) -> list[Step]:
     manifest = load_manifest(manifest_path)
     steps = plan_uninstall(manifest, clis, force)
@@ -312,29 +315,34 @@ def uninstall(
     return steps
 
 
-def restart_hint(changed: list[Step]) -> str:
+def cli_names(touched: set[str], lang: str) -> str:
+    names = [CLI_NAMES[cli] for cli in CLIS if cli in touched]
+    if len(names) == 1:
+        return names[0]
+    return CATALOGUE.text(lang, "kit.cli_names", first=names[0], second=names[1])
+
+
+def restart_hint(changed: list[Step], lang: str) -> str:
     touched = {step.cli for step in changed}
-    names = " и ".join(CLI_NAMES[cli] for cli in CLIS if cli in touched)
-    return f"Перезапустите открытые сессии {names}: запущенные изменений не увидят."
+    return CATALOGUE.text(lang, "kit.restart_hint", names=cli_names(touched, lang))
 
 
-def install_summary(steps: list[Step]) -> str:
+def install_summary(steps: list[Step], lang: str) -> str:
     changed = [step for step in steps if step.action in WRITES]
     if not changed:
-        return "AGENTSCHAT: набор Quoroom уже на месте, менять нечего."
-    return f"AGENTSCHAT: набор Quoroom установлен.\n{restart_hint(changed)}"
+        return CATALOGUE.text(lang, "kit.install_unchanged")
+    return "\n".join(
+        [CATALOGUE.text(lang, "kit.install_done"), restart_hint(changed, lang)]
+    )
 
 
-def uninstall_summary(steps: list[Step]) -> str:
+def uninstall_summary(steps: list[Step], lang: str) -> str:
     if not steps:
-        return "AGENTSCHAT: установленного набора Quoroom нет, удалять нечего."
-    lines = ["AGENTSCHAT: удаление набора Quoroom закончено."]
+        return CATALOGUE.text(lang, "kit.uninstall_nothing")
+    lines = [CATALOGUE.text(lang, "kit.uninstall_done")]
     removed = [step for step in steps if step.action is Action.REMOVE]
     if removed:
-        lines.append(restart_hint(removed))
+        lines.append(restart_hint(removed, lang))
     if any(step.action is Action.KEEP for step in steps):
-        lines.append(
-            "Файлы, изменённые вручную, оставлены. Удалить и их: "
-            "agentschat uninstall --force"
-        )
+        lines.append(CATALOGUE.text(lang, "kit.uninstall_kept"))
     return "\n".join(lines)
