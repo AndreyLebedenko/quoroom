@@ -64,3 +64,13 @@ Russian by habit.
       added to runtime code.
 - [ ] `register_account.py` is English by default.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Note from task 12 (orchestrator, 2026-10-05)
+
+Task 12 already contains a small JavaScript lexer (in
+`bridge/tests/plugin/agentschat.test.mjs`) that strips comments and checks that
+no Cyrillic remains in strings, templates and regexes of the plugin. Reuse its
+approach (and a Python equivalent via `tokenize`/`ast`) for the finer check this
+card asks for rather than inventing another. The plugin file still has Russian
+comments by design (comments are out of scope for the story); the allowlist or
+the lexer must say so.

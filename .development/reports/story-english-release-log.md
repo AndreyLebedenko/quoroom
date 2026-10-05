@@ -34,3 +34,14 @@ Kept by the orchestrator (claude-code) for the owner's final review. Branch
 - `stop.sh`: the `shellcheck disable=SC2086` directive was removed by task 16
   (its own test forbids comments outside the header); shellcheck is not part of
   the project checks.
+
+## Review rounds (independent reviewer on glm's code)
+
+- Task 10: ASCII-only JSON, conflict explanation restored, `ok` verified on
+  success, tests proving the installer ignores client prose. Fixed by glm.
+- Task 11: unused `lang` parameter, JSON files without final newline, duplicate
+  test, ASCII check on the real English client run. Fixed by glm.
+- Task 13: digests were computed on CRLF working-tree bytes (LF checkouts would
+  fail), kit variant was chosen per language instead of per CLI (silent partial
+  kit while `kit/en` has only claude), agreement test matched prose, `ok` was a
+  deny-list. Fixed on `fix/task-13-review-round-1` (subagent).
