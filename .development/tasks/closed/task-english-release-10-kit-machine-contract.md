@@ -1,6 +1,6 @@
 # Task english-release-10: install and uninstall report actions as codes
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** none; must land before task 11.
 **Estimate:** 3 hours.

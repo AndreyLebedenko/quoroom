@@ -32,7 +32,7 @@ CLAUDE_DEST = "participant_claude"
 OPENCODE_DEST = "participant_opencode"
 PATHEXT = ".COM;.EXE;.BAT;.CMD"
 SERVER_ROLE = "server"
-CONFLICT = str(kit.KitConflict([])).partition(",")[0]
+JSON_FLAG = "--json"
 INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
 
 
@@ -143,13 +143,11 @@ class KitInstallStep:
         clis = self.refreshable(run)
         if clis:
             result = run.boundaries.run(
-                [str(agentchat(run)), "install", *cli_flags(clis)]
+                [str(agentchat(run)), "install", *cli_flags(clis), JSON_FLAG]
             )
             if result.returncode != 0:
                 raise RuntimeError(kit_failure(run, result))
-            spoken = result.stdout or ""
-            self.written = any(action.value in spoken for action in kit.WRITES)
-            _spoken(run, result)
+            self.written = kit_report(run, result).wrote
         self.handled = True
 
 
@@ -178,12 +176,11 @@ class KitRemoveStep:
             run.warn(run.t("participant.agentschat_missing", manifest=KIT_MANIFEST))
         else:
             result = run.boundaries.run(
-                [str(path), "uninstall", *cli_flags(self.removal.asked)]
+                [str(path), "uninstall", *cli_flags(self.removal.asked), JSON_FLAG]
             )
             if result.returncode != 0:
                 raise RuntimeError(kit_failure(run, result))
             self.removal.uninstalled = True
-            _spoken(run, result)
         self.handled = True
 
 
@@ -527,10 +524,21 @@ def cli_flags(clis: Sequence[str]) -> list[str]:
     return [f"--{cli}" for cli in clis]
 
 
+def kit_report(run: Run, result) -> kit.Report:
+    report = kit.Report.read(result.stdout or "")
+    if report is None:
+        raise RuntimeError(kit_failure(run, result))
+    return report
+
+
 def kit_failure(run: Run, result) -> str:
+    report = kit.Report.read(result.stdout or "")
+    if report is not None and report.code == kit.CODE_CONFLICT:
+        return run.t(
+            "participant.kit_conflict",
+            detail=", ".join(str(step.target) for step in report.refused),
+        )
     detail = (result.stderr or result.stdout or "").strip()
-    if CONFLICT in detail:
-        return run.t("participant.kit_conflict", detail=detail)
     return run.t("participant.kit_failed", detail=detail)
 
 
@@ -700,9 +708,3 @@ def _manifest_kept_lines(run: Run) -> list[str]:
         else "participant.manifest_kept_auto"
     )
     return [run.t(key, manifest=KIT_MANIFEST)]
-
-
-def _spoken(run: Run, result) -> None:
-    for line in (result.stdout or "").splitlines():
-        if line.strip():
-            run.say(line)

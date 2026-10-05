@@ -17,8 +17,8 @@ DEAF_SECONDS, процесс жив, но глух, а значит беспол
     agentschat inbox  --agent claude-code     # забрать очередь
     agentschat status
     agentschat logout --agent claude-code [--force]
-    agentschat install   [--claude] [--opencode] [--force]
-    agentschat uninstall [--claude] [--opencode] [--force]
+    agentschat install   [--claude] [--opencode] [--force] [--json]
+    agentschat uninstall [--claude] [--opencode] [--force] [--json]
 """
 
 import argparse
@@ -38,6 +38,9 @@ from .protocol import DEAF_SECONDS, DEFAULT_URL, WAIT_SECONDS, Envelope
 STORE = Path.home() / ".agentschat"
 CATALOGUE = Catalogue("sessionchat", "client_messages")
 ROOM_LANGUAGE = RoomLanguage()
+FAILURE = 1
+REFUSED = 5
+JSON_HELP = "отчёт кодом, без предложений"
 
 
 def base() -> str:
@@ -65,7 +68,7 @@ def learn_language(answer: object) -> None:
 
 def fail(message: str) -> None:
     print(speak("failure_line", message=message), file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(FAILURE)
 
 
 def explain(response: requests.Response) -> str:
@@ -341,18 +344,32 @@ def do_install(args: argparse.Namespace) -> None:
     try:
         steps = kit.install(STORE / "kit.json", roots, force=args.force)
     except kit.KitConflict as refusal:
-        fail(str(refusal))
-    for step in steps:
-        print(step.line())
-    print(kit.install_summary(steps))
+        refuse(args, kit.COMMAND_INSTALL, refusal)
+    reported(args, kit.COMMAND_INSTALL, steps, kit.install_summary(steps))
 
 
 def do_uninstall(args: argparse.Namespace) -> None:
     clis = kit.chosen_clis(args.claude, args.opencode)
     steps = kit.uninstall(STORE / "kit.json", kit.DEFAULT_ROOTS, clis, args.force)
+    reported(args, kit.COMMAND_UNINSTALL, steps, kit.uninstall_summary(steps))
+
+
+def refuse(args: argparse.Namespace, command: str, conflict: kit.KitConflict) -> None:
+    if not args.json:
+        fail(str(conflict))
+    print(kit.Report(command, kit.CODE_CONFLICT, tuple(conflict.steps)).as_json())
+    raise SystemExit(REFUSED)
+
+
+def reported(
+    args: argparse.Namespace, command: str, steps: list[kit.Step], summary: str
+) -> None:
+    if args.json:
+        print(kit.Report(command, kit.CODE_NONE, tuple(steps)).as_json())
+        return
     for step in steps:
         print(step.line())
-    print(kit.uninstall_summary(steps))
+    print(summary)
 
 
 def main() -> None:
@@ -415,6 +432,7 @@ def main() -> None:
     install.add_argument(
         "--force", action="store_true", help="перезаписать чужие файлы"
     )
+    install.add_argument("--json", action="store_true", help=JSON_HELP)
     install.set_defaults(run=do_install)
 
     uninstall = sub.add_parser("uninstall", help="убрать установленный набор Quoroom")
@@ -423,6 +441,7 @@ def main() -> None:
     uninstall.add_argument(
         "--force", action="store_true", help="удалить и изменённые вручную файлы"
     )
+    uninstall.add_argument("--json", action="store_true", help=JSON_HELP)
     uninstall.set_defaults(run=do_uninstall)
 
     args = parser.parse_args()

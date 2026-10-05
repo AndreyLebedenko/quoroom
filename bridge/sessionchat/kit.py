@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from importlib.resources import files
@@ -22,17 +22,33 @@ KIT = files(__package__) / "kit"
 
 
 class Action(Enum):
-    INSTALL = "установлен"
-    UPDATE = "обновлён"
-    OVERWRITE = "перезаписан"
-    UNCHANGED = "без изменений"
-    CONFLICT = "занят чужим файлом"
-    REMOVE = "удалён"
-    KEEP = "оставлен (изменён вручную)"
-    GONE = "уже нет"
+    INSTALL = "installed"
+    UPDATE = "updated"
+    OVERWRITE = "overwritten"
+    UNCHANGED = "unchanged"
+    CONFLICT = "conflict"
+    REMOVE = "removed"
+    KEEP = "kept"
+    GONE = "gone"
 
 
 WRITES = frozenset({Action.INSTALL, Action.UPDATE, Action.OVERWRITE})
+
+COMMAND_INSTALL = "install"
+COMMAND_UNINSTALL = "uninstall"
+CODE_NONE = "none"
+CODE_CONFLICT = "conflict"
+
+DISPLAY_RU = {
+    Action.INSTALL: "установлен",
+    Action.UPDATE: "обновлён",
+    Action.OVERWRITE: "перезаписан",
+    Action.UNCHANGED: "без изменений",
+    Action.CONFLICT: "занят чужим файлом",
+    Action.REMOVE: "удалён",
+    Action.KEEP: "оставлен (изменён вручную)",
+    Action.GONE: "уже нет",
+}
 
 
 @dataclass(frozen=True)
@@ -56,19 +72,79 @@ class Step:
     content: bytes = b""
 
     def line(self) -> str:
-        return f"{self.action.value}  {self.target}"
+        return f"{DISPLAY_RU[self.action]}  {self.target}"
+
+
+@dataclass(frozen=True)
+class Report:
+    command: str
+    code: str
+    steps: tuple[Step, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return self.code == CODE_NONE
+
+    @property
+    def wrote(self) -> bool:
+        return any(step.action in WRITES for step in self.steps)
+
+    @property
+    def refused(self) -> tuple[Step, ...]:
+        return tuple(conflicts(self.steps))
+
+    def as_json(self) -> str:
+        return json.dumps(
+            {
+                "command": self.command,
+                "ok": self.ok,
+                "code": self.code,
+                "steps": [
+                    {
+                        "action": step.action.value,
+                        "cli": step.cli,
+                        "target": str(step.target),
+                    }
+                    for step in self.steps
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def read(cls, raw: str) -> "Report | None":
+        try:
+            stored = json.loads(raw)
+            return cls(
+                str(stored["command"]),
+                str(stored["code"]),
+                tuple(
+                    Step(Action(step["action"]), Path(step["target"]), str(step["cli"]))
+                    for step in stored["steps"]
+                ),
+            )
+        except (ValueError, KeyError, TypeError):
+            return None
+
+
+def conflicts(steps: Iterable[Step]) -> list[Step]:
+    return [step for step in steps if step.action is Action.CONFLICT]
 
 
 class KitConflict(Exception):
-    def __init__(self, targets: list[Path]):
-        self.targets = targets
-        listed = "\n".join(f"    {target}" for target in targets)
+    def __init__(self, steps: list[Step]):
+        self.steps = steps
+        listed = "\n".join(f"    {step.target}" for step in steps)
         super().__init__(
             "установка отменена, ничего не записано. Эти файлы уже существуют, "
             "отличаются от набора Quoroom и установлены не им:\n"
             f"{listed}\n"
             "Чтобы перезаписать их, повторите с --force: agentschat install --force"
         )
+
+    @property
+    def targets(self) -> list[Path]:
+        return [step.target for step in self.steps]
 
 
 def digest(content: bytes) -> str:
@@ -158,9 +234,9 @@ def plan_install(
 
 
 def apply_install(steps: list[Step], manifest: dict[Path, Entry]) -> dict[Path, Entry]:
-    conflicts = [step.target for step in steps if step.action is Action.CONFLICT]
-    if conflicts:
-        raise KitConflict(conflicts)
+    refused = conflicts(steps)
+    if refused:
+        raise KitConflict(refused)
     updated = dict(manifest)
     for step in steps:
         if step.action in WRITES:

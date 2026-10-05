@@ -397,7 +397,10 @@ class EnglishOutputTests(ParticipantLanguageCase):
     def test_the_answer_both_is_accepted_in_english(self):
         code, _ = self.install(stdin="both\n", interactive=True, lang="en")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_the_kit_question_lists_the_english_word_for_both(self):
         _, given = self.install(stdin="1\n", interactive=True, lang="en")
@@ -413,12 +416,18 @@ class RussianOutputTests(ParticipantLanguageCase):
     def test_the_russian_answer_both_is_accepted(self):
         code, _ = self.install(stdin="оба\n", interactive=True, lang="ru")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_the_english_answer_both_is_still_accepted_in_russian(self):
         code, _ = self.install(stdin="both\n", interactive=True, lang="ru")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_the_flag_switches_a_run_that_started_english_to_russian(self):
         code, given = self.install("--lang", "ru", lang="en")
@@ -542,29 +551,52 @@ class StableIdentityTests(unittest.TestCase):
         self.assertEqual(defined - used, set(), "messages nobody prints")
         self.assertEqual(used - defined, set(), "messages nobody wrote")
 
-    def test_the_conflict_marker_is_taken_from_the_message_the_client_raises(self):
-        raised = str(kit.KitConflict([Path("some-file")]))
-        self.assertTrue(participant.CONFLICT)
-        self.assertIn(participant.CONFLICT, raised)
+    def test_the_participant_module_holds_no_russian_to_recognise_the_client_by(self):
+        source = Path(participant.__file__).read_text(encoding="utf-8")
+        self.assertIsNone(CYRILLIC.search(source), source)
 
 
 class KitFailureTests(ParticipantLanguageCase):
-    def failure(self, lang, stderr):
+    def said(self, lang, result):
         run = self.run_for(self.given(lang=lang))
-        return run, participant.kit_failure(run, completed("", stderr, 1))
+        return run, participant.kit_failure(run, result)
 
-    def test_the_conflict_the_client_raises_is_told_apart_in_both_languages(self):
-        raised = str(kit.KitConflict([Path("some-file")]))
+    def conflict_report(self, target: Path) -> str:
+        return kit.Report(
+            kit.COMMAND_INSTALL,
+            kit.CODE_CONFLICT,
+            (kit.Step(kit.Action.CONFLICT, target, "claude"),),
+        ).as_json()
+
+    def test_the_code_the_client_reports_tells_a_conflict_apart_in_both_languages(self):
+        target = Path("some-file")
         for lang in LANGUAGES:
             with self.subTest(lang=lang):
-                run, said = self.failure(lang, raised)
-                self.assertEqual(said, run.t("participant.kit_conflict", detail=raised))
+                run, said = self.said(
+                    lang, completed(self.conflict_report(target), "", 1)
+                )
+                self.assertEqual(
+                    said, run.t("participant.kit_conflict", detail=str(target))
+                )
 
     def test_any_other_failure_of_the_client_is_a_plain_failure_in_both_languages(self):
         for lang in LANGUAGES:
             with self.subTest(lang=lang):
-                run, said = self.failure(lang, "boom")
+                run, said = self.said(lang, completed("", "boom", 1))
                 self.assertEqual(said, run.t("participant.kit_failed", detail="boom"))
+
+    def test_a_client_that_spells_out_a_refusal_is_a_plain_failure_in_both_languages(
+        self,
+    ):
+        refusal = str(
+            kit.KitConflict(
+                [kit.Step(kit.Action.CONFLICT, Path("some-file"), "claude")]
+            )
+        )
+        for lang in LANGUAGES:
+            with self.subTest(lang=lang):
+                run, said = self.said(lang, completed(refusal, "", 1))
+                self.assertEqual(said, run.t("participant.kit_failed", detail=refusal))
 
 
 if __name__ == "__main__":

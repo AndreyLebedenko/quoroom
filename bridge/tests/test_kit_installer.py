@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -8,7 +9,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sessionchat import client, kit
+from sessionchat.installer import main as installer
 from sessionchat.kit import Action
+
+CYRILLIC = re.compile("[\u0400-\u04ff]")
 
 
 def tree(root: Path) -> dict[str, bytes | None]:
@@ -421,7 +425,7 @@ class ReportTextTests(unittest.TestCase):
         self.assertIn("удалять нечего", kit.uninstall_summary([]))
 
 
-class AgentschatCommandTests(KitSandbox):
+class AgentschatCase(KitSandbox):
     def setUp(self):
         super().setUp()
         for item in (
@@ -449,6 +453,11 @@ class AgentschatCommandTests(KitSandbox):
             str(self.roots["opencode"]),
         )
 
+    def every_target(self):
+        return {(cli, target) for cli in kit.CLIS for target in self.expected(cli)}
+
+
+class AgentschatCommandTests(AgentschatCase):
     def test_install_and_uninstall_through_the_cli_use_the_given_dirs_and_store(self):
         out, _, code = self.run_agentschat("install", *self.dir_flags())
         self.assertEqual(code, 0)
@@ -499,6 +508,116 @@ class AgentschatCommandTests(KitSandbox):
         out, _, _ = self.run_agentschat("uninstall", "--opencode", "--force")
         self.assertIn(f"удалён  {self.plugin()}", out)
         self.assertTrue(self.claude_skill().is_file())
+
+
+class StepDisplayTests(unittest.TestCase):
+    def test_every_action_of_a_step_has_a_display_word(self):
+        self.assertEqual(set(kit.DISPLAY_RU), set(kit.Action))
+
+
+class ReportTests(AgentschatCase):
+    def document(self, *arguments):
+        out, err, code = self.run_agentschat(*arguments, "--json")
+        return json.loads(out), err, code
+
+    def steps_of(self, document):
+        return {
+            (step["action"], step["cli"], step["target"]) for step in document["steps"]
+        }
+
+    def refused_by(self, *arguments):
+        self.plugin().parent.mkdir(parents=True)
+        self.plugin().write_text("// чужой плагин", encoding="utf-8")
+        return self.document(*arguments, *self.dir_flags())
+
+    def test_a_first_install_reports_every_file_as_installed(self):
+        document, _, code = self.document("install", *self.dir_flags())
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            document,
+            {
+                "command": "install",
+                "ok": True,
+                "code": "none",
+                "steps": [
+                    {"action": "installed", "cli": cli, "target": str(target)}
+                    for cli, target in sorted(self.every_target())
+                ],
+            },
+        )
+
+    def test_the_document_of_an_install_is_the_only_thing_on_stdout(self):
+        out, _, _ = self.run_agentschat("install", "--json", *self.dir_flags())
+        self.assertEqual(len(out.splitlines()), 1)
+        self.assertIsNone(CYRILLIC.search(out), out)
+
+    def test_a_repeat_install_reports_every_file_as_unchanged(self):
+        self.run_agentschat("install", *self.dir_flags())
+        document, _, code = self.document("install", *self.dir_flags())
+        self.assertEqual(code, 0)
+        self.assertEqual({step["action"] for step in document["steps"]}, {"unchanged"})
+
+    def test_an_updated_file_is_reported_as_updated(self):
+        self.run_agentschat("install", *self.dir_flags())
+        self.plugin().write_text("// старая версия", encoding="utf-8")
+        document, _, _ = self.document("install", *self.dir_flags())
+        self.assertIn(
+            ("updated", "opencode", str(self.plugin())), self.steps_of(document)
+        )
+
+    def test_a_forced_overwrite_is_reported_as_overwritten(self):
+        document, _, code = self.refused_by("install", "--force")
+        self.assertEqual(code, 0)
+        self.assertIn(
+            ("overwritten", "opencode", str(self.plugin())), self.steps_of(document)
+        )
+
+    def test_a_refused_install_reports_the_conflict_in_the_document(self):
+        document, err, code = self.refused_by("install")
+        self.assertEqual(code, client.REFUSED)
+        self.assertEqual(err, "")
+        self.assertEqual(document["code"], "conflict")
+        self.assertFalse(document["ok"])
+        self.assertIn(
+            ("conflict", "opencode", str(self.plugin())), self.steps_of(document)
+        )
+
+    def test_a_refused_install_names_only_the_file_it_refused(self):
+        document, _, _ = self.refused_by("install")
+        self.assertEqual(len(document["steps"]), 1)
+
+    def test_an_uninstall_reports_the_command_it_belongs_to(self):
+        self.run_agentschat("install", *self.dir_flags())
+        document, _, code = self.document("uninstall")
+        self.assertEqual(code, 0)
+        self.assertEqual(document["command"], "uninstall")
+        self.assertEqual(document["code"], "none")
+
+    def test_an_uninstall_reports_an_edited_file_as_kept_and_the_rest_as_removed(self):
+        self.run_agentschat("install", *self.dir_flags())
+        self.plugin().write_text("// моя правка", encoding="utf-8")
+        document, _, _ = self.document("uninstall")
+        self.assertIn(("kept", "opencode", str(self.plugin())), self.steps_of(document))
+        self.assertIn(
+            ("removed", "claude", str(self.claude_skill())), self.steps_of(document)
+        )
+
+    def test_a_refusal_without_the_flag_still_names_the_file_and_force(self):
+        self.plugin().parent.mkdir(parents=True)
+        self.plugin().write_text("// чужой плагин", encoding="utf-8")
+        out, err, code = self.run_agentschat("install", *self.dir_flags())
+        self.assertEqual(code, client.FAILURE)
+        self.assertEqual(out, "")
+        self.assertIn(str(self.plugin()), err)
+        self.assertIn("--force", err)
+
+
+class ExitCodeTests(unittest.TestCase):
+    def test_the_refusal_code_of_the_client_is_not_one_the_installer_uses(self):
+        self.assertNotIn(client.REFUSED, set(installer.CODES.values()))
+
+    def test_the_refusal_code_of_the_client_differs_from_a_plain_failure(self):
+        self.assertNotEqual(client.REFUSED, client.FAILURE)
 
 
 if __name__ == "__main__":
