@@ -189,7 +189,13 @@ Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   the log of live checks. **Start reading here.**
 - `docs/INSTALL.md` - one-command install, removal and purge, and the manual
   fallback path.
-- `docs/ARCHITECTURE.md` - infrastructure: rooms, accounts, TLS, the installer.
+- `docs/ARCHITECTURE.en.md` - infrastructure: rooms, accounts, TLS, the installer,
+  and the contracts between components (room language, error body, envelope kind,
+  result line).
+- `docs/AGENTS_INTEGRATION.en.md` - the contracts a client or an agent platform
+  reads (the `AGENTSCHAT-RESULT` line, the `wait` frame, the envelope). It also
+  describes how the first-generation bridge launched the CLIs; that part is
+  cancelled.
 - `docs/VERIFICATION.md` - what was verified live, and the live scenarios
   waiting to be run.
 - `bridge/sessionchat/installer/` - the shared installer layer (roles, steps,
