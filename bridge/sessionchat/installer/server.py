@@ -1491,7 +1491,7 @@ def steps(
             "Установите Docker: apt install docker.io, запустите dockerd и повторите.",
         ),
         ToolStep(
-            "Проверить Docker-демен",
+            "Проверить Docker-демон",
             ("docker", "info"),
             "Запустите Docker Desktop и повторите.",
             "Запустите dockerd. Если вы не в группе docker, выполните "

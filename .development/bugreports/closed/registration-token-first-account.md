@@ -2,7 +2,11 @@
 
 **Detected at:** `4047d6b` (branch `task/local-installers-06-server-install`, live
 check in the task 04 lab, 2026-10-04)
-**Status:** open, not fixed here
+**Status:** fixed by task local-installers-08 (2026-10-04): `docs/INSTALL.md`
+steps 1.5 and 5.4 and the comment in
+`docker/continuwuity/continuwuity.toml.example` now say that the first account
+must use the token the server prints and that the configured one works from the
+second account on. Moved to `closed/` with that change.
 
 ## What the human sees
 
@@ -55,25 +59,29 @@ still answers `{"available": true}` and the UIA flow list still advertises
 is a registration attempt refused with `M_FORBIDDEN` "This server is not
 accepting registrations at this time."
 
-## Temporary decision
+## Resolution
 
-Task 06's design reads the server-issued token from
-`docker compose logs continuwuity` and uses it for the first account, then keeps
-using the configured token. `docs/INSTALL.md`, the example file and the compose
-comments are left alone, because they belong to task 08 and to the example's own
-card. Verified in the lab on 2026-10-04, Ubuntu 24.04 container, dind engine,
-conduwuit 26.9.1.
+Task 06's design reads the server-issued token from `docker compose
+logs continuwuity` and uses it for the first account, then keeps using the
+configured token; that path was verified in the lab on 2026-10-04, Ubuntu 24.04
+container, dind engine, conduwuit 26.9.1. Task 08 closed the documentation gap:
+`docs/INSTALL.md` states the first-account behaviour in the one-command section
+(1.5) and in the manual path (5.4, with the exact `docker compose logs` command
+for the human), the example file repeats it next to `registration_token`, and the
+manual registration step (5.6) shows the log token for the first account and the
+configured one for the second and third. The second finding of that check -
+`/register/available` answering `{"available": true}` on a closed server - is
+now stated in `docs/INSTALL.md` 1.5: the only honest signal that registration is
+closed is a registration attempt refused with `M_FORBIDDEN`.
 
 ## Future considerations
 
-- `docs/INSTALL.md` steps 3a and 5 need the issued token: either the human reads
-  it from `docker compose logs continuwuity`, or the instruction changes to match
-  what the installer does.
-- `docker/continuwuity/continuwuity.toml.example` should say that
-  `registration_token` starts working after the first account, so nobody spends an
-  afternoon on "Invalid registration token" again.
-- Anyone who followed the current instructions on a machine that is already set up
-  never noticed, because after the first account the configured token works. That
-  is why the owner's live stack looks healthy.
-- If the image ever changes this behaviour again, the design's step reads the log
-  line rather than assuming a key name, so it fails loudly instead of silently.
+- The installer's step reads the log line rather than assuming a key name, so if
+  the image changes this behaviour again it fails loudly instead of silently.
+  The manual path depends on the human reading the same line.
+- If a future Continuwuity accepts the configured token first, the
+  documentation and the installer still hold: the installer reads the log only
+  after the configured token has been refused.
+- Anyone who followed the old instructions on an already set-up machine never
+  noticed, because after the first account the configured token works. That is
+  why the owner's live stack looks healthy.

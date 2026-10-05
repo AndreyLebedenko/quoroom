@@ -127,6 +127,7 @@ class KitInstallStep:
     name: str = "Обновить набор по CLI агентов"
     handled: bool = False
     clis: tuple[str, ...] = ()
+    written: bool = False
 
     def wanted(self, run: Run) -> tuple[str, ...]:
         if not self.clis:
@@ -150,6 +151,8 @@ class KitInstallStep:
             )
             if result.returncode != 0:
                 raise RuntimeError(kit_failure(result))
+            spoken = result.stdout or ""
+            self.written = any(action.value in spoken for action in kit.WRITES)
             _spoken(run, result)
         self.handled = True
 
@@ -253,6 +256,7 @@ def participant_consequence(targets: Sequence[PurgeTarget]) -> str:
 
 def participant_role(version: tuple[int, int] | None = None) -> Role:
     removal = Removal()
+    kit = KitInstallStep()
     return Role(
         name=ROLE,
         record_path=record_path,
@@ -260,7 +264,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
             PythonStep("Проверить Python", version or sys.version_info[:2]),
             ToolStep(),
             PackageStep(),
-            KitInstallStep(),
+            kit,
             BrokerStep(),
         ),
         remove=(
@@ -269,7 +273,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
         ),
         purge=(session_step(),),
         purge_consequence=participant_consequence,
-        report=partial(report, removal=removal),
+        report=partial(report, removal=removal, kit=kit),
         add_options=add_options,
     )
 
@@ -591,18 +595,18 @@ def tool_instruction(run: Run) -> str:
     )
 
 
-def report(run: Run, removal: Removal) -> None:
+def report(run: Run, removal: Removal, kit: KitInstallStep) -> None:
     if not run.plan.remove:
-        _reported_installed(run)
+        _reported_installed(run, kit)
         return
     lines = removal_lines(run, removal)
     if run.plan.purge:
-        lines += purge_lines(run, removal)
+        lines += purge_lines(run)
     for line in lines:
         run.say(line)
 
 
-def _reported_installed(run: Run) -> None:
+def _reported_installed(run: Run, kit: KitInstallStep) -> None:
     for cli, files in sorted(stale_files(run).items()):
         run.say(
             f"Набор для {cli}: файлы, изменённые вручную, оставлены как есть: "
@@ -615,8 +619,16 @@ def _reported_installed(run: Run) -> None:
         run.say(line)
     run.say(f"Брокер отвечает на {broker_url(run)}.")
     run.say(
-        "Следующий шаг: в сессии агента выполните /chatlogin и назовите имя сессии."
+        restart_instruction(kit.written, kit.clis)
+        + " В сессии агента выполните /chatlogin и назовите имя сессии."
     )
+
+
+def restart_instruction(written: bool, clis: Sequence[str]) -> str:
+    if not written:
+        return "Набор на месте и не менялся, перезапускать сессии не нужно."
+    names = " и ".join(kit.CLI_NAMES[cli] for cli in kit.CLIS if cli in clis)
+    return f"Перезапустите открытые сессии {names}: запущенные нового набора не видят."
 
 
 def removal_lines(run: Run, removal: Removal) -> list[str]:
@@ -640,16 +652,16 @@ def removal_lines(run: Run, removal: Removal) -> list[str]:
     )
     lines += _missing_binary_lines(left, removal)
     if not run.plan.purge:
-        lines.append(_session_files_line(run, removal))
+        lines.append(_session_files_line(run))
     entry = INSTALL_ENTRY.get(run.boundaries.platform, "install.sh")
     lines.append(f"Поставить обратно: {entry} --role participant")
     return lines
 
 
-def _session_files_line(run: Run, removal: Removal) -> str:
+def _session_files_line(run: Run) -> str:
     tail = (
         "после повторной установки сессия вернётся в комнату через /chatlogin."
-        if removal.package_gone
+        if owning_tool(run) is None
         else "вернуться в комнату можно новым входом."
     )
     return f"Файлы сессий в {STORE} оставлены: {tail}"
@@ -692,10 +704,10 @@ def _missing_binary_lines(left: Sequence[Left], removal: Removal) -> list[str]:
     ]
 
 
-def purge_lines(run: Run, removal: Removal) -> list[str]:
+def purge_lines(run: Run) -> list[str]:
     directory = store(run)
     lines = [f"Файлы сессий удалены из {directory}."]
-    lines += _manifest_kept_lines(run, removal)
+    lines += _manifest_kept_lines(run)
     kept = kept_files(directory)
     lines += [
         *(f"оставлено, это не файл сессии: {path}" for path in kept),
@@ -704,14 +716,14 @@ def purge_lines(run: Run, removal: Removal) -> list[str]:
     return lines
 
 
-def _manifest_kept_lines(run: Run, removal: Removal) -> list[str]:
+def _manifest_kept_lines(run: Run) -> list[str]:
     if not manifest_path(run).is_file():
         return []
     if not manifest_clis(run):
         return [f"{KIT_MANIFEST} остался, но записей в нём нет: уберите его вручную."]
     tail = (
         "удалите его вместе с этими файлами."
-        if removal.package_gone
+        if owning_tool(run) is None
         else "когда записей не останется, agentschat uninstall удалит его сам."
     )
     return [f"{KIT_MANIFEST} оставлен по причинам выше: {tail}"]

@@ -892,6 +892,24 @@ class ReportTests(ParticipantCase):
         _, given = self.install()
         self.assertIn("/chatlogin", given.stdout.getvalue())
 
+    def test_the_report_names_the_restart_before_the_chatlogin_step(self):
+        _, given = self.install()
+        last = given.stdout.getvalue().splitlines()[-1]
+        self.assertTrue(last.endswith("выполните /chatlogin и назовите имя сессии."))
+        self.assertIn(RESTART, last)
+
+    def test_the_restart_line_names_only_the_chosen_cli(self):
+        _, given = self.install("--claude")
+        last = given.stdout.getvalue().splitlines()[-1]
+        self.assertIn("Claude Code", last)
+        self.assertNotIn("OpenCode", last)
+
+    def test_a_repeat_install_still_names_the_chatlogin_step(self):
+        self.install()
+        _, given = self.install()
+        self.assertIn("/chatlogin", given.stdout.getvalue())
+        self.assertIn("перезапускать сессии не нужно", given.stdout.getvalue())
+
     def test_the_report_names_the_broker_as_answering(self):
         _, given = self.install()
         self.assertIn("Брокер отвечает на", given.stdout.getvalue())
@@ -1315,6 +1333,18 @@ class RemovalTests(ParticipantCase):
             given.stdout.getvalue(),
         )
 
+    def test_a_repeat_removal_keeps_sending_the_session_back_through_chatlogin(self):
+        self.installed()
+        self.remove()
+        _, given = self.remove()
+        text = given.stdout.getvalue()
+        self.assertIn(
+            f"Файлы сессий в {STORE} оставлены: после повторной установки сессия "
+            "вернётся в комнату через /chatlogin.",
+            text,
+        )
+        self.assertNotIn("вернуться в комнату можно новым входом", text)
+
     def test_a_complete_removal_says_nothing_is_left(self):
         self.installed()
         _, given = self.remove()
@@ -1429,12 +1459,27 @@ class PurgeTests(ParticipantCase):
         reason = "файлы набора для claude, изменённые вручную, uninstall оставил"
         self.assertEqual(given.stdout.getvalue().count(reason), 1)
 
+    def test_a_repeat_purge_after_the_package_is_gone_names_no_missing_agentschat(self):
+        self.install()
+        self.machine.token("claude-code")
+        self.machine.edit_kit("claude")
+        code, given = self.purge()
+        self.assertEqual(code, DONE, given.stderr.getvalue())
+        code, given = self.purge()
+        self.assertEqual(code, DONE, given.stderr.getvalue())
+        text = given.stdout.getvalue()
+        self.assertIn(
+            f"{MANIFEST} оставлен по причинам выше: удалите его вместе с этими файлами.",
+            text,
+        )
+        self.assertNotIn("agentschat uninstall удалит его сам", text)
+
     def test_the_purge_report_says_why_the_manifest_stays(self):
         self.install()
         self.machine.token("claude-code")
         self.machine.edit_kit("claude")
         code, given = self.purge()
-        self.assertEqual(code, DONE)
+        self.assertEqual(code, DONE, given.stderr.getvalue())
         self.assertIn(
             f"{MANIFEST} оставлен по причинам выше: удалите его вместе с этими файлами.",
             given.stdout.getvalue(),
@@ -1471,7 +1516,7 @@ class PurgeTests(ParticipantCase):
         self.manifest().write_text(json.dumps({"files": []}), encoding="utf-8")
         self.assertIn(
             f"{MANIFEST} остался, но записей в нём нет: уберите его вручную.",
-            participant.purge_lines(self.plan_run(), participant.Removal()),
+            participant.purge_lines(self.plan_run()),
         )
 
     def test_the_purge_report_does_not_claim_a_manifest_that_is_already_gone(self):

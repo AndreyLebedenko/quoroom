@@ -1,6 +1,15 @@
 # Task local-installers-08: Documentation and live handoff
 
-**Status:** Planned.
+**Status:** Completed.
+
+**Completion note:** documentation and handoff delivered; reviewed over two rounds,
+all findings fixed. Hand-verified live only on Windows: the owner
+ran Windows scenario 1 on 2026-10-05 and reported it passed. The Linux live
+scenario has not been run (no native Linux host); Linux is not recorded as
+verified live. Linux scenario stays pending in `docs/VERIFICATION.md`. A one-letter
+typo in the Docker daemon check step name was fixed in `server.py` during the
+Windows run.
+
 **Story:** `.development/tasks/story-local-installers.md`
 **Depends on:** tasks 01-07.
 
@@ -70,15 +79,15 @@ checks for Windows and the Linux container.
 
 ## Acceptance criteria
 
-- [ ] Every command in the docs matches the implemented flags.
-- [ ] The participant's final report says what to restart and then the
+- [x] Every command in the docs matches the implemented flags.
+- [x] The participant's final report says what to restart and then the
       `/chatlogin` step (since task 05 the restart line comes from
       `agentschat install`'s own summary mid-run; check the human can still
       find it, and adjust the wording if not).
-- [ ] A repeat participant `--remove` after the package is already gone
+- [x] A repeat participant `--remove` after the package is already gone
       does not say "вернуться в комнату можно новым входом": that wording
       depends on `Removal.package_gone`, which only the run that removed the
       package sets (task 05 review, round 6). Fix the wording with a test.
-- [ ] The handoff is complete enough for the human to run it without this
+- [x] The handoff is complete enough for the human to run it without this
       conversation.
-- [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+- [x] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
