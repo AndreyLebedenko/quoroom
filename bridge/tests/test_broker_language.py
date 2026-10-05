@@ -13,10 +13,12 @@ from aiohttp.test_utils import TestClient, TestServer
 from sessionchat import broker as broker_module
 from sessionchat.broker import Broker, LanguageRefused, room_language
 from sessionchat.i18n import DEFAULT_LANGUAGE, LANGUAGES
-from tests.test_sessionchat import CONFIG, StoreBackedBrokerMixin
+from tests.test_sessionchat import CONFIG as RUSSIAN_CONFIG
+from tests.test_sessionchat import StoreBackedBrokerMixin
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "config.example.yaml"
 JSON = {"Accept": "application/json"}
+CONFIG = {key: value for key, value in RUSSIAN_CONFIG.items() if key != "language"}
 PRINTABLE_ASCII = re.compile(r"[\x20-\x7e]+")
 
 
