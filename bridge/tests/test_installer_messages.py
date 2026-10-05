@@ -1,8 +1,5 @@
 """Карточка installer-bilingual: каталог сообщений, его полнота и чистота кода."""
 
-import json
-import re
-import string
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +7,7 @@ from unittest.mock import patch
 from sessionchat.installer import catalogue as catalogue_module
 from sessionchat.installer.catalogue import (
     DEFAULT_LANGUAGE,
+    INSTALLER_CATALOGUE,
     LANGUAGES,
     STEP_PREFIX,
     catalogue,
@@ -20,30 +18,15 @@ from sessionchat.installer.catalogue import (
 from sessionchat.installer.main import PREPARE, REPORT
 from sessionchat.installer.roles import built_in_roles
 from sessionchat.installer.steps import Plan
+from tests.catalogue_contract import CYRILLIC, CatalogueContract
 
 INSTALLER = Path(catalogue_module.__file__).resolve().parent
-MESSAGES = INSTALLER / "messages"
-
-CYRILLIC = re.compile("[Ѐ-ӿ]")
-PRINTABLE_ASCII = re.compile(r"[\x20-\x7e\n]*")
 
 PLANS = (
     (False, False),
     (True, False),
     (True, True),
 )
-
-
-def raw(lang: str) -> dict[str, str]:
-    return json.loads((MESSAGES / f"{lang}.json").read_text(encoding="utf-8"))
-
-
-def placeholders(template: str) -> set[str]:
-    return {
-        name.split(".")[0].split("[")[0]
-        for _, name, _, _ in string.Formatter().parse(template)
-        if name is not None
-    }
 
 
 def real_step_names() -> set[str]:
@@ -55,62 +38,14 @@ def real_step_names() -> set[str]:
     }
 
 
-class CatalogueFilesTests(unittest.TestCase):
+class CatalogueFilesTests(CatalogueContract, unittest.TestCase):
+    catalogue = INSTALLER_CATALOGUE
+
     def test_both_languages_are_shipped(self):
         self.assertEqual(LANGUAGES, ("en", "ru"))
 
     def test_english_is_the_default_language(self):
         self.assertEqual(DEFAULT_LANGUAGE, "en")
-
-    def test_each_catalogue_is_a_flat_mapping_of_text_to_text(self):
-        for lang in LANGUAGES:
-            with self.subTest(lang=lang):
-                loaded = raw(lang)
-                self.assertTrue(loaded)
-                for key, value in loaded.items():
-                    self.assertIsInstance(key, str)
-                    self.assertIsInstance(value, str)
-                    self.assertTrue(value, key)
-
-    def test_the_two_catalogues_have_the_same_keys(self):
-        english, russian = set(raw("en")), set(raw("ru"))
-        self.assertEqual(english - russian, set(), "keys only in en.json")
-        self.assertEqual(russian - english, set(), "keys only in ru.json")
-
-    def test_each_key_has_the_same_placeholders_in_both_languages(self):
-        english, russian = raw("en"), raw("ru")
-        for key in english.keys() & russian.keys():
-            with self.subTest(key=key):
-                self.assertEqual(placeholders(english[key]), placeholders(russian[key]))
-
-    def test_every_template_is_valid_for_str_format(self):
-        for lang in LANGUAGES:
-            for key, value in raw(lang).items():
-                with self.subTest(lang=lang, key=key):
-                    list(string.Formatter().parse(value))
-
-    def test_the_english_catalogue_has_no_cyrillic(self):
-        for key, value in raw("en").items():
-            with self.subTest(key=key):
-                self.assertIsNone(CYRILLIC.search(value))
-
-    def test_the_english_catalogue_uses_only_ascii_punctuation(self):
-        for key, value in raw("en").items():
-            with self.subTest(key=key):
-                self.assertIsNotNone(PRINTABLE_ASCII.fullmatch(value), repr(value))
-
-    def test_keys_are_sorted_so_that_parallel_additions_merge(self):
-        for lang in LANGUAGES:
-            with self.subTest(lang=lang):
-                keys = list(raw(lang))
-                self.assertEqual(keys, sorted(keys))
-
-    def test_the_files_are_utf8_without_a_byte_order_mark(self):
-        for lang in LANGUAGES:
-            with self.subTest(lang=lang):
-                data = (MESSAGES / f"{lang}.json").read_bytes()
-                self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
-                data.decode("utf-8")
 
 
 class RendererTests(unittest.TestCase):

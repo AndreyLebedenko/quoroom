@@ -152,5 +152,37 @@ class InstallerNeedsNothingInstalledTests(unittest.TestCase):
         self.assertIn("--role", completed.stdout)
 
 
+class MessageCatalogueFilesAreShippedTests(unittest.TestCase):
+    PACKAGE = BRIDGE / "sessionchat"
+
+    def shipped_files(self) -> set[Path]:
+        with open(BRIDGE / "pyproject.toml", "rb") as source:
+            patterns = tomllib.load(source)["tool"]["setuptools"]["package-data"][
+                "sessionchat"
+            ]
+        return {path for pattern in patterns for path in self.PACKAGE.glob(pattern)}
+
+    def catalogue_files(self) -> set[Path]:
+        return {
+            path
+            for language in ("en", "ru")
+            for path in self.PACKAGE.rglob(f"{language}.json")
+        }
+
+    def test_the_installer_catalogue_is_found_by_the_scan(self):
+        found = {
+            path.relative_to(self.PACKAGE).as_posix() for path in self.catalogue_files()
+        }
+        self.assertLessEqual(
+            {"installer/messages/en.json", "installer/messages/ru.json"}, found
+        )
+
+    def test_every_language_file_of_every_catalogue_matches_a_package_data_entry(self):
+        unshipped = self.catalogue_files() - self.shipped_files()
+        self.assertEqual(
+            sorted(path.relative_to(self.PACKAGE).as_posix() for path in unshipped), []
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
