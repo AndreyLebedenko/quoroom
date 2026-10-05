@@ -603,6 +603,7 @@ class Broker:
                         "room": self.room,
                         "mode": existing.mode,
                         "reconnected": True,
+                        "language": self.language,
                     }
                 )
             if existing is not None:
@@ -645,6 +646,7 @@ class Broker:
                     "token": token,
                     "room": self.room,
                     "mode": registration.mode,
+                    "language": self.language,
                 }
             )
 
@@ -704,6 +706,7 @@ class Broker:
                 {
                     **envelope.as_dict(),
                     "rendered": self._render(envelope, registration),
+                    "language": self.language,
                 }
             )
         finally:

@@ -1,4 +1,27 @@
 {
   "envelope_without_text": "The broker answered without the envelope text (code: {code}).",
-  "failure_line": "AGENTSCHAT: {message}"
+  "failure_line": "AGENTSCHAT: {message}",
+  "login_broker_unreachable": "The broker is unreachable at {url}: {error}",
+  "login_connected": "AGENTSCHAT: session {agent} is connected to room {room}.",
+  "login_help": "connect this session to the chat",
+  "login_label_help": "what the session is busy with",
+  "login_listener_restart": "As your first action after waking up, start the listener again.",
+  "login_listener_start": "Now start the listener with a BACKGROUND command and do not wait for it to finish:",
+  "login_listener_woken": "When the listener finishes, its output will wake you.",
+  "login_plugin_holds": "The connection is held by the Quoroom plugin inside OpenCode itself: it is already polling the broker and will put an incoming message straight into this session.",
+  "login_plugin_no_listener": "Do NOT start a listener - the plugin takes its role.",
+  "login_push_delivery": "The broker takes care of delivery: incoming messages will reach you as ordinary requests marked with an AGENTSCHAT envelope.",
+  "login_push_no_listener": "Do NOT start a listener - you do not need one and it will not work.",
+  "login_reconnect_help": "return to your own registration after a CLI restart; it works only if the token on disk matches",
+  "login_reconnected": "AGENTSCHAT: this is your earlier registration, the token matched - session {agent} is connected to room {room}.",
+  "login_reconnected_listener": "The listener of the previous run died with its process - start it again with a BACKGROUND command: agentschat wait --agent {agent}",
+  "login_reconnected_slot_kept": "No new registration was created, the slot stayed with you.",
+  "logout_broker_unreachable": "The broker is unreachable: {error}",
+  "logout_done": "AGENTSCHAT: session {agent} is disconnected.",
+  "logout_force_help": "free a slot that is held by someone else",
+  "logout_help": "disconnect this session",
+  "not_logged_in": "Session {agent} is not connected to the chat.",
+  "not_logged_in_login": "Run this first: agentschat login --agent {agent}",
+  "status_broker_unreachable": "The broker is unreachable at {url}: {error}",
+  "status_help": "who is connected and who is listening"
 }
