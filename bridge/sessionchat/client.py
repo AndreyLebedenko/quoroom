@@ -31,9 +31,13 @@ from pathlib import Path
 import requests
 
 from . import kit
+from .client_language import RoomLanguage
+from .i18n import Catalogue
 from .protocol import DEAF_SECONDS, DEFAULT_URL, WAIT_SECONDS, Envelope
 
 STORE = Path.home() / ".agentschat"
+CATALOGUE = Catalogue("sessionchat", "client_messages")
+ROOM_LANGUAGE = RoomLanguage()
 
 
 def base() -> str:
@@ -50,8 +54,17 @@ def credentials(agent: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def speak(key: str, **params: object) -> str:
+    return CATALOGUE.text(ROOM_LANGUAGE.current(STORE), key, **params)
+
+
+def learn_language(answer: object) -> None:
+    if isinstance(answer, dict):
+        ROOM_LANGUAGE.learn(STORE, answer.get("language"))
+
+
 def fail(message: str) -> None:
-    print(f"AGENTSCHAT: {message}", file=sys.stderr)
+    print(speak("failure_line", message=message), file=sys.stderr)
     raise SystemExit(1)
 
 
@@ -86,6 +99,7 @@ def do_login(args: argparse.Namespace) -> None:
     if response.status_code != 200:
         fail(explain(response))
     data = response.json()
+    learn_language(data)
     if data.get("reconnected"):
         # Фразу «подключена к комнате» ниже читает плагин OpenCode, поэтому
         # она должна остаться и здесь: по ней он привязывает сессию.
@@ -168,6 +182,7 @@ def poll_once(agent: str, token: str) -> str | None:
         return None
     if response.status_code == 200:
         data = response.json()
+        learn_language(data)
         return str(data.get("rendered") or Envelope.from_dict(data).render())
     raise RuntimeError(explain(response))
 
@@ -225,7 +240,9 @@ def do_inbox(args: argparse.Namespace) -> None:
         fail(f"брокер недоступен: {error}")
     if response.status_code != 200:
         fail(explain(response))
-    pending = response.json().get("pending") or []
+    answer = response.json()
+    learn_language(answer)
+    pending = answer.get("pending") or []
     if not pending:
         print("AGENTSCHAT: новых сообщений нет.")
         return
@@ -266,6 +283,7 @@ def do_say(args: argparse.Namespace) -> None:
     if response.status_code != 200:
         fail(explain(response))
     data = response.json()
+    learn_language(data)
     print(f"AGENTSCHAT: отправлено ({data['event_id']}).")
     if data.get("warning"):
         print(f"AGENTSCHAT: ВНИМАНИЕ — {data['warning']}")
@@ -291,12 +309,24 @@ def do_ask(args: argparse.Namespace) -> None:
     )
 
 
+def status_text(response: requests.Response) -> str:
+    if "application/json" not in response.headers.get("Content-Type", ""):
+        return response.text
+    answer = response.json()
+    learn_language(answer)
+    return str(answer.get("text", ""))
+
+
 def do_status(args: argparse.Namespace) -> None:
     try:
-        response = requests.get(f"{base()}/status", timeout=15)
+        response = requests.get(
+            f"{base()}/status",
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
     except requests.RequestException as error:
         fail(f"брокер недоступен на {base()}: {error}")
-    print(response.text.rstrip())
+    print(status_text(response).rstrip())
 
 
 def do_install(args: argparse.Namespace) -> None:
@@ -390,6 +420,7 @@ def main() -> None:
     uninstall.set_defaults(run=do_uninstall)
 
     args = parser.parse_args()
+    ROOM_LANGUAGE.insist(getattr(args, "lang", None))
     args.run(args)
 
 
