@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import requests
 
-from sessionchat import client, client_language
+from sessionchat import client, client_language, kit
 from sessionchat.i18n import Catalogue
 from tests.catalogue_contract import CYRILLIC
 from tests.test_client_language import Answer
@@ -853,9 +853,11 @@ class NoProseLeftInTheCodeTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_every_key_of_the_client_catalogue_is_used_by_the_client(self):
+        sources = self.client_source + Path(kit.__file__).read_text(encoding="utf-8")
         unused = [
             key
             for key in client.CATALOGUE.templates("en")
-            if not re.search(rf'"{re.escape(key)}"', self.client_source)
+            if not re.search(rf'"{re.escape(key)}"', sources)
+            and f'f"{key.rpartition(".")[0]}.{{' not in sources
         ]
         self.assertEqual(unused, [])
