@@ -49,9 +49,10 @@ class KitSandbox(unittest.TestCase):
         return kit.uninstall(self.manifest_path, self.roots, clis, force=force)
 
     def expected(self, cli: str) -> dict[Path, bytes]:
+        variant, _ = kit.variant_of(RUSSIAN)
         return {
             self.roots[cli].joinpath(*item.relative.parts): item.content
-            for item in kit.kit_files(cli)
+            for item in kit.kit_files(cli, variant)
         }
 
     def manifest(self) -> dict[Path, kit.Entry]:
@@ -69,10 +70,11 @@ class KitSandbox(unittest.TestCase):
 
 class KitFilesTests(unittest.TestCase):
     def test_kit_files_of_each_cli_mirror_the_kit_tree_under_that_cli(self):
+        variant, _ = kit.variant_of(RUSSIAN)
         relatives = {
             (item.cli, item.relative.as_posix())
             for cli in kit.CLIS
-            for item in kit.kit_files(cli)
+            for item in kit.kit_files(cli, variant)
         }
         self.assertEqual(
             relatives,
@@ -151,7 +153,7 @@ class InstallTests(KitSandbox):
                     self.assertEqual(target.read_bytes(), content)
 
     def test_install_reports_each_new_file_as_installed(self):
-        steps = self.install()
+        steps = self.install().steps
         expected = {**self.expected("claude"), **self.expected("opencode")}
         self.assertEqual(
             self.actions(steps), {target: Action.INSTALL for target in expected}
@@ -189,7 +191,7 @@ class InstallTests(KitSandbox):
     def test_a_file_listed_in_the_manifest_is_overwritten_as_an_update(self):
         self.install()
         self.plugin().write_text("// старая версия", encoding="utf-8")
-        steps = self.install()
+        steps = self.install().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.UPDATE)
         self.assertEqual(
             self.plugin().read_bytes(), self.expected("opencode")[self.plugin()]
@@ -201,7 +203,7 @@ class InstallTests(KitSandbox):
         content = self.expected("opencode")[self.plugin()]
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_bytes(content)
-        steps = self.install()
+        steps = self.install().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.UNCHANGED)
         self.assertEqual(
             self.manifest()[self.plugin()], kit.Entry("opencode", kit.digest(content))
@@ -229,7 +231,7 @@ class InstallTests(KitSandbox):
     def test_force_overwrites_an_unlisted_different_file_and_adopts_it(self):
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_text("// чужой плагин", encoding="utf-8")
-        steps = self.install(force=True)
+        steps = self.install(force=True).steps
         content = self.expected("opencode")[self.plugin()]
         self.assertEqual(self.actions(steps)[self.plugin()], Action.OVERWRITE)
         self.assertEqual(self.plugin().read_bytes(), content)
@@ -240,7 +242,7 @@ class InstallTests(KitSandbox):
     def test_installing_twice_leaves_the_same_files_and_the_same_manifest(self):
         self.install()
         after_first = tree(self.home)
-        steps = self.install()
+        steps = self.install().steps
         self.assertEqual(tree(self.home), after_first)
         self.assertEqual(
             set(self.actions(steps).values()),
@@ -262,7 +264,7 @@ class InstallTests(KitSandbox):
 class UninstallTests(KitSandbox):
     def test_uninstall_removes_every_file_it_installed_and_reports_it_removed(self):
         self.install()
-        steps = self.uninstall()
+        steps = self.uninstall().steps
         installed = {**self.expected("claude"), **self.expected("opencode")}
         self.assertEqual(
             self.actions(steps), {target: Action.REMOVE for target in installed}
@@ -314,7 +316,7 @@ class UninstallTests(KitSandbox):
         self.install()
         self.plugin().write_text("// моя правка", encoding="utf-8")
         entry = self.manifest()[self.plugin()]
-        steps = self.uninstall()
+        steps = self.uninstall().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.KEEP)
         self.assertIn(str(self.plugin()), self.step(steps, self.plugin()).line(RUSSIAN))
         self.assertEqual(self.plugin().read_text(encoding="utf-8"), "// моя правка")
@@ -331,7 +333,7 @@ class UninstallTests(KitSandbox):
     def test_force_removes_a_user_edited_file_too(self):
         self.install()
         self.plugin().write_text("// моя правка", encoding="utf-8")
-        steps = self.uninstall(force=True)
+        steps = self.uninstall(force=True).steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.REMOVE)
         self.assertFalse(self.plugin().exists())
         self.assertEqual(self.manifest(), {})
@@ -341,7 +343,7 @@ class UninstallTests(KitSandbox):
     ):
         self.install()
         self.plugin().unlink()
-        steps = self.uninstall()
+        steps = self.uninstall().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.GONE)
         self.assertEqual(self.manifest(), {})
 
@@ -359,7 +361,7 @@ class UninstallTests(KitSandbox):
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_text("// не наш", encoding="utf-8")
         before = tree(self.home)
-        self.assertEqual(self.uninstall(), [])
+        self.assertEqual(self.uninstall().steps, ())
         self.assertEqual(tree(self.home), before)
 
     def test_a_listed_file_outside_its_root_is_removed_but_no_directory_is(self):
@@ -530,8 +532,8 @@ class AgentschatCommandTests(AgentschatCase):
 
 
 class ReportTests(AgentschatCase):
-    def document(self, *arguments):
-        out, err, code = self.run_agentschat(*arguments, "--json")
+    def document(self, *arguments, lang=RUSSIAN):
+        out, err, code = self.run_agentschat(*arguments, "--json", "--lang", lang)
         return json.loads(out), err, code
 
     def steps_of(self, document):
@@ -651,14 +653,125 @@ class ReportTests(AgentschatCase):
         self.assertIn(str(self.plugin()), err)
         self.assertIn("--force", err)
 
-    def test_the_document_does_not_depend_on_the_language(self):
-        russian, _, _ = self.document("install", "--lang", RUSSIAN, *self.dir_flags())
+    def test_the_steps_of_the_document_do_not_depend_on_the_language(self):
+        russian, _, _ = self.document("install", *self.dir_flags())
         for root in self.roots.values():
             shutil.rmtree(root)
             root.mkdir()
         self.manifest_path.unlink(missing_ok=True)
-        english, _, _ = self.document("install", "--lang", "en", *self.dir_flags())
-        self.assertEqual(english, russian)
+        english, _, _ = self.document("install", lang="en", *self.dir_flags())
+        self.assertEqual(english["steps"], russian["steps"])
+        self.assertEqual(english["command"], russian["command"])
+        self.assertEqual(english["ok"], russian["ok"])
+
+
+class VariantChoiceTests(KitSandbox):
+    def report(self, lang):
+        roots = {cli: self.roots[cli] for cli in kit.CLIS}
+        return kit.install(self.manifest_path, roots, lang=lang)
+
+    def test_a_language_with_a_variant_reports_nothing_special(self):
+        self.assertEqual(self.report(RUSSIAN).code, kit.CODE_NONE)
+
+    def test_the_variant_files_land_at_the_same_paths_every_language_uses(self):
+        self.report(RUSSIAN)
+        russian = {path: path.read_bytes() for path in self.kit_targets()}
+        for path in self.kit_targets():
+            path.unlink()
+        self.manifest_path.unlink(missing_ok=True)
+        self.report("en")
+        self.assertEqual(
+            {path: path.read_bytes() for path in self.kit_targets()}, russian
+        )
+
+    def test_the_manifest_holds_no_language_in_its_keys(self):
+        self.report("en")
+        stored = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        for item in stored["files"]:
+            with self.subTest(path=item["path"]):
+                self.assertNotIn("kit/en", item["path"].replace("\\", "/"))
+                self.assertNotIn("kit/ru", item["path"].replace("\\", "/"))
+
+    def test_a_manifest_of_the_previous_layout_is_read_by_the_new_one(self):
+        self.report(RUSSIAN)
+        before = self.manifest()
+        for path in self.kit_targets():
+            path.unlink()
+        again = self.report("en")
+        self.assertEqual(self.manifest(), before)
+        self.assertEqual({step.action for step in again.steps}, {Action.INSTALL})
+
+    def test_a_second_install_over_the_same_variant_changes_nothing(self):
+        self.report(RUSSIAN)
+        again = self.report(RUSSIAN)
+        self.assertEqual({step.action for step in again.steps}, {Action.UNCHANGED})
+
+    def kit_targets(self) -> list[Path]:
+        return sorted(
+            path
+            for root in self.roots.values()
+            for path in root.rglob("*")
+            if path.is_file()
+        )
+
+
+class TemporaryVariantFallbackTests(KitSandbox):
+    """Откат на ru удалит задача 15, когда появится английский вариант."""
+
+    def test_a_language_without_a_variant_still_lays_the_kit_down(self):
+        report = kit.install(self.manifest_path, self.roots, lang="en")
+        self.assertEqual(report.code, kit.VARIANT_MISSING)
+        self.assertTrue(report.ok)
+        self.assertTrue(self.claude_skill().is_file())
+        self.assertTrue(self.plugin().is_file())
+
+    def test_the_fallback_lays_down_exactly_the_variant_that_exists(self):
+        kit.install(self.manifest_path, self.roots, lang="en")
+        variant, _ = kit.variant_of(kit.FALLBACK_VARIANT)
+        expected = {
+            self.roots[cli].joinpath(*item.relative.parts): item.content
+            for cli in kit.CLIS
+            for item in kit.kit_files(cli, variant)
+        }
+        self.assertEqual({path: path.read_bytes() for path in expected}, expected)
+
+    def test_the_human_is_told_that_the_variant_is_not_the_one_asked_for(self):
+        out, err, code = self.agentschat("install", "--lang", "en")
+        self.assertEqual(code, 0)
+        self.assertIn("AGENTSCHAT: the Quoroom kit is installed.", out)
+        self.assertIn("no Quoroom kit variant for en yet", err)
+        self.assertIn("agentschat install --lang en", err)
+
+    def test_the_document_carries_the_substitution_code(self):
+        out, err, code = self.agentschat("install", "--lang", "en", "--json")
+        self.assertEqual(code, 0)
+        document = json.loads(out)
+        self.assertEqual(document["code"], kit.VARIANT_MISSING)
+        self.assertTrue(document["ok"])
+        self.assertIn("no Quoroom kit variant for en yet", err)
+
+    def test_a_language_with_a_variant_says_nothing_about_substitution(self):
+        _, err, code = self.agentschat("install", "--lang", RUSSIAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+
+    def agentschat(self, *arguments) -> tuple[str, str, int]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        argv = [
+            "agentschat",
+            *arguments,
+            "--claude-dir",
+            str(self.roots["claude"]),
+            "--opencode-dir",
+            str(self.roots["opencode"]),
+        ]
+        with patch.object(sys, "argv", argv):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                try:
+                    client.main()
+                except SystemExit as exit_code:
+                    return stdout.getvalue(), stderr.getvalue(), exit_code.code
+        return stdout.getvalue(), stderr.getvalue(), 0
 
 
 class StepLineTests(unittest.TestCase):

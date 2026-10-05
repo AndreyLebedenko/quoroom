@@ -8,6 +8,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from sessionchat import kit
+
 BRIDGE = Path(__file__).resolve().parent.parent
 BROKER_ONLY_MODULES = ("nio", "yaml", "aiohttp")
 
@@ -181,6 +183,38 @@ class MessageCatalogueFilesAreShippedTests(unittest.TestCase):
         unshipped = self.catalogue_files() - self.shipped_files()
         self.assertEqual(
             sorted(path.relative_to(self.PACKAGE).as_posix() for path in unshipped), []
+        )
+
+
+class KitFilesAreShippedTests(unittest.TestCase):
+    PACKAGE = BRIDGE / "sessionchat"
+
+    def shipped_files(self) -> set[Path]:
+        with open(BRIDGE / "pyproject.toml", "rb") as source:
+            patterns = tomllib.load(source)["tool"]["setuptools"]["package-data"][
+                "sessionchat"
+            ]
+        return {path for pattern in patterns for path in self.PACKAGE.glob(pattern)}
+
+    def kit_files(self) -> set[Path]:
+        return {path for path in (self.PACKAGE / "kit").rglob("*") if path.is_file()}
+
+    def test_every_kit_file_of_every_variant_is_shipped(self):
+        unshipped = self.kit_files() - self.shipped_files()
+        self.assertEqual(
+            sorted(path.relative_to(self.PACKAGE).as_posix() for path in unshipped), []
+        )
+
+    def test_the_scan_sees_the_files_of_the_layout_with_variants(self):
+        found = {path.relative_to(self.PACKAGE).as_posix() for path in self.kit_files()}
+        self.assertLessEqual(
+            {
+                f"kit/{kit.COMMON}/opencode/plugins/agentschat.js",
+                f"kit/{kit.FALLBACK_VARIANT}/claude/skills/chatlogin/SKILL.md",
+                f"kit/{kit.FALLBACK_VARIANT}/opencode/command/chatlogin.md",
+                f"kit/{kit.FALLBACK_VARIANT}/opencode/skills/chatlogin/SKILL.md",
+            },
+            found,
         )
 
 

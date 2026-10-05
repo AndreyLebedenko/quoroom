@@ -35,6 +35,7 @@
   "kit.uninstall_done": "AGENTSCHAT: the removal of the Quoroom kit is finished.",
   "kit.uninstall_kept": "Files edited by hand are left in place. To remove them as well: agentschat uninstall --force",
   "kit.uninstall_nothing": "AGENTSCHAT: there is no installed Quoroom kit, nothing to remove.",
+  "kit.variant_missing": "AGENTSCHAT: there is no Quoroom kit variant for {language} yet, so the {fallback} one was laid down. Re-run agentschat install --lang {language} once it exists.",
   "login_broker_unreachable": "The broker is unreachable at {url}: {error}",
   "login_connected": "AGENTSCHAT: session {agent} is connected to room {room}.",
   "login_help": "connect this session to the chat",

@@ -21,7 +21,12 @@ from sessionchat.protocol import DEFAULT_PORT, DEFAULT_URL
 
 BROKER_ENV = ("AGENTSCHAT_URL", "AGENTSCHAT_PORT")
 PLUGIN_SOURCE = (
-    Path(client.__file__).parent / "kit" / "opencode" / "plugins" / "agentschat.js"
+    Path(client.__file__).parent
+    / "kit"
+    / "common"
+    / "opencode"
+    / "plugins"
+    / "agentschat.js"
 )
 
 
