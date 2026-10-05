@@ -1,6 +1,6 @@
 # Task english-release-05: Broker startup, logs and store errors
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-03.
 **Estimate:** 2 hours.

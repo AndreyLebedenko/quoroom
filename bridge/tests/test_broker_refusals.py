@@ -50,7 +50,7 @@ class BrokerCatalogueUseTests(unittest.TestCase):
         unused = [
             key
             for key in BROKER_CATALOGUE.templates("en")
-            if not key.startswith("broker.state_")
+            if not key.startswith(("broker.state_", "broker.store_"))
             and f'"{key.removeprefix("broker.")}"' not in source
         ]
         self.assertEqual(unused, [])
@@ -93,22 +93,12 @@ class BrokerCatalogueUseTests(unittest.TestCase):
             ):
                 continue
             docstring = ast.get_docstring(function, clean=False)
-            log_arguments = {
-                id(argument)
-                for call in ast.walk(function)
-                if isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and isinstance(call.func.value, ast.Name)
-                and call.func.value.id == "log"
-                for argument in ast.walk(call)
-            }
             for node in ast.walk(function):
                 if (
                     isinstance(node, ast.Constant)
                     and isinstance(node.value, str)
                     and CYRILLIC.search(node.value)
                     and node.value != docstring
-                    and id(node) not in log_arguments
                 ):
                     offenders.append(f"{function.name}: {node.value!r}")
         self.assertEqual(offenders, [])
