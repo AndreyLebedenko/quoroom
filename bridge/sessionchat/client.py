@@ -17,8 +17,8 @@ DEAF_SECONDS, процесс жив, но глух, а значит беспол
     agentschat inbox  --agent claude-code     # забрать очередь
     agentschat status
     agentschat logout --agent claude-code [--force]
-    agentschat install   [--claude] [--opencode] [--force] [--json]
-    agentschat uninstall [--claude] [--opencode] [--force] [--json]
+    agentschat install   [--claude] [--opencode] [--force] [--json] [--lang en|ru]
+    agentschat uninstall [--claude] [--opencode] [--force] [--json] [--lang en|ru]
 """
 
 import argparse
@@ -33,7 +33,7 @@ import requests
 from . import kit
 from . import client_result
 from .client_language import RoomLanguage
-from .i18n import Catalogue
+from .i18n import LANGUAGES, Catalogue
 from .protocol import DEAF_SECONDS, DEFAULT_URL, WAIT_SECONDS
 
 STORE = Path.home() / ".agentschat"
@@ -41,7 +41,7 @@ CATALOGUE = Catalogue("sessionchat", "client_messages")
 ROOM_LANGUAGE = RoomLanguage()
 FAILURE = 1
 REFUSED = 5
-JSON_HELP = "отчёт кодом, без предложений"
+LANGUAGE_FLAG = "--lang"
 ENVELOPE_WITHOUT_TEXT = "envelope_without_text"
 BROKER_UNREACHABLE = "broker_unreachable"
 BROKER_REFUSED = "broker_refused"
@@ -509,36 +509,48 @@ def do_status(args: argparse.Namespace) -> None:
 
 
 def do_install(args: argparse.Namespace) -> None:
+    lang = ROOM_LANGUAGE.current(STORE)
     clis = kit.chosen_clis(args.claude, args.opencode)
     roots = kit.target_roots(clis, args.claude_dir, args.opencode_dir)
     try:
-        steps = kit.install(STORE / "kit.json", roots, force=args.force)
+        steps = kit.install(STORE / "kit.json", roots, force=args.force, lang=lang)
     except kit.KitConflict as refusal:
-        refuse(args, kit.COMMAND_INSTALL, refusal)
-    reported(args, kit.COMMAND_INSTALL, steps, kit.install_summary(steps))
+        refuse(args, refusal)
+    reported(args, kit.COMMAND_INSTALL, steps, lang, kit.install_summary(steps, lang))
 
 
 def do_uninstall(args: argparse.Namespace) -> None:
+    lang = ROOM_LANGUAGE.current(STORE)
     clis = kit.chosen_clis(args.claude, args.opencode)
     steps = kit.uninstall(STORE / "kit.json", kit.DEFAULT_ROOTS, clis, args.force)
-    reported(args, kit.COMMAND_UNINSTALL, steps, kit.uninstall_summary(steps))
+    reported(
+        args, kit.COMMAND_UNINSTALL, steps, lang, kit.uninstall_summary(steps, lang)
+    )
 
 
-def refuse(args: argparse.Namespace, command: str, conflict: kit.KitConflict) -> None:
+def refuse(args: argparse.Namespace, conflict: kit.KitConflict) -> None:
     if not args.json:
         fail(str(conflict))
-    print(kit.Report(command, kit.CODE_CONFLICT, tuple(conflict.steps)).as_json())
+    print(
+        kit.Report(
+            kit.COMMAND_INSTALL, kit.CODE_CONFLICT, tuple(conflict.steps)
+        ).as_json()
+    )
     raise SystemExit(REFUSED)
 
 
 def reported(
-    args: argparse.Namespace, command: str, steps: list[kit.Step], summary: str
+    args: argparse.Namespace,
+    command: str,
+    steps: list[kit.Step],
+    lang: str,
+    summary: str,
 ) -> None:
     if args.json:
         print(kit.Report(command, kit.CODE_NONE, tuple(steps)).as_json())
         return
     for step in steps:
-        print(step.line())
+        print(step.line(lang))
     print(summary)
 
 
@@ -585,33 +597,54 @@ def main() -> None:
     logout.add_argument("--force", action="store_true", help=speak("logout_force_help"))
     logout.set_defaults(run=do_logout)
 
-    install = sub.add_parser(
-        "install", help="разложить набор Quoroom в каталоги Claude Code и OpenCode"
-    )
-    install.add_argument("--claude", action="store_true", help="только Claude Code")
-    install.add_argument("--opencode", action="store_true", help="только OpenCode")
-    install.add_argument("--claude-dir", help=f"вместо {kit.DEFAULT_ROOTS['claude']}")
+    install = sub.add_parser("install", help=speak("kit.help_install"))
     install.add_argument(
-        "--opencode-dir", help=f"вместо {kit.DEFAULT_ROOTS['opencode']}"
+        "--claude", action="store_true", help=speak("kit.help_claude_only")
     )
     install.add_argument(
-        "--force", action="store_true", help="перезаписать чужие файлы"
+        "--opencode", action="store_true", help=speak("kit.help_opencode_only")
     )
-    install.add_argument("--json", action="store_true", help=JSON_HELP)
+    install.add_argument(
+        "--claude-dir",
+        help=speak("kit.help_dir", default=kit.DEFAULT_ROOTS["claude"]),
+    )
+    install.add_argument(
+        "--opencode-dir",
+        help=speak("kit.help_dir", default=kit.DEFAULT_ROOTS["opencode"]),
+    )
+    install.add_argument(
+        "--force", action="store_true", help=speak("kit.help_force_install")
+    )
+    install.add_argument("--json", action="store_true", help=speak("kit.help_json"))
+    add_language(install)
     install.set_defaults(run=do_install)
 
-    uninstall = sub.add_parser("uninstall", help="убрать установленный набор Quoroom")
-    uninstall.add_argument("--claude", action="store_true", help="только Claude Code")
-    uninstall.add_argument("--opencode", action="store_true", help="только OpenCode")
+    uninstall = sub.add_parser("uninstall", help=speak("kit.help_uninstall"))
     uninstall.add_argument(
-        "--force", action="store_true", help="удалить и изменённые вручную файлы"
+        "--claude", action="store_true", help=speak("kit.help_claude_only")
     )
-    uninstall.add_argument("--json", action="store_true", help=JSON_HELP)
+    uninstall.add_argument(
+        "--opencode", action="store_true", help=speak("kit.help_opencode_only")
+    )
+    uninstall.add_argument(
+        "--force", action="store_true", help=speak("kit.help_force_uninstall")
+    )
+    uninstall.add_argument("--json", action="store_true", help=speak("kit.help_json"))
+    add_language(uninstall)
     uninstall.set_defaults(run=do_uninstall)
 
     args = parser.parse_args()
     ROOM_LANGUAGE.insist(getattr(args, "lang", None))
     args.run(args)
+
+
+def add_language(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        LANGUAGE_FLAG,
+        choices=LANGUAGES,
+        default=None,
+        help=speak("kit.help_lang"),
+    )
 
 
 if __name__ == "__main__":

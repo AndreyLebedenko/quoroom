@@ -5,12 +5,10 @@ import unittest
 from pathlib import Path
 
 import tests.test_installer_language as language_tests
-from tests.test_installer_participant_languages import (
-    RecordingMachine,
-    RunSpy,
-    watched,
-)
-from tests.test_installer_server import ADMIN, ROOM, Machine
+from tests.test_installer_participant import Machine
+from tests.test_installer_participant_languages import RunSpy, watched
+from tests.test_installer_server import ADMIN, ROOM
+from tests.test_installer_server import Machine as ServerMachine
 from tests.test_installer_server_languages import ServerLanguageCase
 from sessionchat.installer import participant, server
 from sessionchat.installer.catalogue import LANGUAGES
@@ -52,7 +50,7 @@ ENGLISH_HELP = {
 }
 
 
-class SharedMachine(Machine):
+class SharedMachine(ServerMachine):
     def __init__(self, home: Path, repo: Path, participant_machine) -> None:
         super().__init__(home, repo)
         self.participant_machine = participant_machine
@@ -66,7 +64,7 @@ class SharedMachine(Machine):
 class BothRolesCase(ServerLanguageCase):
     def setUp(self):
         super().setUp()
-        self.participant_machine = RecordingMachine(self.home)
+        self.participant_machine = Machine(self.home)
         self.machine = SharedMachine(self.home, self.repo, self.participant_machine)
         self.env["PATH"] = str(self.home / "pipx" / "bin")
 
@@ -94,14 +92,6 @@ class BothRolesCase(ServerLanguageCase):
         self.assertEqual(code, DONE, given.stderr.getvalue())
         self.participant_machine.token("claude-code")
         return given
-
-    def own_words(self, given) -> str:
-        shown = given.stdout.getvalue() + given.stderr.getvalue()
-        return "\n".join(
-            line
-            for line in shown.splitlines()
-            if line not in self.participant_machine.spoken
-        )
 
     def confirmed_targets(self, given) -> list[str]:
         shown = self.masked(given.stdout.getvalue())
@@ -154,7 +144,7 @@ class ServerWithoutTheFlagTests(ServerLanguageCase):
 
 class BothRolesWithoutTheFlagTests(BothRolesCase):
     def assert_no_russian(self, given):
-        shown = self.own_words(given)
+        shown = given.stdout.getvalue() + given.stderr.getvalue()
         self.assertTrue(shown)
         self.assertIsNone(CYRILLIC.search(shown), shown)
 
