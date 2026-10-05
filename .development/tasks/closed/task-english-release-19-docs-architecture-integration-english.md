@@ -1,6 +1,6 @@
 # Task english-release-19: Architecture and agent-integration guides in English
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-06 (envelope), task english-release-08 (result line).
 **Estimate:** 3 hours.
