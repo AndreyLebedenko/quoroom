@@ -33,6 +33,8 @@
   "participant.help_opencode": "kit for OpenCode only",
   "participant.kept_not_session": "left in place, not a session file: {path}",
   "participant.kit_conflict": "Quoroom kit conflict: {detail}",
+  "participant.kit_conflict_files": "the install is cancelled and nothing was written. These files already exist, differ from the Quoroom kit and were not installed by it: {files}",
+  "participant.kit_conflict_force": "To overwrite them, run the same command again with --force: agentschat install --force",
   "participant.kit_edited_kept": "Kit for {cli}: files edited by hand are left as they are: {files}. The next agentschat install will overwrite them - that is how it works.",
   "participant.kit_failed": "agentschat failed: {detail}",
   "participant.kit_files_orphaned": "The kit files call agentschat, which is gone: delete them or install the participant again.",

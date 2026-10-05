@@ -530,6 +530,12 @@ class ReportTests(AgentschatCase):
         self.plugin().write_text("// чужой плагин", encoding="utf-8")
         return self.document(*arguments, *self.dir_flags())
 
+    def cyrillic_roots(self):
+        return {"claude": self.home / "Андрей", "opencode": self.home / "Олег"}
+
+    def cyrillic_flags(self, roots):
+        return [flag for cli in kit.CLIS for flag in (f"--{cli}-dir", str(roots[cli]))]
+
     def test_a_first_install_reports_every_file_as_installed(self):
         document, _, code = self.document("install", *self.dir_flags())
         self.assertEqual(code, 0)
@@ -550,6 +556,24 @@ class ReportTests(AgentschatCase):
         out, _, _ = self.run_agentschat("install", "--json", *self.dir_flags())
         self.assertEqual(len(out.splitlines()), 1)
         self.assertIsNone(CYRILLIC.search(out), out)
+
+    def test_a_cyrillic_path_reaches_the_document_of_an_install_as_ascii(self):
+        roots = self.cyrillic_roots()
+        out, _, code = self.run_agentschat(
+            "install", "--json", *self.cyrillic_flags(roots)
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(out.isascii(), out)
+        self.assertIn(str(roots["claude"]), json.loads(out)["steps"][0]["target"])
+
+    def test_a_cyrillic_path_reaches_the_document_of_a_removal_as_ascii(self):
+        roots = self.cyrillic_roots()
+        self.run_agentschat("install", *self.cyrillic_flags(roots))
+        with patch.object(kit, "DEFAULT_ROOTS", roots):
+            out, _, code = self.run_agentschat("uninstall", "--json")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.isascii(), out)
+        self.assertIn(str(roots["claude"]), json.loads(out)["steps"][0]["target"])
 
     def test_a_repeat_install_reports_every_file_as_unchanged(self):
         self.run_agentschat("install", *self.dir_flags())
@@ -618,6 +642,50 @@ class ExitCodeTests(unittest.TestCase):
 
     def test_the_refusal_code_of_the_client_differs_from_a_plain_failure(self):
         self.assertNotEqual(client.REFUSED, client.FAILURE)
+
+
+class ReportReadingTests(unittest.TestCase):
+    def document(self, **changes) -> str:
+        stored = {
+            "command": kit.COMMAND_INSTALL,
+            "ok": True,
+            "code": kit.CODE_NONE,
+            "steps": [{"action": "unchanged", "cli": "claude", "target": "a"}],
+        }
+        return json.dumps(stored | changes)
+
+    def read(self, raw, command=kit.COMMAND_INSTALL):
+        return kit.Report.read(raw, command)
+
+    def test_a_document_of_the_asked_command_is_read(self):
+        report = self.read(self.document())
+        self.assertEqual(report.command, kit.COMMAND_INSTALL)
+        self.assertEqual(report.code, kit.CODE_NONE)
+        self.assertTrue(report.ok)
+        self.assertEqual(report.steps[0].target, Path("a"))
+
+    def test_a_document_of_another_command_is_no_document(self):
+        self.assertIsNone(self.read(self.document(command=kit.COMMAND_UNINSTALL)))
+
+    def test_a_document_that_contradicts_its_own_code_is_no_document(self):
+        self.assertIsNone(self.read(self.document(ok=False)))
+
+    def test_a_refusal_that_blames_no_file_is_no_document(self):
+        self.assertIsNone(
+            self.read(self.document(code=kit.CODE_CONFLICT, ok=False, steps=[]))
+        )
+
+    def test_an_empty_step_list_is_a_document_when_nothing_was_refused(self):
+        self.assertEqual(self.read(self.document(steps=[])).steps, ())
+
+    def test_words_around_the_document_are_no_document(self):
+        self.assertIsNone(self.read(f"отчёт ниже:\n{self.document()}\nвсё."))
+
+    def test_the_words_of_a_refusal_are_no_document(self):
+        self.assertIsNone(self.read("установка отменена, ничего не записано."))
+
+    def test_an_action_nobody_declared_is_no_document(self):
+        self.assertIsNone(self.read(self.document(steps=[{"action": "written"}])))
 
 
 if __name__ == "__main__":

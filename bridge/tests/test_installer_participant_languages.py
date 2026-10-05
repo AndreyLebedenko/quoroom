@@ -1,5 +1,6 @@
 """Task installer-bilingual, slice 2: the participant role speaks English by default and Russian on request."""
 
+import ast
 import re
 import unittest
 from dataclasses import dataclass, replace
@@ -555,11 +556,21 @@ class StableIdentityTests(unittest.TestCase):
         source = Path(participant.__file__).read_text(encoding="utf-8")
         self.assertIsNone(CYRILLIC.search(source), source)
 
+    def test_the_participant_module_names_no_step_and_no_refusal_of_the_client(self):
+        tree = ast.parse(Path(participant.__file__).read_text(encoding="utf-8"))
+        used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        used |= {
+            node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+        }
+        for banned in ("Action", "WRITES", "KitConflict", "value"):
+            with self.subTest(name=banned):
+                self.assertNotIn(banned, used)
+
 
 class KitFailureTests(ParticipantLanguageCase):
     def said(self, lang, result):
         run = self.run_for(self.given(lang=lang))
-        return run, participant.kit_failure(run, result)
+        return run, participant.kit_failure(run, result, kit.COMMAND_INSTALL)
 
     def conflict_report(self, target: Path) -> str:
         return kit.Report(
@@ -567,6 +578,14 @@ class KitFailureTests(ParticipantLanguageCase):
             kit.CODE_CONFLICT,
             (kit.Step(kit.Action.CONFLICT, target, "claude"),),
         ).as_json()
+
+    def conflict_detail(self, run, target: Path) -> str:
+        return " ".join(
+            [
+                run.t("participant.kit_conflict_files", files=str(target)),
+                run.t("participant.kit_conflict_force"),
+            ]
+        )
 
     def test_the_code_the_client_reports_tells_a_conflict_apart_in_both_languages(self):
         target = Path("some-file")
@@ -576,7 +595,11 @@ class KitFailureTests(ParticipantLanguageCase):
                     lang, completed(self.conflict_report(target), "", 1)
                 )
                 self.assertEqual(
-                    said, run.t("participant.kit_conflict", detail=str(target))
+                    said,
+                    run.t(
+                        "participant.kit_conflict",
+                        detail=self.conflict_detail(run, target),
+                    ),
                 )
 
     def test_any_other_failure_of_the_client_is_a_plain_failure_in_both_languages(self):

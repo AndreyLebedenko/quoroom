@@ -108,23 +108,27 @@ class Report:
                     for step in self.steps
                 ],
             },
-            ensure_ascii=False,
+            ensure_ascii=True,
         )
 
     @classmethod
-    def read(cls, raw: str) -> "Report | None":
+    def read(cls, raw: str, command: str) -> "Report | None":
         try:
             stored = json.loads(raw)
-            return cls(
-                str(stored["command"]),
-                str(stored["code"]),
-                tuple(
-                    Step(Action(step["action"]), Path(step["target"]), str(step["cli"]))
-                    for step in stored["steps"]
-                ),
+            steps = tuple(
+                Step(Action(step["action"]), Path(step["target"]), str(step["cli"]))
+                for step in stored["steps"]
             )
+            code = str(stored["code"])
+            if str(stored["command"]) != command:
+                return None
+            if stored["ok"] is not (code == CODE_NONE):
+                return None
+            if code != CODE_NONE and not steps:
+                return None
         except (ValueError, KeyError, TypeError):
             return None
+        return cls(command, code, steps)
 
 
 def conflicts(steps: Iterable[Step]) -> list[Step]:

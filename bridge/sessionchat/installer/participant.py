@@ -146,8 +146,11 @@ class KitInstallStep:
                 [str(agentchat(run)), "install", *cli_flags(clis), JSON_FLAG]
             )
             if result.returncode != 0:
-                raise RuntimeError(kit_failure(run, result))
-            self.written = kit_report(run, result).wrote
+                raise RuntimeError(kit_failure(run, result, kit.COMMAND_INSTALL))
+            report = kit_report(run, result, kit.COMMAND_INSTALL)
+            if not report.ok:
+                raise RuntimeError(kit_failure(run, result, kit.COMMAND_INSTALL))
+            self.written = report.wrote
         self.handled = True
 
 
@@ -179,7 +182,7 @@ class KitRemoveStep:
                 [str(path), "uninstall", *cli_flags(self.removal.asked), JSON_FLAG]
             )
             if result.returncode != 0:
-                raise RuntimeError(kit_failure(run, result))
+                raise RuntimeError(kit_failure(run, result, kit.COMMAND_UNINSTALL))
             self.removal.uninstalled = True
         self.handled = True
 
@@ -524,19 +527,27 @@ def cli_flags(clis: Sequence[str]) -> list[str]:
     return [f"--{cli}" for cli in clis]
 
 
-def kit_report(run: Run, result) -> kit.Report:
-    report = kit.Report.read(result.stdout or "")
+def kit_report(run: Run, result, command: str) -> kit.Report:
+    report = kit.Report.read(result.stdout or "", command)
     if report is None:
-        raise RuntimeError(kit_failure(run, result))
+        raise RuntimeError(kit_failure(run, result, command))
     return report
 
 
-def kit_failure(run: Run, result) -> str:
-    report = kit.Report.read(result.stdout or "")
+def kit_failure(run: Run, result, command: str) -> str:
+    report = kit.Report.read(result.stdout or "", command)
     if report is not None and report.code == kit.CODE_CONFLICT:
         return run.t(
             "participant.kit_conflict",
-            detail=", ".join(str(step.target) for step in report.refused),
+            detail=" ".join(
+                [
+                    run.t(
+                        "participant.kit_conflict_files",
+                        files=", ".join(str(step.target) for step in report.refused),
+                    ),
+                    run.t("participant.kit_conflict_force"),
+                ]
+            ),
         )
     detail = (result.stderr or result.stdout or "").strip()
     return run.t("participant.kit_failed", detail=detail)
