@@ -31,6 +31,7 @@ from pathlib import Path
 import requests
 
 from . import kit
+from . import client_result
 from .client_language import RoomLanguage
 from .i18n import Catalogue
 from .protocol import DEAF_SECONDS, DEFAULT_URL, WAIT_SECONDS
@@ -42,6 +43,10 @@ FAILURE = 1
 REFUSED = 5
 JSON_HELP = "отчёт кодом, без предложений"
 ENVELOPE_WITHOUT_TEXT = "envelope_without_text"
+BROKER_UNREACHABLE = "broker_unreachable"
+BROKER_REFUSED = "broker_refused"
+NOT_LOGGED_IN = "not_logged_in"
+UNEXPECTED_ANSWER = "unexpected_answer"
 
 
 class ContractError(RuntimeError):
@@ -54,14 +59,27 @@ def base() -> str:
     return (os.environ.get("AGENTSCHAT_URL") or DEFAULT_URL).rstrip("/")
 
 
-def credentials(agent: str) -> dict:
+def saved_credentials(agent: str) -> dict | None:
     path = STORE / f"{agent}.json"
     if not path.is_file():
-        fail(
-            f"сессия {agent} не подключена к чату. Сначала выполните: "
-            f"agentschat login --agent {agent}"
-        )
+        return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def not_logged_in_message(agent: str) -> str:
+    return " ".join(
+        (
+            speak("not_logged_in", agent=agent),
+            speak("not_logged_in_login", agent=agent),
+        )
+    )
+
+
+def credentials(agent: str) -> dict:
+    saved = saved_credentials(agent)
+    if saved is None:
+        fail(not_logged_in_message(agent))
+    return saved
 
 
 def speak(key: str, **params: object) -> str:
@@ -76,6 +94,25 @@ def learn_language(answer: object) -> None:
 def fail(message: str) -> None:
     print(speak("failure_line", message=message), file=sys.stderr)
     raise SystemExit(FAILURE)
+
+
+def report(command: str, ok: bool, **fields: object) -> None:
+    print(client_result.line(command, ok, **fields), flush=True)
+
+
+def fail_with_result(command: str, code: str, message: str, **fields: object) -> None:
+    try:
+        fail(message)
+    finally:
+        report(command, False, **fields, code=code)
+
+
+def refusal_code(response: requests.Response, default: str = BROKER_REFUSED) -> str:
+    try:
+        code = response.json().get("code")
+    except (ValueError, AttributeError):
+        return default
+    return code if isinstance(code, str) and code else default
 
 
 def explain(response: requests.Response) -> str:
@@ -111,75 +148,98 @@ def do_login(args: argparse.Namespace) -> None:
             timeout=15,
         )
     except requests.RequestException as error:
-        fail(f"брокер недоступен на {base()}: {error}")
+        fail_with_result(
+            "login",
+            BROKER_UNREACHABLE,
+            speak("login_broker_unreachable", url=base(), error=error),
+            agent=args.agent,
+        )
     if response.status_code != 200:
-        fail(explain(response))
+        fail_with_result(
+            "login", refusal_code(response), explain(response), agent=args.agent
+        )
     data = response.json()
     learn_language(data)
-    if data.get("reconnected"):
-        # Фразу «подключена к комнате» ниже читает плагин OpenCode, поэтому
-        # она должна остаться и здесь: по ней он привязывает сессию.
-        print(
-            f"AGENTSCHAT: это твоя прежняя регистрация, токен сверился — "
-            f"сессия {args.agent} подключена к комнате {data['room']}.\n"
-            "Новой регистрации не заводилось, слот остался за тобой."
-        )
     STORE.mkdir(parents=True, exist_ok=True)
     path = STORE / f"{args.agent}.json"
     path.write_text(
         json.dumps({"agent": args.agent, "token": data["token"]}, ensure_ascii=False),
         encoding="utf-8",
     )
-    if data.get("reconnected"):
-        if data.get("mode") == "listener":
-            print(
-                "Listener прежнего запуска умер вместе с процессом — подними "
-                f"его заново ФОНОВОЙ командой: agentschat wait --agent "
-                f"{args.agent}"
-            )
-        return
-    if data.get("mode") == "plugin":
-        print(
-            f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
-            "Связь держит плагин Quoroom внутри самого OpenCode: он уже "
-            "опрашивает брокера и вложит входящее сообщение прямо в эту сессию.\n"
-            "Listener запускать НЕ надо — его роль исполняет плагин."
-        )
-        return
-    if data.get("mode") == "push":
-        print(
-            f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
-            "Доставку берёт на себя брокер: входящие сообщения будут приходить "
-            "тебе как обычные запросы, помеченные конвертом AGENTSCHAT.\n"
-            "Listener запускать НЕ надо — он тебе не нужен и работать не будет."
-        )
-        return
-    print(
-        f"AGENTSCHAT: сессия {args.agent} подключена к комнате {data['room']}.\n"
-        "Теперь запусти listener ФОНОВОЙ командой и не жди её завершения:\n"
-        f"    agentschat wait --agent {args.agent}\n"
-        "Когда listener завершится, ты будешь разбужен его выводом. Первым "
-        "действием после пробуждения подними listener заново."
+    print("\n".join(login_sentences(args.agent, data)))
+    report(
+        "login",
+        True,
+        agent=args.agent,
+        mode=data.get("mode"),
+        reconnected=bool(data.get("reconnected")),
     )
+
+
+def login_sentences(agent: str, data: dict) -> list[str]:
+    room = data["room"]
+    if data.get("reconnected"):
+        lines = [
+            speak("login_reconnected", agent=agent, room=room),
+            speak("login_reconnected_slot_kept"),
+        ]
+        if data.get("mode") == "listener":
+            lines.append(speak("login_reconnected_listener", agent=agent))
+        return lines
+    connected = speak("login_connected", agent=agent, room=room)
+    if data.get("mode") == "plugin":
+        return [
+            connected,
+            speak("login_plugin_holds"),
+            speak("login_plugin_no_listener"),
+        ]
+    if data.get("mode") == "push":
+        return [
+            connected,
+            speak("login_push_delivery"),
+            speak("login_push_no_listener"),
+        ]
+    return [
+        connected,
+        speak("login_listener_start"),
+        f"    agentschat wait --agent {agent}",
+        " ".join((speak("login_listener_woken"), speak("login_listener_restart"))),
+    ]
 
 
 def do_logout(args: argparse.Namespace) -> None:
     payload = {"agent": args.agent, "force": bool(args.force)}
     if not args.force:
-        payload["token"] = credentials(args.agent)["token"]
+        saved = saved_credentials(args.agent)
+        if saved is None:
+            fail_with_result(
+                "logout",
+                NOT_LOGGED_IN,
+                not_logged_in_message(args.agent),
+                agent=args.agent,
+            )
+        payload["token"] = saved["token"]
     try:
         response = requests.post(f"{base()}/logout", json=payload, timeout=15)
     except requests.RequestException as error:
-        fail(f"брокер недоступен: {error}")
+        fail_with_result(
+            "logout",
+            BROKER_UNREACHABLE,
+            speak("logout_broker_unreachable", error=error),
+            agent=args.agent,
+        )
     if response.status_code != 200:
-        fail(explain(response))
+        fail_with_result(
+            "logout", refusal_code(response), explain(response), agent=args.agent
+        )
     if not args.force:
         # Свои учётные данные убираем за собой. Чужие — нет: --force выселяет
         # сессию, которая может быть ещё жива, и удалённый файл лишил бы её
         # даже возможности понять, что произошло. Токен и так уже недействителен:
         # брокер ответит ей 409, и она это увидит.
         (STORE / f"{args.agent}.json").unlink(missing_ok=True)
-    print(f"AGENTSCHAT: сессия {args.agent} отключена.")
+    print(speak("logout_done", agent=args.agent))
+    report("logout", True, agent=args.agent)
 
 
 def poll_once(agent: str, token: str) -> str | None:
@@ -331,25 +391,53 @@ def do_ask(args: argparse.Namespace) -> None:
     )
 
 
-def status_text(response: requests.Response) -> str:
+def status_answer(response: requests.Response) -> dict | None:
     if "application/json" not in response.headers.get("Content-Type", ""):
-        return response.text
+        return None
     answer = response.json()
     learn_language(answer)
-    sessions = answer.get("sessions") if isinstance(answer, dict) else None
-    return "\n".join(
-        str(session.get("line", ""))
-        for session in sessions or []
-        if isinstance(session, dict)
-    )
+    return answer if isinstance(answer, dict) else {}
+
+
+def status_sessions(answer: dict | None) -> list[dict] | None:
+    sessions = (answer or {}).get("sessions")
+    if not isinstance(sessions, list):
+        return None
+    return [session for session in sessions if isinstance(session, dict)]
+
+
+def unreadable_status(response: requests.Response, answer: dict | None) -> str:
+    if answer is None:
+        return response.text.rstrip()
+    message = answer.get("message")
+    return message.strip() if isinstance(message, str) else ""
 
 
 def do_status(args: argparse.Namespace) -> None:
     try:
         response = requests.get(f"{base()}/status", timeout=15)
     except requests.RequestException as error:
-        fail(f"брокер недоступен на {base()}: {error}")
-    print(status_text(response).rstrip())
+        fail_with_result(
+            "status",
+            BROKER_UNREACHABLE,
+            speak("status_broker_unreachable", url=base(), error=error),
+        )
+    answer = status_answer(response)
+    sessions = status_sessions(answer)
+    if sessions is None:
+        print(unreadable_status(response, answer))
+        report("status", False, code=refusal_code(response, UNEXPECTED_ANSWER))
+        return
+    print("\n".join(str(session.get("line", "")) for session in sessions).rstrip())
+    report(
+        "status",
+        True,
+        language=answer.get("language"),
+        sessions=[
+            {key: value for key, value in session.items() if key != "line"}
+            for session in sessions
+        ],
+    )
 
 
 def do_install(args: argparse.Namespace) -> None:
@@ -392,16 +480,11 @@ def main() -> None:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    login = sub.add_parser("login", help="подключить эту сессию к чату")
+    login = sub.add_parser("login", help=speak("login_help"))
     login.add_argument("--agent", required=True)
-    login.add_argument("--label", default="", help="чем занята сессия")
+    login.add_argument("--label", default="", help=speak("login_label_help"))
     login.add_argument(
-        "--reconnect",
-        action="store_true",
-        help=(
-            "вернуться к своей же регистрации после перезапуска CLI; "
-            "получится, только если совпадёт токен с диска"
-        ),
+        "--reconnect", action="store_true", help=speak("login_reconnect_help")
     )
     login.set_defaults(run=do_login)
 
@@ -426,12 +509,12 @@ def main() -> None:
     inbox.add_argument("--agent", required=True)
     inbox.set_defaults(run=do_inbox)
 
-    status = sub.add_parser("status", help="кто подключён и кто слушает")
+    status = sub.add_parser("status", help=speak("status_help"))
     status.set_defaults(run=do_status)
 
-    logout = sub.add_parser("logout", help="отключить сессию")
+    logout = sub.add_parser("logout", help=speak("logout_help"))
     logout.add_argument("--agent", required=True)
-    logout.add_argument("--force", action="store_true", help="освободить чужой слот")
+    logout.add_argument("--force", action="store_true", help=speak("logout_force_help"))
     logout.set_defaults(run=do_logout)
 
     install = sub.add_parser(

@@ -15,6 +15,7 @@ import requests
 from sessionchat import client, client_language
 from sessionchat.i18n import Catalogue
 from tests.catalogue_contract import CatalogueContract
+from tests.result_line import without_result
 
 TOKEN = "test-token"
 STATUS_ANSWER = {
@@ -56,13 +57,16 @@ class ClientLanguageTestCase(unittest.TestCase):
         self.store = self.home / ".agentschat"
         self.catalogue_dir = self.home / "catalogue"
         self.catalogue_dir.mkdir()
+        real = Catalogue("sessionchat", "client_messages")
         self.catalogue = write_catalogue(
             self.catalogue_dir,
             {
+                **real.templates("en"),
                 "failure_line": "ERR-EN {message}",
                 "probe": "English probe {name}",
             },
             {
+                **real.templates("ru"),
                 "failure_line": "ERR-RU {message}",
                 "probe": "Русская проба {name}",
             },
@@ -401,7 +405,9 @@ class EveryBrokerAnswerRefreshesTheLanguageTests(ClientLanguageTestCase):
             redirect_stdout(output),
         ):
             client.do_status(argparse.Namespace())
-        self.assertEqual(output.getvalue(), "claude-code  не подключён\n")
+        self.assertEqual(
+            without_result(output.getvalue()), "claude-code  не подключён\n"
+        )
 
     def test_status_prints_a_plain_text_answer_untouched_and_learns_nothing(self):
         answer = Answer(
@@ -413,7 +419,9 @@ class EveryBrokerAnswerRefreshesTheLanguageTests(ClientLanguageTestCase):
             redirect_stdout(output),
         ):
             client.do_status(argparse.Namespace())
-        self.assertEqual(output.getvalue(), "claude-code  не подключён\n")
+        self.assertEqual(
+            without_result(output.getvalue()), "claude-code  не подключён\n"
+        )
         self.assertFalse(self.store.exists())
 
 

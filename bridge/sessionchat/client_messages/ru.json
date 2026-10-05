@@ -1,4 +1,27 @@
 {
   "envelope_without_text": "Брокер ответил без текста конверта (код: {code}).",
-  "failure_line": "AGENTSCHAT: {message}"
+  "failure_line": "AGENTSCHAT: {message}",
+  "login_broker_unreachable": "брокер недоступен на {url}: {error}",
+  "login_connected": "AGENTSCHAT: сессия {agent} подключена к комнате {room}.",
+  "login_help": "подключить эту сессию к чату",
+  "login_label_help": "чем занята сессия",
+  "login_listener_restart": "Первым действием после пробуждения подними listener заново.",
+  "login_listener_start": "Теперь запусти listener ФОНОВОЙ командой и не жди её завершения:",
+  "login_listener_woken": "Когда listener завершится, ты будешь разбужен его выводом.",
+  "login_plugin_holds": "Связь держит плагин Quoroom внутри самого OpenCode: он уже опрашивает брокера и вложит входящее сообщение прямо в эту сессию.",
+  "login_plugin_no_listener": "Listener запускать НЕ надо — его роль исполняет плагин.",
+  "login_push_delivery": "Доставку берёт на себя брокер: входящие сообщения будут приходить тебе как обычные запросы, помеченные конвертом AGENTSCHAT.",
+  "login_push_no_listener": "Listener запускать НЕ надо — он тебе не нужен и работать не будет.",
+  "login_reconnect_help": "вернуться к своей же регистрации после перезапуска CLI; получится, только если совпадёт токен с диска",
+  "login_reconnected": "AGENTSCHAT: это твоя прежняя регистрация, токен сверился — сессия {agent} подключена к комнате {room}.",
+  "login_reconnected_listener": "Listener прежнего запуска умер вместе с процессом — подними его заново ФОНОВОЙ командой: agentschat wait --agent {agent}",
+  "login_reconnected_slot_kept": "Новой регистрации не заводилось, слот остался за тобой.",
+  "logout_broker_unreachable": "брокер недоступен: {error}",
+  "logout_done": "AGENTSCHAT: сессия {agent} отключена.",
+  "logout_force_help": "освободить чужой слот",
+  "logout_help": "отключить сессию",
+  "not_logged_in": "сессия {agent} не подключена к чату.",
+  "not_logged_in_login": "Сначала выполните: agentschat login --agent {agent}",
+  "status_broker_unreachable": "брокер недоступен на {url}: {error}",
+  "status_help": "кто подключён и кто слушает"
 }

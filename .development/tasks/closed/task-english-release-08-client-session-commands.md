@@ -1,6 +1,6 @@
 # Task english-release-08: login, logout, status - localised, with a machine-readable result
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-07.
 **Estimate:** 3 hours.

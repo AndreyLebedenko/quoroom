@@ -15,6 +15,7 @@ from sessionchat.broker import Broker, Registration
 from sessionchat.i18n import LANGUAGES
 from sessionchat.protocol import MAX_DEPTH, MAX_SENDS_PER_MINUTE
 from tests.catalogue_contract import CYRILLIC
+from tests.result_line import without_result
 from tests.test_broker_refusals import english_config
 from tests.test_client_language import Answer, ClientLanguageTestCase
 from tests.test_sessionchat import StoreBackedBrokerMixin
@@ -522,7 +523,7 @@ class StatusAsTheClientPrintsItTests(StatusCase, ClientLanguageTestCase):
             redirect_stdout(output),
         ):
             client.do_status(types.SimpleNamespace())
-        return output.getvalue()
+        return without_result(output.getvalue())
 
     async def test_the_client_prints_the_rendered_lines_one_per_agent(self):
         for language in LANGUAGES:
@@ -560,7 +561,7 @@ class StatusAsTheClientPrintsItTests(StatusCase, ClientLanguageTestCase):
             redirect_stdout(output),
         ):
             client.do_status(types.SimpleNamespace())
-        self.assertEqual(output.getvalue(), "other words entirely\n")
+        self.assertEqual(without_result(output.getvalue()), "other words entirely\n")
 
     async def test_an_answer_without_sessions_prints_an_empty_line(self):
         output = io.StringIO()
@@ -571,7 +572,7 @@ class StatusAsTheClientPrintsItTests(StatusCase, ClientLanguageTestCase):
             redirect_stdout(output),
         ):
             client.do_status(types.SimpleNamespace())
-        self.assertEqual(output.getvalue(), "\n")
+        self.assertEqual(without_result(output.getvalue()), "\n")
 
 
 class SayAsTheClientPrintsItTests(RoomCase, ClientLanguageTestCase):
