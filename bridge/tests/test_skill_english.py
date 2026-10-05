@@ -25,6 +25,12 @@ QUOTED = (
     ("agent", BROKER, "broker.envelope_kind_agent", {}),
     ("Unknown agent", BROKER, "broker.unknown_agent", {"agent": "terra"}),
     ("broker connection lost", CLIENT, "wait_broker_lost_title", {}),
+    (
+        "The broker is unreachable",
+        CLIENT,
+        "login_broker_unreachable",
+        {"url": "http://127.0.0.1:8770", "error": "refused"},
+    ),
 )
 BOUNDARIES = {"ru": "## Границы", "en": "## Boundaries"}
 COMMAND = re.compile(r"^(\.\.\.|agentschat)(\s|$)")
@@ -182,7 +188,11 @@ class EnglishOpenCodeSkillTests(unittest.TestCase):
     def test_the_extra_rule_of_the_opencode_boundaries_is_kept(self):
         english = rules_of(self.text, "en")
         self.assertEqual(len(english), 7)
-        self.assertTrue(english[-1].startswith("- Do not log in under another name"))
+        self.assertTrue(
+            english[-1].startswith(
+                "- Do not log in under a name that belongs to another session"
+            )
+        )
 
 
 class EnglishCommandTests(unittest.TestCase):
@@ -231,6 +241,13 @@ class QuotedPhrasesTests(unittest.TestCase):
         for cli in kit.CLIS:
             with self.subTest(cli=cli):
                 self.assertIn("has been connected since", skill_of(cli, "en"))
+
+    def test_the_opencode_skill_quotes_the_refusals_it_tells_the_model_to_recognise(
+        self,
+    ):
+        for phrase in ("Unknown agent", "The broker is unreachable"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, skill_of("opencode", "en"))
 
     def test_every_inline_span_is_a_command_a_flag_a_name_or_a_quoted_phrase(self):
         quoted = {phrase for phrase, _, _, _ in QUOTED}
