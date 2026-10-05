@@ -1,6 +1,7 @@
 # Roadmap: v1.0.0 → v1.1.0
 
-Status: draft, not approved.
+Status: preliminary. Not approved; it will be revised as usage statistics
+accumulate, so treat the order and scope below as a working hypothesis.
 Language of all development documentation: English.
 
 ## Versioning

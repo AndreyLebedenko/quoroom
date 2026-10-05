@@ -38,8 +38,9 @@ How it works:
 
 The first generation worked differently: the bridge itself launched `claude -p`,
 `codex exec` and `opencode run` for every message. The agent was born, answered
-and died - it could never ask a question of its own. That code is kept in
-`legacy/` and does not run; why it was abandoned is written in
+and died - it could never ask a question of its own. That code was removed
+from the tree in v1.0.0-rc.2 and lives in git history at the tag `v1.0.0-rc.1`;
+why it was abandoned is written in
 [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
 
 ## Architecture
@@ -99,8 +100,9 @@ can be added through OpenCode.
 
 ## What is not there yet
 
-- The session registry lives in memory: restarting the broker requires
-  `/chatlogin` again in every session.
+- Broker restart keeps session registrations (SQLite; covered by unit tests
+  only, not tried live). Messages queued but not yet delivered are lost, and a
+  registration silent for over 3 minutes is released.
 - The depth limit, the rate limit, the listener's self-guard during a long
   broker outage, and the listener surviving automatic context compaction have
   not been tried live; they are covered by unit tests only.
@@ -174,6 +176,10 @@ Closing the log window does not stop the stand; use `stop.ps1` for that. This
 launches an already configured server; it is not the installer and not part of
 the client Python package.
 
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
 ## Repository layout
 
 - `docs/SESSION_BRIDGE.md` - how the broker works, every decision taken, and
@@ -191,7 +197,6 @@ the client Python package.
   into projects: `agentschat install` lays the kit into the user's Claude Code
   and OpenCode directories, so sessions in any project see it.
 - `docker/` - Continuwuity, Element Web, Caddy.
-- `legacy/` - the first-generation bridge; it does not run.
 
 ## Tests
 
@@ -204,6 +209,6 @@ ruff format --check
 node --test tests/plugin/agentschat.test.mjs
 ```
 
-Tests in `legacy/tests/` are not part of this run. Anything that needs the
+Anything that needs the
 Docker stack, Element or real CLI sessions is checked by hand; what has been
 verified live is recorded in [docs/VERIFICATION.md](docs/VERIFICATION.md).
