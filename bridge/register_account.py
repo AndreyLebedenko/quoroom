@@ -1,42 +1,56 @@
 #!/usr/bin/env python3
 """
-Небольшой помощник для регистрации аккаунта на Continuwuity через
-Matrix Client-Server API (User-Interactive Auth, m.login.registration_token),
-чтобы не собирать вручную двухшаговый curl.
+A small helper that registers an account on Continuwuity through the Matrix
+Client-Server API (User-Interactive Auth, m.login.registration_token), so that
+nobody has to assemble the two-step curl by hand.
 
-Пример:
+Example:
 
     python register_account.py \\
         --homeserver https://agentschat.local \\
         --username claude-code \\
-        --password "длинный-случайный-пароль" \\
-        --registration-token "значение REGISTRATION_TOKEN из docker/.env"
+        --password "a-long-random-password" \\
+        --registration-token "the REGISTRATION_TOKEN value from docker/.env"
 
-ВАЖНО про TLS: `mkcert -install` добавляет корневой сертификат в системное
-хранилище Windows, поэтому браузеры ему доверяют. Библиотека `requests`,
-которую использует этот скрипт, системное хранилище НЕ читает — она
-доверяет только своему собственному набору CA (пакет certifi). Поэтому даже
-после `mkcert -install` этот скрипт будет падать с
-`CERTIFICATE_VERIFY_FAILED`, если явно не указать ему путь к корню mkcert:
+The messages are English; `--lang ru` prints them in Russian.
 
-    --ca-bundle "$(mkcert -CAROOT)\rootCA.pem"
+About TLS: `mkcert -install` adds the root certificate to the Windows system
+store, so browsers trust it. The `requests` library that this script uses does
+not read the system store - it trusts only its own set of CAs (the certifi
+package). So even after `mkcert -install` this script fails with
+`CERTIFICATE_VERIFY_FAILED` unless it is told where the mkcert root is:
 
-(это не баг настройки, а особенность requests/certifi — сам Continuwuity и
-мост на aiohttp/matrix-nio системное хранилище Windows читают нормально).
-Если совсем не хочется возиться — есть более грубый --no-verify-ssl
-(полностью отключает проверку сертификата, годится только для этого
-локального разового вызова).
+    --ca-bundle "$(mkcert -CAROOT)\\rootCA.pem"
 
-Выводит user_id / access_token / device_id — их нужно вставить в
-bridge/config.yaml для соответствующего агента (или сохранить как ваш личный
-аккаунт-наблюдатель, если username — это вы, а не бот).
+(this is not a setup mistake but a property of requests/certifi - Continuwuity
+itself and the bridge on aiohttp/matrix-nio read the Windows system store
+normally). If you do not want to bother, the blunter --no-verify-ssl turns the
+certificate check off completely (fit only for this one local call).
+
+It prints user_id / access_token / device_id - paste them into
+bridge/config.yaml for the matching agent (or keep them as your own observer
+account, if the username is you and not a bot).
 """
 
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import requests
+
+from sessionchat.i18n import DEFAULT_LANGUAGE, LANGUAGES, Catalogue
+
+CATALOGUE = Catalogue.from_path(Path(__file__).resolve().parent / "register_messages")
+
+
+def message(lang: str, key: str, **params: object) -> str:
+    return CATALOGUE.text(lang, key, **params)
+
+
+def fail(lang: str, key: str, **params: object) -> None:
+    print(message(lang, key, **params), file=sys.stderr)
+    sys.exit(1)
 
 
 def register(
@@ -46,12 +60,10 @@ def register(
     token: str,
     device_name: str,
     verify: "bool | str",
+    lang: str = DEFAULT_LANGUAGE,
 ) -> dict:
-    """verify: True (обычная проверка), False (без проверки) или путь к
-    файлу CA-бандла (например, к rootCA.pem от mkcert)."""
     url = f"{homeserver.rstrip('/')}/_matrix/client/v3/register"
 
-    # Шаг 1: сервер должен ответить 401 со списком доступных auth-flow и session id.
     r1 = requests.post(
         url,
         json={
@@ -63,21 +75,15 @@ def register(
     )
 
     if r1.status_code == 200:
-        # Некоторые серверы при выключенной UIA могут зарегистрировать сразу.
         return r1.json()
 
     if r1.status_code != 401:
-        print(
-            f"Неожиданный ответ на шаге 1: {r1.status_code} {r1.text}", file=sys.stderr
-        )
-        sys.exit(1)
+        fail(lang, "unexpected_step_one", status=r1.status_code, text=r1.text)
 
     session = r1.json().get("session")
     if not session:
-        print(f"В ответе сервера нет session: {r1.text}", file=sys.stderr)
-        sys.exit(1)
+        fail(lang, "no_session", text=r1.text)
 
-    # Шаг 2: повторяем запрос с указанием auth.
     r2 = requests.post(
         url,
         json={
@@ -94,34 +100,48 @@ def register(
     )
 
     if r2.status_code != 200:
-        print(f"Регистрация не удалась: {r2.status_code} {r2.text}", file=sys.stderr)
-        sys.exit(1)
+        fail(lang, "registration_failed", status=r2.status_code, text=r2.text)
 
     return r2.json()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Регистрация аккаунта на Continuwuity")
+def chosen_language(argv: list[str] | None) -> str:
+    probe = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    probe.add_argument("--lang", choices=LANGUAGES, default=DEFAULT_LANGUAGE)
+    return probe.parse_known_args(argv)[0].lang
+
+
+def build_parser(lang: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=message(lang, "description"))
     parser.add_argument(
-        "--homeserver", required=True, help="например https://agentschat.local"
+        "--homeserver", required=True, help=message(lang, "homeserver_help")
     )
     parser.add_argument(
-        "--username", required=True, help="localpart, например claude-code"
+        "--username", required=True, help=message(lang, "username_help")
     )
     parser.add_argument("--password", required=True)
     parser.add_argument("--registration-token", required=True, dest="token")
     parser.add_argument("--device-name", default="agentschat-bridge")
     parser.add_argument(
-        "--ca-bundle",
-        default=None,
-        help=r'путь к rootCA.pem из mkcert, например "$(mkcert -CAROOT)\rootCA.pem"',
+        "--ca-bundle", default=None, help=message(lang, "ca_bundle_help")
     )
     parser.add_argument(
         "--no-verify-ssl",
         action="store_true",
-        help="полностью отключить проверку сертификата (грубее, чем --ca-bundle)",
+        help=message(lang, "no_verify_ssl_help"),
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--lang",
+        choices=LANGUAGES,
+        default=DEFAULT_LANGUAGE,
+        help=message(lang, "lang_help"),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None):
+    lang = chosen_language(argv)
+    args = build_parser(lang).parse_args(argv)
 
     if args.no_verify_ssl:
         verify = False
@@ -138,20 +158,13 @@ def main():
             token=args.token,
             device_name=args.device_name,
             verify=verify,
+            lang=lang,
         )
     except requests.exceptions.SSLError:
-        print(
-            "\nОшибка проверки сертификата. requests не читает системное хранилище "
-            "Windows, куда mkcert -install кладёт свой корень. Добавьте:\n"
-            r'    --ca-bundle "$(mkcert -CAROOT)\rootCA.pem"'
-            "\n"
-            "к этой же команде и запустите заново.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        fail(lang, "certificate_failed")
 
     print(json.dumps(data, indent=2, ensure_ascii=False))
-    print("\n--- вставить в bridge/config.yaml ---")
+    print(message(lang, "paste_heading"))
     print(f'user_id: "{data.get("user_id")}"')
     print(f'access_token: "{data.get("access_token")}"')
     print(f'device_id: "{data.get("device_id")}"')
