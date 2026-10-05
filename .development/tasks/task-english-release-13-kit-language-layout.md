@@ -76,3 +76,15 @@ the room language, chosen at install time.
 - [ ] `install --lang` selects the variant; the manifest is language-independent.
 - [ ] The agreement test exists and passes for the languages present.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Note from task 11 (orchestrator, 2026-10-05)
+
+In the participant installer `install_kit` runs before `check_broker`, so at the
+moment the kit is laid down the installer does not know the room language. The
+kit variant is therefore the installer's own `--lang` (forwarded to
+`agentschat install --lang`). A person who installs an English participant for a
+Russian room, or the reverse, gets the other language until they re-run
+`agentschat install --lang <room language>`. A bare `agentschat install` on a
+clean machine now speaks English (remembered language, then `en`). State this in
+the report and the install guide (task 18); do not reorder the installer steps
+in this task.

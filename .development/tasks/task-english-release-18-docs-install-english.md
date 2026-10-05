@@ -82,3 +82,16 @@ default; the document that describes them should follow.
    links in `docs/`, `README.ru.md` and the closed cards; adding a new file
    breaks none. Recommended: add the new file and leave the Russian in place
    until the whole of `docs/` has an owner for translation.
+
+## Owner decision and notes (orchestrator, 2026-10-05)
+
+- Open question 1 is answered: the English guide is a NEW file,
+  `docs/INSTALL.en.md`; `docs/INSTALL.md` stays Russian. `ARCHITECTURE.en.md`
+  (task 19) already links to `INSTALL.en.md`, and the README bullet for it sits
+  next to the one task 19 edited: expect to merge that hunk.
+- Task 11 note: the kit language follows the installer's `--lang`, not the room
+  language (see the note in task 13). Say so in the participant section, with the
+  fix (`agentschat install --lang <room language>`).
+- Task 05 note: the broker's "ready" log line quoted in the Russian guide near
+  section 5 is now English in every configuration; quote the English line in the
+  English guide and fix the Russian guide in step.
