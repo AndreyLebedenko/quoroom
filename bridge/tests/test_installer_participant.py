@@ -52,6 +52,7 @@ class Machine:
         kit_conflict_code: int = client.REFUSED,
         kit_answers: str = "document",
         kit_claims_no_writes: bool = False,
+        kit_code: str = kit.CODE_NONE,
     ) -> None:
         self.home = home
         self.platform = platform
@@ -60,6 +61,7 @@ class Machine:
         self.kit_conflict_code = kit_conflict_code
         self.kit_answers = kit_answers
         self.kit_claims_no_writes = kit_claims_no_writes
+        self.kit_code = kit_code
         self.fails = fails
         self.log: list[str] = []
         self.installed_by: set[str] = set()
@@ -176,7 +178,7 @@ class Machine:
             steps = [
                 kit.Step(kit.Action.UNCHANGED, step.target, step.cli) for step in steps
             ]
-        return self.report(kit.COMMAND_INSTALL, kit.CODE_NONE, steps)
+        return self.report(kit.COMMAND_INSTALL, self.kit_code, steps)
 
     def uninstall_kit(self, flags: list[str]) -> str:
         steps = []
@@ -899,6 +901,20 @@ class KitReportTests(ParticipantCase):
         self.assertEqual(code, DONE)
         self.assertNotIn(RESTART, given.stdout.getvalue())
         self.assertIn("Набор на месте и не менялся", given.stdout.getvalue())
+
+    def test_a_substituted_variant_is_a_successful_step_that_wrote_the_kit(self):
+        self.machine.kit_code = kit.VARIANT_MISSING
+        code, given = self.install()
+        self.assertEqual(code, DONE)
+        self.assertIn(RESTART, given.stdout.getvalue())
+        self.assertTrue(self.machine.target_for("claude").is_file())
+
+    def test_a_substituted_variant_that_wrote_nothing_asks_for_no_restart(self):
+        self.machine.kit_code = kit.VARIANT_MISSING
+        self.machine.kit_claims_no_writes = True
+        code, given = self.install()
+        self.assertEqual(code, DONE)
+        self.assertNotIn(RESTART, given.stdout.getvalue())
 
     def test_the_report_of_the_removal_is_asked_for_by_a_flag(self):
         self.install()

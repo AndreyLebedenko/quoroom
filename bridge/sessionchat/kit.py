@@ -45,6 +45,7 @@ COMMON = "common"
 FALLBACK_VARIANT = "ru"
 VARIANT_MISSING = "kit_variant_missing"
 REFUSALS = frozenset({CODE_CONFLICT})
+KNOWN_CODES = frozenset({CODE_NONE, CODE_CONFLICT, VARIANT_MISSING})
 
 
 def action_key(action: Action) -> str:
@@ -127,6 +128,8 @@ class Report:
             code = str(stored["code"])
             if str(stored["command"]) != command:
                 return None
+            if code not in KNOWN_CODES:
+                return None
             if stored["ok"] is not (code not in REFUSALS):
                 return None
             if code in REFUSALS and not steps:
@@ -170,10 +173,21 @@ def target_roots(
     return {cli: Path(given[cli]) if given[cli] else DEFAULT_ROOTS[cli] for cli in clis}
 
 
-def variant_of(lang: str, source: Traversable = KIT) -> tuple[Traversable, str]:
-    if (source / lang).is_dir():
+def variant_of(
+    lang: str, cli: str, source: Traversable = KIT
+) -> tuple[Traversable, str]:
+    if (source / lang / cli).is_dir():
         return source / lang, CODE_NONE
     return source / FALLBACK_VARIANT, VARIANT_MISSING
+
+
+def variants_of(
+    lang: str, clis: Iterable[str], source: Traversable = KIT
+) -> tuple[dict[str, Traversable], str]:
+    chosen = {cli: variant_of(lang, cli, source) for cli in clis}
+    missing = any(code == VARIANT_MISSING for _, code in chosen.values())
+    variants = {cli: variant for cli, (variant, _) in chosen.items()}
+    return variants, VARIANT_MISSING if missing else CODE_NONE
 
 
 def kit_files(
@@ -237,13 +251,13 @@ def install_action(content: bytes, target: Path, listed: bool, force: bool) -> A
 def plan_install(
     roots: dict[str, Path],
     manifest: dict[Path, Entry],
-    variant: Traversable,
+    variants: dict[str, Traversable],
     force: bool = False,
     source: Traversable = KIT,
 ) -> list[Step]:
     steps = []
     for cli, root in roots.items():
-        for item in kit_files(cli, variant, source):
+        for item in kit_files(cli, variants[cli], source):
             target = root.resolve().joinpath(*item.relative.parts)
             action = install_action(item.content, target, target in manifest, force)
             steps.append(Step(action, target, cli, item.content))
@@ -274,8 +288,8 @@ def install(
     lang: str,
 ) -> Report:
     manifest = load_manifest(manifest_path)
-    variant, code = variant_of(lang, source)
-    steps = plan_install(roots, manifest, variant, force, source)
+    variants, code = variants_of(lang, roots, source)
+    steps = plan_install(roots, manifest, variants, force, source)
     save_manifest(manifest_path, apply_install(steps, manifest, lang))
     return Report(COMMAND_INSTALL, code, tuple(steps))
 
