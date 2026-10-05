@@ -13,16 +13,16 @@ EXPECTED_KIT_FILES = {
 }
 BASE_DIGESTS = {
     "common/opencode/plugins/agentschat.js": (
-        "e7174ac13507160eaab5e67765b8eb3e26c7dfef19502b81835e9cf8c9b3b323"
+        "8b41519313868e4fd79eac166de5c493af7ebb520eb6c9ec66dcf865d952a948"
     ),
     "ru/claude/skills/chatlogin/SKILL.md": (
-        "b1636a875c799a8330ffc6bb723acd092e73ff4bf9e369f2131c49998e3ac2d9"
+        "49f9735c91fad908b07880635d99197cfaf24a1fb39bbcfab9e515ec12ff237c"
     ),
     "ru/opencode/command/chatlogin.md": (
-        "565d7bf44ee097c599fa640c97147218bc9f3b049bd279eb3a825bda5885673b"
+        "7df809a5ce73db6cbe4c0515d6fe8bae28837b50e15b050d18c82620d8976176"
     ),
     "ru/opencode/skills/chatlogin/SKILL.md": (
-        "cacf11d43d4ca71c86678b113167a758adc935040feb50b57d1cfb39b5a18849"
+        "547be19a4e7cb374249207cc8cf048c307c83203cafcb0048c34d8ad9c26dd13"
     ),
 }
 QUOROOM_REPOSITORY_PATHS = (
@@ -30,6 +30,10 @@ QUOROOM_REPOSITORY_PATHS = (
     "bridge/agentschat",
     ".opencode/plugins",
 )
+
+
+def with_unix_line_ends(content: bytes) -> bytes:
+    return content.replace(b"\r\n", b"\n")
 
 
 def kit_root() -> Traversable:
@@ -70,7 +74,18 @@ class KitContentsTests(unittest.TestCase):
         found = files_under(kit_root())
         for relative, digest in sorted(BASE_DIGESTS.items()):
             with self.subTest(file=relative):
-                self.assertEqual(kit.digest(found[relative].read_bytes()), digest)
+                self.assertEqual(
+                    kit.digest(with_unix_line_ends(found[relative].read_bytes())),
+                    digest,
+                )
+
+    def test_the_digests_do_not_depend_on_the_line_ends_of_the_checkout(self):
+        windows_checkout = b"first\r\nsecond\r\n"
+        unix_checkout = b"first\nsecond\n"
+        self.assertEqual(
+            kit.digest(with_unix_line_ends(windows_checkout)),
+            kit.digest(with_unix_line_ends(unix_checkout)),
+        )
 
     def test_the_plugin_is_the_one_file_every_language_shares(self):
         self.assertEqual(
@@ -109,13 +124,9 @@ class KitNamesNoQuoroomRepositoryPathTests(unittest.TestCase):
 
 
 class SkillAgreementTests(unittest.TestCase):
-    """Правило извлечения: подкоманда - токен сразу за словом `agentschat`,
-    ключи вида `--flag` берутся из всего текста, кроме строк-ограждений.
-    Правило механическое и одно на все языки и оба CLI, поэтому расхождение
-    видно сразу."""
-
     COMMAND = re.compile(r"\bagentschat ([a-z][a-z-]*)")
     FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z-]*)")
+    INLINE_CODE = re.compile(r"`([^`\n]+)`")
     FENCE = "```"
     SHARED_COMMANDS = {"login", "say", "ask", "status"}
 
@@ -123,11 +134,19 @@ class SkillAgreementTests(unittest.TestCase):
         resource = kit_root().joinpath(lang, cli, "skills", "chatlogin", "SKILL.md")
         return resource.read_text(encoding="utf-8")
 
+    def code_of(self, text: str) -> str:
+        fenced, prose, code = False, [], []
+        for line in text.splitlines():
+            if line.lstrip().startswith(self.FENCE):
+                fenced = not fenced
+            else:
+                (code if fenced else prose).append(line)
+        code.extend(self.INLINE_CODE.findall("\n".join(prose)))
+        return "\n".join(code)
+
     def mentions(self, text: str) -> tuple[set[str], set[str]]:
-        body = "\n".join(
-            line for line in text.splitlines() if not line.startswith(self.FENCE)
-        )
-        return set(self.COMMAND.findall(body)), set(self.FLAG.findall(body))
+        code = self.code_of(text)
+        return set(self.COMMAND.findall(code)), set(self.FLAG.findall(code))
 
     def skills(self) -> dict[tuple[str, str], str]:
         return {
@@ -158,21 +177,54 @@ class SkillAgreementTests(unittest.TestCase):
                 self.assertIn("wait", self.mentions(skills[(lang, "claude")])[0])
                 self.assertNotIn("wait", self.mentions(skills[(lang, "opencode")])[0])
 
+    def test_prose_that_names_the_tool_is_not_taken_for_a_command(self):
+        text = "The agentschat tool prints the reply, see --help."
+        self.assertEqual(self.mentions(text), (set(), set()))
+
+    def test_a_command_in_inline_code_is_taken(self):
+        text = "Run `agentschat say --agent me` first."
+        self.assertEqual(self.mentions(text), ({"say"}, {"--agent"}))
+
+    def test_a_command_in_a_fenced_block_is_taken(self):
+        text = "Run:\n```bash\nagentschat ask --timeout 5\n```\nThe agentschat tool."
+        self.assertEqual(self.mentions(text), ({"ask"}, {"--timeout"}))
+
+    def test_an_extra_flag_in_one_language_is_caught(self):
+        for (lang, cli), text in sorted(self.skills().items()):
+            drifted = f"{text}\n`agentschat say --extra`\n"
+            with self.subTest(lang=lang, cli=cli):
+                self.assertNotEqual(self.mentions(drifted), self.mentions(text))
+
+    def test_a_lost_timeout_flag_is_caught(self):
+        for (lang, cli), text in sorted(self.skills().items()):
+            drifted = text.replace("--timeout", "")
+            with self.subTest(lang=lang, cli=cli):
+                self.assertNotEqual(self.mentions(drifted), self.mentions(text))
+
+    def test_a_renamed_agent_flag_is_caught(self):
+        for (lang, cli), text in sorted(self.skills().items()):
+            drifted = text.replace("--agent", "--name")
+            with self.subTest(lang=lang, cli=cli):
+                self.assertNotEqual(self.mentions(drifted), self.mentions(text))
+
 
 class TemporaryRussianOnlyVariantTests(unittest.TestCase):
-    """Откат на ru и код kit_variant_missing удалит задача 15 вместе с
-    английскими файлами; до неё вариант один."""
-
     def test_only_the_russian_variant_ships(self):
         self.assertEqual(variants(), [kit.FALLBACK_VARIANT])
 
     def test_the_language_that_has_a_variant_is_its_own(self):
-        self.assertEqual(kit.variant_of(kit.FALLBACK_VARIANT)[1], kit.CODE_NONE)
+        for cli in kit.CLIS:
+            with self.subTest(cli=cli):
+                self.assertEqual(
+                    kit.variant_of(kit.FALLBACK_VARIANT, cli)[1], kit.CODE_NONE
+                )
 
     def test_a_language_without_a_variant_falls_back_and_says_so(self):
-        root, code = kit.variant_of("en")
-        self.assertEqual(code, kit.VARIANT_MISSING)
-        self.assertEqual(root.name, kit.FALLBACK_VARIANT)
+        for cli in kit.CLIS:
+            with self.subTest(cli=cli):
+                root, code = kit.variant_of("en", cli)
+                self.assertEqual(code, kit.VARIANT_MISSING)
+                self.assertEqual(root.name, kit.FALLBACK_VARIANT)
 
     def test_a_substituted_variant_is_not_a_refusal(self):
         self.assertNotIn(kit.VARIANT_MISSING, kit.REFUSALS)

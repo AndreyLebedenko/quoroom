@@ -210,3 +210,89 @@ make.
 5. **`kit.py` gained no Cyrillic** (it had none since task 11) and the Russian
    files moved without a byte changed; the digests above are the proof and a test
    holds them.
+## Review round 1
+
+Branch `fix/task-13-review-round-1`. Not committed.
+
+### Fixes
+
+1. **Digests were CRLF digests.** `BASE_DIGESTS` were computed over the CRLF
+   working tree; git stores LF (`* text=auto`), so every LF checkout failed all
+   four subtests. The values are now sha256 of the git blobs at `55835ca`
+   (`git show 55835ca:<old path>`): plugin `8b415193...a948`, claude skill
+   `49f9735c...237c`, command `7df809a5...6176`, opencode skill
+   `547be19a...dd13` (full values in `tests/test_kit.py`). The test normalises
+   `\r\n` to `\n` before hashing. Checked on the CRLF working tree (pass) and on
+   a copy of the package with every kit file converted to LF (pass); the old test
+   fails on that LF copy. New `test_the_digests_do_not_depend_on_the_line_ends_
+   of_the_checkout` pins the normalisation.
+2. **Variant is chosen per CLI.** `kit.variant_of(lang, cli, source)` now looks
+   for `<lang>/<cli>`, not `<lang>`; `kit.variants_of(lang, clis, source)` returns
+   one variant per CLI and `kit_variant_missing` when any asked CLI fell back to
+   `ru`. `plan_install` takes the per-CLI mapping. Install of only the CLIs
+   asked for is judged only on those CLIs (`--claude` alone with a claude-only
+   `en` reports `none`). The fallback stays one small block for task 15 to
+   delete. New `PartialEnglishVariantTests` build a temporary copy of the kit
+   with `en/claude/...` only and cover: claude takes `en`, opencode takes `ru`
+   with the code; `--opencode` alone installs `ru` and reports the code (the
+   reviewed defect); `--claude` alone reports `none`; ru->en->ru goes through
+   `update`, other CLI unchanged, never a conflict; destination paths and
+   manifest keys equal those of `ru`.
+3. **Agreement test reads code only.** Tokens now come from fenced blocks and
+   inline code spans; prose is ignored. Extractor tests: "The agentschat tool
+   prints the reply" yields nothing; inline and fenced commands are taken; an
+   added flag, a lost `--timeout` and a renamed `--agent` each change the result
+   for every language/CLI. Real skills give the same sets as before (the rule
+   was not hiding a difference).
+4. **`Report.read` is an allowlist.** New `KNOWN_CODES` (`none`, `conflict`,
+   `kit_variant_missing`); anything else reads as `None`. `ReportReadTests`: known
+   codes read back with the right `ok`; unknown code with `ok: true` is refused;
+   known code with a mismatching `ok` is refused.
+5. **Tests with no content.**
+   (a) the language test now compares the whole document without `code`
+   (renamed `test_the_document_apart_from_its_code_does_not_depend_on_the_
+   language`);
+   (b) `tests/test_installer_participant.py`: the fake machine takes `kit_code`;
+   two tests: a `kit_variant_missing` document with rc 0 and `ok: true` is a
+   successful step and, when it wrote, asks for the restart; when it wrote
+   nothing, no restart;
+   (c) the tautologies are gone: `test_a_manifest_of_the_previous_layout_...` is
+   now a literal manifest of the old format (path, sha256, cli) over an older
+   file, and the install reads it as an `update`, not a conflict
+   (`test_a_manifest_written_by_the_layout_before_the_move_is_read_as_it_was`);
+   `..._land_at_the_same_paths_every_language_uses` is replaced by comparing the
+   file tree after `ru` and after the partial `en`; `..._holds_no_language_in_
+   its_keys` is replaced by comparing manifest keys after `ru` and after `en`.
+6. **Details.** Docstrings removed from `SkillAgreementTests`,
+   `TemporaryRussianOnlyVariantTests`, `TemporaryVariantFallbackTests`.
+   `docs/SESSION_BRIDGE.md`: the layout paragraph says exactly what exists now
+   (`common/`, `ru/`; `en/` arrives with tasks 14 and 15), describes the per-CLI
+   fallback and the code, and the wrong "--lang keys differ" sentence is replaced:
+   the skills differ in mechanics (listener for Claude Code, plugin for OpenCode,
+   hence `wait` only in the Claude skill), and within one CLI all languages name
+   the same commands and flags, checked by a test over code spans.
+
+### Edits to existing tests
+
+- `test_kit_installer.py`: `kit.variant_of(RUSSIAN)` became
+  `kit.variant_of(RUSSIAN, cli)` in `KitSandbox.expected`, `KitFilesTests` and the
+  fallback test (signature changed); `VariantChoiceTests` lost three tautological
+  tests and gained the literal-manifest one; the language-independence test
+  compares the document without `code` (see 5a).
+- `test_kit.py`: `TemporaryRussianOnlyVariantTests` calls `variant_of` per CLI.
+
+### Checks
+
+| Check | Result |
+|-------|--------|
+| `python.exe -m unittest discover -s tests -t .` | 1641 tests, OK, 2 skipped (was 1620) |
+| `node --test tests/plugin/agentschat.test.mjs` | 28 tests, 28 pass |
+| `ruff.exe check` | All checks passed |
+| `ruff.exe format --check` | 66 files already formatted |
+
+### For the orchestrator
+
+`docs/INSTALL.md` section 5.10 ("Язык набора") still says `sessionchat/kit/en/`
+exists; it does not until tasks 14/15. Same inaccuracy as the one fixed in
+`SESSION_BRIDGE.md`; left alone because the brief limited the docs edit to that
+file.

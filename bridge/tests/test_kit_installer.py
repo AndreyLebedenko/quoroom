@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -49,7 +50,7 @@ class KitSandbox(unittest.TestCase):
         return kit.uninstall(self.manifest_path, self.roots, clis, force=force)
 
     def expected(self, cli: str) -> dict[Path, bytes]:
-        variant, _ = kit.variant_of(RUSSIAN)
+        variant, _ = kit.variant_of(RUSSIAN, cli)
         return {
             self.roots[cli].joinpath(*item.relative.parts): item.content
             for item in kit.kit_files(cli, variant)
@@ -70,11 +71,10 @@ class KitSandbox(unittest.TestCase):
 
 class KitFilesTests(unittest.TestCase):
     def test_kit_files_of_each_cli_mirror_the_kit_tree_under_that_cli(self):
-        variant, _ = kit.variant_of(RUSSIAN)
         relatives = {
             (item.cli, item.relative.as_posix())
             for cli in kit.CLIS
-            for item in kit.kit_files(cli, variant)
+            for item in kit.kit_files(cli, kit.variant_of(RUSSIAN, cli)[0])
         }
         self.assertEqual(
             relatives,
@@ -653,71 +653,176 @@ class ReportTests(AgentschatCase):
         self.assertIn(str(self.plugin()), err)
         self.assertIn("--force", err)
 
-    def test_the_steps_of_the_document_do_not_depend_on_the_language(self):
+    def test_the_document_apart_from_its_code_does_not_depend_on_the_language(self):
         russian, _, _ = self.document("install", *self.dir_flags())
         for root in self.roots.values():
             shutil.rmtree(root)
             root.mkdir()
         self.manifest_path.unlink(missing_ok=True)
         english, _, _ = self.document("install", lang="en", *self.dir_flags())
-        self.assertEqual(english["steps"], russian["steps"])
-        self.assertEqual(english["command"], russian["command"])
-        self.assertEqual(english["ok"], russian["ok"])
+        self.assertEqual(self.without_code(english), self.without_code(russian))
+
+    def without_code(self, document):
+        return {key: value for key, value in document.items() if key != "code"}
 
 
 class VariantChoiceTests(KitSandbox):
-    def report(self, lang):
-        roots = {cli: self.roots[cli] for cli in kit.CLIS}
-        return kit.install(self.manifest_path, roots, lang=lang)
-
     def test_a_language_with_a_variant_reports_nothing_special(self):
-        self.assertEqual(self.report(RUSSIAN).code, kit.CODE_NONE)
-
-    def test_the_variant_files_land_at_the_same_paths_every_language_uses(self):
-        self.report(RUSSIAN)
-        russian = {path: path.read_bytes() for path in self.kit_targets()}
-        for path in self.kit_targets():
-            path.unlink()
-        self.manifest_path.unlink(missing_ok=True)
-        self.report("en")
-        self.assertEqual(
-            {path: path.read_bytes() for path in self.kit_targets()}, russian
-        )
-
-    def test_the_manifest_holds_no_language_in_its_keys(self):
-        self.report("en")
-        stored = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        for item in stored["files"]:
-            with self.subTest(path=item["path"]):
-                self.assertNotIn("kit/en", item["path"].replace("\\", "/"))
-                self.assertNotIn("kit/ru", item["path"].replace("\\", "/"))
-
-    def test_a_manifest_of_the_previous_layout_is_read_by_the_new_one(self):
-        self.report(RUSSIAN)
-        before = self.manifest()
-        for path in self.kit_targets():
-            path.unlink()
-        again = self.report("en")
-        self.assertEqual(self.manifest(), before)
-        self.assertEqual({step.action for step in again.steps}, {Action.INSTALL})
+        self.assertEqual(self.install().code, kit.CODE_NONE)
 
     def test_a_second_install_over_the_same_variant_changes_nothing(self):
-        self.report(RUSSIAN)
-        again = self.report(RUSSIAN)
+        self.install()
+        again = self.install()
         self.assertEqual({step.action for step in again.steps}, {Action.UNCHANGED})
 
-    def kit_targets(self) -> list[Path]:
-        return sorted(
-            path
-            for root in self.roots.values()
-            for path in root.rglob("*")
-            if path.is_file()
+    def test_a_manifest_written_by_the_layout_before_the_move_is_read_as_it_was(self):
+        previous_content = b"the skill of the previous release\n"
+        self.claude_skill().parent.mkdir(parents=True)
+        self.claude_skill().write_bytes(previous_content)
+        self.manifest_path.parent.mkdir(parents=True)
+        self.manifest_path.write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {
+                            "path": str(self.claude_skill()),
+                            "sha256": hashlib.sha256(previous_content).hexdigest(),
+                            "cli": "claude",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
         )
+        report = self.install(clis=("claude",))
+        self.assertEqual(
+            self.actions(report.steps), {self.claude_skill(): Action.UPDATE}
+        )
+
+
+class PartialEnglishVariantTests(KitSandbox):
+    ENGLISH_SKILL = b"English skill of the Claude Code kit\n"
+
+    def setUp(self):
+        super().setUp()
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.source = Path(scratch.name) / "kit"
+        shutil.copytree(str(kit.KIT), self.source)
+        english = self.source / "en" / "claude" / "skills" / "chatlogin"
+        english.mkdir(parents=True)
+        (english / "SKILL.md").write_bytes(self.ENGLISH_SKILL)
+
+    def install_from_partial(self, lang, clis=kit.CLIS):
+        roots = {cli: self.roots[cli] for cli in clis}
+        return kit.install(self.manifest_path, roots, source=self.source, lang=lang)
+
+    def russian_bytes(self, cli, *parts):
+        return (self.source / "ru" / cli).joinpath(*parts).read_bytes()
+
+    def test_a_cli_that_has_the_variant_takes_it(self):
+        self.install_from_partial("en")
+        self.assertEqual(self.claude_skill().read_bytes(), self.ENGLISH_SKILL)
+
+    def test_a_cli_without_the_variant_takes_russian_and_the_code_says_so(self):
+        report = self.install_from_partial("en")
+        self.assertEqual(report.code, kit.VARIANT_MISSING)
+        self.assertEqual(
+            (self.roots["opencode"] / "skills" / "chatlogin" / "SKILL.md").read_bytes(),
+            self.russian_bytes("opencode", "skills", "chatlogin", "SKILL.md"),
+        )
+        self.assertEqual(
+            (self.roots["opencode"] / "command" / "chatlogin.md").read_bytes(),
+            self.russian_bytes("opencode", "command", "chatlogin.md"),
+        )
+
+    def test_asking_for_opencode_alone_installs_its_russian_files_and_says_so(self):
+        report = self.install_from_partial("en", clis=("opencode",))
+        self.assertEqual(report.code, kit.VARIANT_MISSING)
+        self.assertEqual(
+            {step.target.name for step in report.steps},
+            {"SKILL.md", "chatlogin.md", "agentschat.js"},
+        )
+
+    def test_asking_for_claude_alone_has_nothing_to_report(self):
+        report = self.install_from_partial("en", clis=("claude",))
+        self.assertEqual(report.code, kit.CODE_NONE)
+
+    def test_a_language_that_is_complete_reports_nothing_while_english_is_partial(
+        self,
+    ):
+        self.assertEqual(self.install_from_partial(RUSSIAN).code, kit.CODE_NONE)
+
+    def test_the_variant_files_land_at_the_paths_the_russian_ones_did(self):
+        self.install_from_partial(RUSSIAN)
+        russian_paths = set(tree(self.roots["claude"]))
+        self.install_from_partial("en")
+        self.assertEqual(set(tree(self.roots["claude"])), russian_paths)
+
+    def test_the_manifest_lists_the_same_paths_whichever_variant_was_laid_down(self):
+        self.install_from_partial(RUSSIAN)
+        after_russian = set(self.manifest())
+        self.install_from_partial("en")
+        self.assertEqual(set(self.manifest()), after_russian)
+
+    def test_changing_the_language_goes_through_the_update_path_and_back(self):
+        self.install_from_partial(RUSSIAN)
+        russian = self.claude_skill().read_bytes()
+        english = self.install_from_partial("en")
+        self.assertEqual(
+            self.actions(english.steps)[self.claude_skill()], Action.UPDATE
+        )
+        self.assertEqual(self.claude_skill().read_bytes(), self.ENGLISH_SKILL)
+        back = self.install_from_partial(RUSSIAN)
+        self.assertEqual(self.actions(back.steps)[self.claude_skill()], Action.UPDATE)
+        self.assertEqual(self.claude_skill().read_bytes(), russian)
+
+    def test_changing_the_language_leaves_the_files_of_the_other_cli_alone(self):
+        self.install_from_partial(RUSSIAN)
+        english = self.install_from_partial("en")
+        others = {step.action for step in english.steps if step.cli == "opencode"}
+        self.assertEqual(others, {Action.UNCHANGED})
+
+    def test_changing_the_language_back_and_forth_never_conflicts(self):
+        self.install_from_partial(RUSSIAN)
+        for lang in ("en", RUSSIAN, "en"):
+            with self.subTest(lang=lang):
+                report = self.install_from_partial(lang)
+                self.assertNotIn(Action.CONFLICT, {s.action for s in report.steps})
+
+
+class ReportReadTests(unittest.TestCase):
+    def document(self, **changes) -> str:
+        stored = {
+            "command": "install",
+            "ok": True,
+            "code": "none",
+            "steps": [{"action": "installed", "cli": "claude", "target": "a"}],
+        }
+        return json.dumps(stored | changes)
+
+    def test_every_code_that_is_not_a_refusal_is_read_back_as_ok(self):
+        for code in (kit.CODE_NONE, kit.VARIANT_MISSING):
+            with self.subTest(code=code):
+                report = kit.Report.read(self.document(code=code), "install")
+                self.assertEqual(report.code, code)
+                self.assertTrue(report.ok)
+
+    def test_a_refusal_is_read_back_as_not_ok(self):
+        report = kit.Report.read(
+            self.document(code=kit.CODE_CONFLICT, ok=False), "install"
+        )
+        self.assertFalse(report.ok)
+
+    def test_a_code_nobody_defined_is_not_read_even_when_it_claims_success(self):
+        self.assertIsNone(kit.Report.read(self.document(code="mystery"), "install"))
+
+    def test_a_known_code_with_the_wrong_ok_is_not_read(self):
+        wrong = self.document(code=kit.VARIANT_MISSING, ok=False)
+        self.assertIsNone(kit.Report.read(wrong, "install"))
 
 
 class TemporaryVariantFallbackTests(KitSandbox):
-    """Откат на ru удалит задача 15, когда появится английский вариант."""
-
     def test_a_language_without_a_variant_still_lays_the_kit_down(self):
         report = kit.install(self.manifest_path, self.roots, lang="en")
         self.assertEqual(report.code, kit.VARIANT_MISSING)
@@ -727,11 +832,10 @@ class TemporaryVariantFallbackTests(KitSandbox):
 
     def test_the_fallback_lays_down_exactly_the_variant_that_exists(self):
         kit.install(self.manifest_path, self.roots, lang="en")
-        variant, _ = kit.variant_of(kit.FALLBACK_VARIANT)
         expected = {
             self.roots[cli].joinpath(*item.relative.parts): item.content
             for cli in kit.CLIS
-            for item in kit.kit_files(cli, variant)
+            for item in kit.kit_files(cli, kit.variant_of(kit.FALLBACK_VARIANT, cli)[0])
         }
         self.assertEqual({path: path.read_bytes() for path in expected}, expected)
 
