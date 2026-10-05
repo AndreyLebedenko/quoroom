@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+import getpass
+import os
+import socket
+import ssl
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import IO, Protocol
+
+PROBE_TIMEOUT = 5.0
+WINDOWS = "windows"
+LINUX = "linux"
+PASSWORD_MISMATCH = "пароли не совпали"
+
+
+class Runner(Protocol):
+    def __call__(
+        self,
+        argv: Sequence[str],
+        stdin: str | None = ...,
+        output: Path | None = ...,
+    ) -> "subprocess.CompletedProcess[str]": ...
+
+
+class Resolver(Protocol):
+    def __call__(self, name: str) -> Sequence[str]: ...
+
+
+class SecretReader(Protocol):
+    def __call__(self, prompt: str) -> str: ...
+
+
+@dataclass(frozen=True)
+class Probe:
+    status: int | None
+    error: str | None
+    untrusted: bool = False
+
+
+@dataclass(frozen=True)
+class Boundaries:
+    repo: Path
+    home: Path
+    env: Mapping[str, str]
+    stdin: IO[str]
+    stdout: IO[str]
+    stderr: IO[str]
+    run: Runner
+    probe: Callable[[str], Probe]
+    platform: str
+    resolve: Resolver
+    secret: SecretReader
+
+    @classmethod
+    def real(cls) -> "Boundaries":
+        return cls(
+            repo=repository_root(),
+            home=Path.home(),
+            env=os.environ,
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            run=run_command,
+            probe=answers,
+            platform=platform_name(),
+            resolve=resolved,
+            secret=ask_secret,
+        )
+
+
+def repository_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def platform_name() -> str:
+    return WINDOWS if sys.platform.startswith("win") else LINUX
+
+
+def run_command(
+    argv: Sequence[str],
+    stdin: str | None = None,
+    output: Path | None = None,
+) -> "subprocess.CompletedProcess[str]":
+    sink = None
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        sink = output.open("w", encoding="utf-8", errors="replace")
+    try:
+        done = subprocess.run(
+            list(argv),
+            input=stdin,
+            stdin=None if stdin is not None else subprocess.DEVNULL,
+            stdout=sink if sink is not None else subprocess.PIPE,
+            stderr=subprocess.STDOUT if sink is not None else subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    finally:
+        if sink is not None:
+            sink.close()
+    if output is None:
+        return done
+    return subprocess.CompletedProcess(
+        done.args,
+        done.returncode,
+        output.read_text(encoding="utf-8", errors="replace"),
+        "",
+    )
+
+
+def resolved(name: str) -> tuple[str, ...]:
+    try:
+        found = socket.getaddrinfo(name, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return ()
+    return tuple(dict.fromkeys(item[4][0] for item in found))
+
+
+def ask_secret(prompt: str) -> str:
+    typed = getpass.getpass(prompt)
+    if typed != getpass.getpass("Повторите пароль: "):
+        raise ValueError(PASSWORD_MISMATCH)
+    return typed
+
+
+def answers(url: str, timeout: float = PROBE_TIMEOUT) -> Probe:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(url, timeout=timeout) as response:
+            return Probe(response.status, None)
+    except urllib.error.HTTPError as error:
+        return Probe(error.code, None)
+    except urllib.error.URLError as error:
+        return Probe(None, describe(error), certificate_refused(error))
+    except OSError as error:
+        return Probe(None, describe(error), certificate_refused(error))
+
+
+def describe(error: BaseException) -> str:
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        message = getattr(reason, "verify_message", None) or str(reason)
+        return f"сертификат не подтверждён: {message}"
+    return str(reason)
+
+
+def certificate_refused(error: BaseException) -> bool:
+    return isinstance(getattr(error, "reason", error), ssl.SSLCertVerificationError)

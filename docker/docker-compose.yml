@@ -11,7 +11,7 @@ services:
       # allow_registration и registration_token у образа Continuwuity НЕ
       # управляются переменными окружения (в отличие от остального здесь) —
       # только конфиг-файлом, поэтому они заданы в continuwuity/continuwuity.toml
-      # и подключены через CONTINUWUITY_CONFIG ниже. См. docs/INSTALL.md, шаг 3а.
+      # и подключены через CONTINUWUITY_CONFIG ниже. См. docs/INSTALL.md, раздел 5.4.
       CONTINUWUITY_CONFIG: /etc/continuwuity/continuwuity.toml
       # Локальный стенд, наружу не смотрит — федерация не нужна.
       CONTINUWUITY_ALLOW_FEDERATION: "false"

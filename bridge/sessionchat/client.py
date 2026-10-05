@@ -31,17 +31,13 @@ from pathlib import Path
 import requests
 
 from . import kit
-from .protocol import DEAF_SECONDS, DEFAULT_PORT, WAIT_SECONDS, Envelope
+from .protocol import DEAF_SECONDS, DEFAULT_URL, WAIT_SECONDS, Envelope
 
 STORE = Path.home() / ".agentschat"
 
 
-def port() -> int:
-    return int(os.environ.get("AGENTSCHAT_PORT", DEFAULT_PORT))
-
-
 def base() -> str:
-    return f"http://127.0.0.1:{port()}"
+    return (os.environ.get("AGENTSCHAT_URL") or DEFAULT_URL).rstrip("/")
 
 
 def credentials(agent: str) -> dict:

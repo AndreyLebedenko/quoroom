@@ -1,3 +1,4 @@
+import ast
 import importlib
 import json
 import os
@@ -87,6 +88,68 @@ class BrokerExtraMatchesRequirementsTxtTests(unittest.TestCase):
     def test_base_dependencies_are_all_listed_in_requirements_txt(self):
         base = set(project_table()["dependencies"])
         self.assertEqual(base - requirements_txt_lines(), set())
+
+
+class InstallerNeedsNothingInstalledTests(unittest.TestCase):
+    INSTALLER = BRIDGE / "sessionchat" / "installer"
+
+    def loaded_top_level_modules(self, probe: str) -> set[str]:
+        completed = subprocess.run(
+            [sys.executable, "-S", "-c", probe],
+            cwd=BRIDGE,
+            env=dict(os.environ, PYTHONPATH=str(BRIDGE)),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return set(json.loads(completed.stdout))
+
+    def test_importing_the_installer_pulls_in_only_the_standard_library(self):
+        loaded = self.loaded_top_level_modules(
+            "import sys, json, sessionchat.installer.main;"
+            " print(json.dumps(sorted({m.split('.')[0] for m in sys.modules})))"
+        )
+        foreign = loaded - sys.stdlib_module_names - {"sessionchat", "__main__"}
+        self.assertEqual(foreign, set())
+
+    def test_every_installer_import_is_relative_or_standard_library(self):
+        sources = sorted(self.INSTALLER.glob("**/*.py"))
+        offenders = {
+            str(source.relative_to(BRIDGE)): self.foreign_imports(source)
+            for source in sources
+            if self.foreign_imports(source)
+        }
+        self.assertEqual(offenders, {})
+        self.assertGreaterEqual(len(sources), 8)
+
+    def foreign_imports(self, source: Path) -> list[str]:
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        names: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if (
+                    not node.level
+                    and (node.module or "").split(".")[0] not in sys.stdlib_module_names
+                ):
+                    names.append(node.module or "")
+            elif isinstance(node, ast.Import):
+                names += [
+                    alias.name.split(".")[0]
+                    for alias in node.names
+                    if alias.name.split(".")[0] not in sys.stdlib_module_names
+                ]
+        return names
+
+    def test_the_installer_runs_as_a_module_with_bridge_on_the_path(self):
+        completed = subprocess.run(
+            [sys.executable, "-S", "-m", "sessionchat.installer", "--help"],
+            cwd=BRIDGE.parent,
+            env=dict(os.environ, PYTHONPATH=str(BRIDGE)),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--role", completed.stdout)
 
 
 if __name__ == "__main__":
