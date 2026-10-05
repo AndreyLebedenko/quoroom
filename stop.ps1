@@ -1,14 +1,30 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
+
 <#
-  Quoroom - остановить весь локальный стенд: брокер и Docker-инфраструктуру.
+.SYNOPSIS
+  Quoroom - stop the whole local stand: the broker and the Docker infrastructure.
 
-  Именованные Docker-тома (база Continuwuity, данные Caddy) сохраняются -
-  данные не теряются, следующий .\start.ps1 поднимет всё как было.
+.DESCRIPTION
+  The named Docker volumes (the Continuwuity database, the Caddy data) are
+  kept, so no data is lost and the next .\start.ps1 brings everything back as
+  it was.
 
-    .\stop.ps1               # остановить брокер и опустить контейнеры
-    .\stop.ps1 -KeepDocker   # остановить только брокер, контейнеры оставить
+  The messages are printed in the room language: --lang en|ru if given,
+  otherwise the language key of bridge/config.yaml, otherwise English. Any
+  other value gives English.
+
+.PARAMETER KeepDocker
+  Stop only the broker and leave the containers running.
+
+.EXAMPLE
+  .\stop.ps1
+
+.EXAMPLE
+  .\stop.ps1 -KeepDocker
+
+.EXAMPLE
+  .\stop.ps1 --lang ru
 #>
-[CmdletBinding()]
 param(
     [switch]$KeepDocker
 )
@@ -18,49 +34,94 @@ $ErrorActionPreference = 'Stop'
 $root      = $PSScriptRoot
 $dockerDir = Join-Path $root 'docker'
 $bridgeDir = Join-Path $root 'bridge'
+$config    = Join-Path $bridgeDir 'config.yaml'
 $pidFile   = Join-Path $bridgeDir 'state\broker.pid'
 
-function Say($text) { Write-Host $text -ForegroundColor Cyan }
+$language = $null
+for ($position = 0; $position -lt $args.Count; $position++) {
+    $argument = "$($args[$position])"
+    if ($argument -ceq '--lang') {
+        $language = ''
+        if ($position + 1 -lt $args.Count) { $language = "$($args[$position + 1])" }
+    } elseif ($argument.StartsWith('--lang=', [System.StringComparison]::Ordinal)) {
+        $language = $argument.Substring('--lang='.Length)
+    }
+}
+if ($null -eq $language -and (Test-Path -LiteralPath $config)) {
+    $line = Select-String -LiteralPath $config -Pattern '^language:' -Encoding UTF8 |
+        Select-Object -First 1
+    if ($line) {
+        $language = ($line.Line.Substring('language:'.Length) -replace '\s+#.*$', '').Trim()
+        if ($language -match '^(["''])(.*)\1$') { $language = $Matches[2] }
+    }
+}
 
-# --- 1. Брокер ---------------------------------------------------------
+if ($language -ceq 'ru') {
+    $warningLabel = 'ПРЕДУПРЕЖДЕНИЕ'
+    $texts = @{
+        stopping_broker = '==> Останавливаю брокер (PID {0})...'
+        stopping_found  = '==> Останавливаю брокер (PID {0}, найден по командной строке)...'
+        not_running     = '==> Брокер не запущен.'
+        docker_kept     = '==> Docker-контейнеры оставлены поднятыми (-KeepDocker).'
+        no_docker       = 'docker не найден - контейнеры не тронуты.'
+        stopping_docker = '==> Опускаю Docker-стек (тома с данными сохраняются)...'
+        down_failed     = 'docker compose down вернул код {0} (возможно, демон не запущен).'
+        done            = 'Готово.'
+    }
+} else {
+    $warningLabel = 'WARNING'
+    $texts = @{
+        stopping_broker = '==> Stopping the broker (PID {0})...'
+        stopping_found  = '==> Stopping the broker (PID {0}, found by its command line)...'
+        not_running     = '==> The broker is not running.'
+        docker_kept     = '==> The Docker containers are left running (-KeepDocker).'
+        no_docker       = 'docker was not found - the containers were not touched.'
+        stopping_docker = '==> Bringing the Docker stack down (the data volumes are kept)...'
+        down_failed     = 'docker compose down returned code {0} (the daemon may not be running).'
+        done            = 'Done.'
+    }
+}
+
+function Text($key, $values) { $texts[$key] -f @($values) }
+function Warn($key, $values) { Write-Host "${warningLabel}: $(Text $key $values)" -ForegroundColor Yellow }
+function Say($key, $values) { Write-Host (Text $key $values) -ForegroundColor Cyan }
+
 $stopped = $false
 if (Test-Path $pidFile) {
     $bpid = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($bpid) { $bpid = $bpid.Trim() }
     if ($bpid -and (Get-Process -Id ([int]$bpid) -ErrorAction SilentlyContinue)) {
-        Say "==> Останавливаю брокер (PID $bpid)..."
+        Say 'stopping_broker' @($bpid)
         Stop-Process -Id ([int]$bpid) -Force
         $stopped = $true
     }
     Remove-Item $pidFile -ErrorAction SilentlyContinue
 }
 
-# Подстраховка: pid-файл потерян - ищем брокер по командной строке.
 if (-not $stopped) {
     $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match 'sessionchat\.broker' }
     foreach ($p in $procs) {
-        Say "==> Останавливаю брокер (PID $($p.ProcessId), найден по командной строке)..."
+        Say 'stopping_found' @($p.ProcessId)
         Stop-Process -Id $p.ProcessId -Force
         $stopped = $true
     }
 }
-if (-not $stopped) { Say "==> Брокер не запущен." }
+if (-not $stopped) { Say 'not_running' @() }
 
-# --- 2. Docker ---------------------------------------------------------
 if ($KeepDocker) {
-    Say "==> Docker-контейнеры оставлены поднятыми (-KeepDocker)."
+    Say 'docker_kept' @()
 } elseif (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    Write-Host "ПРЕДУПРЕЖДЕНИЕ: docker не найден - контейнеры не тронуты." -ForegroundColor Yellow
+    Warn 'no_docker' @()
 } else {
-    Say "==> Опускаю Docker-стек (тома с данными сохраняются)..."
+    Say 'stopping_docker' @()
     Push-Location $dockerDir
     try {
         docker compose down
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "ПРЕДУПРЕЖДЕНИЕ: docker compose down вернул код $LASTEXITCODE (возможно, демон не запущен)." -ForegroundColor Yellow
+            Warn 'down_failed' @($LASTEXITCODE)
         }
     } finally { Pop-Location }
 }
 
-Write-Host "Готово." -ForegroundColor Green
+Write-Host (Text 'done' @()) -ForegroundColor Green

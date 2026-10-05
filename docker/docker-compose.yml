@@ -8,12 +8,13 @@ services:
       CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
       CONTINUWUITY_ADDRESS: 0.0.0.0
       CONTINUWUITY_PORT: 8008
-      # allow_registration и registration_token у образа Continuwuity НЕ
-      # управляются переменными окружения (в отличие от остального здесь) —
-      # только конфиг-файлом, поэтому они заданы в continuwuity/continuwuity.toml
-      # и подключены через CONTINUWUITY_CONFIG ниже. См. docs/INSTALL.md, раздел 5.4.
+      # allow_registration and registration_token are NOT controlled by
+      # environment variables in the Continuwuity image (unlike the rest
+      # here), only by the config file, so they are set in
+      # continuwuity/continuwuity.toml and wired in through CONTINUWUITY_CONFIG
+      # below. See docs/INSTALL.md, section 5.4.
       CONTINUWUITY_CONFIG: /etc/continuwuity/continuwuity.toml
-      # Локальный стенд, наружу не смотрит — федерация не нужна.
+      # A local stand that does not face outward - federation is not needed.
       CONTINUWUITY_ALLOW_FEDERATION: "false"
       CONTINUWUITY_ALLOW_CHECK_FOR_UPDATES: "false"
       CONTINUWUITY_LOG: "info"
@@ -40,11 +41,11 @@ services:
     restart: unless-stopped
     ports:
       - "443:443"
-      # Порт 80 наружу не публикуем — на Windows он часто занят системным
-      # резервом (Hyper-V/WSL exclusion range), а нам он не нужен: мы всегда
-      # ходим на https://agentschat.local напрямую. Внутри контейнера Caddy
-      # всё равно может использовать 80 для собственного http->https редиректа,
-      # это не конфликтует с хостом.
+      # Port 80 is not published: on Windows it is often taken by a system
+      # reservation (the Hyper-V/WSL exclusion range), and we do not need it,
+      # because we always go to https://agentschat.local directly. Inside the
+      # container Caddy can still use 80 for its own http->https redirect;
+      # that does not conflict with the host.
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/certs:/certs:ro
