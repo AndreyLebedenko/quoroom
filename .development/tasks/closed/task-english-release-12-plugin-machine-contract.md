@@ -1,6 +1,6 @@
 # Task english-release-12: The OpenCode plugin stops reading sentences
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-08 (the result line).
 **Estimate:** 2 hours.
