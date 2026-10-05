@@ -1,6 +1,6 @@
 # Task english-release-13: The kit ships a variant per language
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-11, task english-release-12.
 **Estimate:** 3 hours.

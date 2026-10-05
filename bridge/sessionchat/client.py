@@ -513,18 +513,22 @@ def do_install(args: argparse.Namespace) -> None:
     clis = kit.chosen_clis(args.claude, args.opencode)
     roots = kit.target_roots(clis, args.claude_dir, args.opencode_dir)
     try:
-        steps = kit.install(STORE / "kit.json", roots, force=args.force, lang=lang)
+        kit_report = kit.install(STORE / "kit.json", roots, force=args.force, lang=lang)
     except kit.KitConflict as refusal:
         refuse(args, refusal)
-    reported(args, kit.COMMAND_INSTALL, steps, lang, kit.install_summary(steps, lang))
+    notice_substituted_variant(kit_report, lang)
+    reported(args, kit_report, lang, kit.install_summary(kit_report.steps, lang))
 
 
 def do_uninstall(args: argparse.Namespace) -> None:
     lang = ROOM_LANGUAGE.current(STORE)
     clis = kit.chosen_clis(args.claude, args.opencode)
-    steps = kit.uninstall(STORE / "kit.json", kit.DEFAULT_ROOTS, clis, args.force)
+    kit_report = kit.uninstall(STORE / "kit.json", kit.DEFAULT_ROOTS, clis, args.force)
     reported(
-        args, kit.COMMAND_UNINSTALL, steps, lang, kit.uninstall_summary(steps, lang)
+        args,
+        kit_report,
+        lang,
+        kit.uninstall_summary(kit_report.steps, lang),
     )
 
 
@@ -539,17 +543,24 @@ def refuse(args: argparse.Namespace, conflict: kit.KitConflict) -> None:
     raise SystemExit(REFUSED)
 
 
+def notice_substituted_variant(kit_report: kit.Report, lang: str) -> None:
+    if kit_report.code == kit.VARIANT_MISSING:
+        print(
+            speak("kit.variant_missing", language=lang, fallback=kit.FALLBACK_VARIANT),
+            file=sys.stderr,
+        )
+
+
 def reported(
     args: argparse.Namespace,
-    command: str,
-    steps: list[kit.Step],
+    kit_report: kit.Report,
     lang: str,
     summary: str,
 ) -> None:
     if args.json:
-        print(kit.Report(command, kit.CODE_NONE, tuple(steps)).as_json())
+        print(kit_report.as_json())
         return
-    for step in steps:
+    for step in kit_report.steps:
         print(step.line(lang))
     print(summary)
 

@@ -41,6 +41,10 @@ COMMAND_INSTALL = "install"
 COMMAND_UNINSTALL = "uninstall"
 CODE_NONE = "none"
 CODE_CONFLICT = "conflict"
+COMMON = "common"
+FALLBACK_VARIANT = "ru"
+VARIANT_MISSING = "kit_variant_missing"
+REFUSALS = frozenset({CODE_CONFLICT})
 
 
 def action_key(action: Action) -> str:
@@ -84,7 +88,7 @@ class Report:
 
     @property
     def ok(self) -> bool:
-        return self.code == CODE_NONE
+        return self.code not in REFUSALS
 
     @property
     def wrote(self) -> bool:
@@ -123,9 +127,9 @@ class Report:
             code = str(stored["code"])
             if str(stored["command"]) != command:
                 return None
-            if stored["ok"] is not (code == CODE_NONE):
+            if stored["ok"] is not (code not in REFUSALS):
                 return None
-            if code != CODE_NONE and not steps:
+            if code in REFUSALS and not steps:
                 return None
         except (ValueError, KeyError, TypeError):
             return None
@@ -166,11 +170,22 @@ def target_roots(
     return {cli: Path(given[cli]) if given[cli] else DEFAULT_ROOTS[cli] for cli in clis}
 
 
-def kit_files(cli: str, source: Traversable = KIT) -> list[KitFile]:
-    return [
+def variant_of(lang: str, source: Traversable = KIT) -> tuple[Traversable, str]:
+    if (source / lang).is_dir():
+        return source / lang, CODE_NONE
+    return source / FALLBACK_VARIANT, VARIANT_MISSING
+
+
+def kit_files(
+    cli: str, variant: Traversable, source: Traversable = KIT
+) -> list[KitFile]:
+    found = [
         KitFile(cli, relative, node.read_bytes())
-        for relative, node in walk(source / cli, PurePosixPath())
+        for root in (source / COMMON, variant)
+        if (root / cli).is_dir()
+        for relative, node in walk(root / cli, PurePosixPath())
     ]
+    return sorted(found, key=lambda item: item.relative)
 
 
 def walk(
@@ -222,12 +237,13 @@ def install_action(content: bytes, target: Path, listed: bool, force: bool) -> A
 def plan_install(
     roots: dict[str, Path],
     manifest: dict[Path, Entry],
+    variant: Traversable,
     force: bool = False,
     source: Traversable = KIT,
 ) -> list[Step]:
     steps = []
     for cli, root in roots.items():
-        for item in kit_files(cli, source):
+        for item in kit_files(cli, variant, source):
             target = root.resolve().joinpath(*item.relative.parts)
             action = install_action(item.content, target, target in manifest, force)
             steps.append(Step(action, target, cli, item.content))
@@ -256,11 +272,12 @@ def install(
     source: Traversable = KIT,
     *,
     lang: str,
-) -> list[Step]:
+) -> Report:
     manifest = load_manifest(manifest_path)
-    steps = plan_install(roots, manifest, force, source)
+    variant, code = variant_of(lang, source)
+    steps = plan_install(roots, manifest, variant, force, source)
     save_manifest(manifest_path, apply_install(steps, manifest, lang))
-    return steps
+    return Report(COMMAND_INSTALL, code, tuple(steps))
 
 
 def uninstall_action(target: Path, entry: Entry, force: bool) -> Action:
@@ -306,11 +323,11 @@ def uninstall(
     roots: dict[str, Path],
     clis: tuple[str, ...] = CLIS,
     force: bool = False,
-) -> list[Step]:
+) -> Report:
     manifest = load_manifest(manifest_path)
     steps = plan_uninstall(manifest, clis, force)
     save_manifest(manifest_path, apply_uninstall(steps, manifest, roots))
-    return steps
+    return Report(COMMAND_UNINSTALL, CODE_NONE, tuple(steps))
 
 
 def cli_names(touched: set[str], lang: str) -> str:

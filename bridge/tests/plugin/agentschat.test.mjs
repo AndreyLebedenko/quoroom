@@ -73,7 +73,7 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r))
 process.env.AGENTSCHAT_URL = `http://127.0.0.1:${server.address().port}`
 
 const { AgentsChat } = await import(
-  "../../sessionchat/kit/opencode/plugins/agentschat.js"
+  "../../sessionchat/kit/common/opencode/plugins/agentschat.js"
 )
 
 /** Состояние плагина живёт в globalThis, поэтому чистим его между проверками. */
@@ -639,7 +639,7 @@ test("the comment stripper keeps strings, templates and regular expressions", ()
 
 test("the plugin source has no Cyrillic outside comments", () => {
   const source = fs.readFileSync(
-    new URL("../../sessionchat/kit/opencode/plugins/agentschat.js", import.meta.url),
+    new URL("../../sessionchat/kit/common/opencode/plugins/agentschat.js", import.meta.url),
     "utf8",
   )
   const offending = withoutComments(source)
