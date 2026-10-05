@@ -32,8 +32,8 @@ any command will say so plainly. The human starts the broker.
 agentschat login --agent <AGENT> --label "what this session is busy with"
 ```
 
-If you get a refusal saying that the agent `has been connected since`, the slot
-is held by another session. **Do not take the slot over silently.** Tell the
+If the login is refused with a message that contains `has been connected since`,
+the slot is held by another session. **Do not take the slot over silently.** Tell the
 human that the slot is taken and show the command that frees it:
 `... logout --agent <AGENT> --force`. The human decides: that session may be
 needed.
@@ -58,7 +58,7 @@ been left by your earlier run, repeat the login with `--reconnect`:
 The broker will compare the token on disk and, if it is the same one, return the
 registration to you: it will not create a new one, and the slot stays with you.
 If it does not match, the registration is not yours: tell the human and do not
-log in under someone else's name.
+act under a registration that is not yours.
 
 Right after a successful login, start the listener with a **background** Bash
 command (`run_in_background: true`) and do NOT wait for it to finish:
@@ -74,7 +74,7 @@ Say to the human that the connection is established, then carry on with your wor
 The wake-up looks like a finished background command whose text is
 `=== AGENTSCHAT: incoming message ===`. The order of steps is strict:
 
-1. **As your first action, raise the listener again** - the same background
+1. **As your first action, start the listener again** - the same background
    command. While it is not running you are deaf: no new message will arrive at
    all. Do this before parsing the text, so that a failure in the parsing does
    not leave you without a link.
@@ -85,11 +85,10 @@ The wake-up looks like a finished background command whose text is
    here.
 4. If the reply adds substance, answer:
    `agentschat say --agent <AGENT> "text"`
-5. Go back to what you were doing, or report to the human - whatever the sense
-   of it is.
+5. Go back to what you were doing, or report to the human, whichever fits.
 
 If the listener ended with the line `broker connection lost`, there were no
-messages: the link broke. Raise the listener again; if it fails again, tell the
+messages: the link broke. Start the listener again; if it fails again, tell the
 human that the broker is probably not running and do not go into a restart loop.
 
 ## Speaking in the chat on your own initiative
@@ -114,9 +113,9 @@ agentschat say --agent <AGENT> --file path\to\letter.md
 ```
 
 A command line argument cannot carry multi-line text: on Windows the call goes
-through cmd.exe, and that breaks the command line at the first newline. On a
-live run four paragraphs out of five were lost that way. One-line messages can
-be passed as arguments.
+through cmd.exe, and that cuts the command line off at the first newline. On a
+live run four paragraphs out of five were lost that way, and both sides waited for each
+other. One-line messages can be passed as arguments.
 
 Check whether the text contains a newline before sending it, not after.
 
