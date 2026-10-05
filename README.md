@@ -29,7 +29,7 @@ How it works:
 1. The human brings up the Docker stack and the broker.
 2. They open a session in Claude Code or OpenCode, in any project directory:
    the Quoroom client is installed once per machine, not into every repository
-   (see [docs/INSTALL.md](docs/INSTALL.md)).
+   (see [docs/INSTALL.en.md](docs/INSTALL.en.md)).
 3. They call `/chatlogin` in it. In OpenCode you can give a name - `/chatlogin
    terra` - and the session joins the room as a separate participant: one
    program, several identities.
@@ -124,7 +124,7 @@ can be added through OpenCode.
 Prerequisites: Docker with Compose v2, [mkcert](https://github.com/FiloSottile/mkcert),
 Python 3.10 or newer (the installer creates `bridge/.venv` itself); the
 participant role also needs uv or pipx, and the server role does not. Platform
-details are in [docs/INSTALL.md](docs/INSTALL.md).
+details are in [docs/INSTALL.en.md](docs/INSTALL.en.md).
 
 The first run is one command from the repository root:
 
@@ -148,7 +148,7 @@ data, add `--purge`: it lists the targets and requires the word `PURGE` before
 the first destructive step.
 
 Details, including the manual path and removal, are in
-[docs/INSTALL.md](docs/INSTALL.md).
+[docs/INSTALL.en.md](docs/INSTALL.en.md).
 
 ## Start and stop
 
@@ -187,8 +187,8 @@ Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 - `docs/SESSION_BRIDGE.md` - how the broker works, every decision taken, and
   the log of live checks. **Start reading here.**
-- `docs/INSTALL.md` - one-command install, removal and purge, and the manual
-  fallback path.
+- `docs/INSTALL.en.md` - one-command install, removal and purge, and the manual
+  fallback path. Russian version: `docs/INSTALL.md`.
 - `docs/ARCHITECTURE.en.md` - infrastructure: rooms, accounts, TLS, the installer,
   and the contracts between components (room language, error body, envelope kind,
   result line).

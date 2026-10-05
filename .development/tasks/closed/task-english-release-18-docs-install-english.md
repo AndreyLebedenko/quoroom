@@ -1,6 +1,6 @@
 # Task english-release-18: docs/INSTALL.md in English
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-11 (the English output of the whole
 participant install, client lines included).
