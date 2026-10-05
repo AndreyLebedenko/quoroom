@@ -1,16 +1,15 @@
 import re
-import shutil
-import tempfile
 import unittest
 from importlib.resources import files
 from importlib.resources.abc import Traversable
-from pathlib import Path
 
 from sessionchat import kit
 
 EXPECTED_KIT_FILES = {
     "common/opencode/plugins/agentschat.js",
     "en/claude/skills/chatlogin/SKILL.md",
+    "en/opencode/command/chatlogin.md",
+    "en/opencode/skills/chatlogin/SKILL.md",
     "ru/claude/skills/chatlogin/SKILL.md",
     "ru/opencode/command/chatlogin.md",
     "ru/opencode/skills/chatlogin/SKILL.md",
@@ -28,12 +27,6 @@ BASE_DIGESTS = {
     "ru/opencode/skills/chatlogin/SKILL.md": (
         "547be19a4e7cb374249207cc8cf048c307c83203cafcb0048c34d8ad9c26dd13"
     ),
-}
-INCOMPLETE_VARIANTS = frozenset({"en"})
-VARIANT_PATHS = {
-    "claude/skills/chatlogin/SKILL.md",
-    "opencode/command/chatlogin.md",
-    "opencode/skills/chatlogin/SKILL.md",
 }
 QUOROOM_REPOSITORY_PATHS = (
     "bridge\\agentschat",
@@ -107,23 +100,6 @@ class KitContentsTests(unittest.TestCase):
             ["common/opencode/plugins/agentschat.js"],
         )
 
-    def held_by(self, variant: str) -> set[str]:
-        return {
-            relative.split("/", 1)[1]
-            for relative in EXPECTED_KIT_FILES
-            if relative.startswith(f"{variant}/")
-        }
-
-    def test_every_complete_variant_holds_the_same_relative_paths_for_both_clis(self):
-        for variant in sorted(set(variants()) - INCOMPLETE_VARIANTS):
-            with self.subTest(variant=variant):
-                self.assertEqual(self.held_by(variant), VARIANT_PATHS)
-
-    def test_an_incomplete_variant_holds_no_path_a_complete_variant_does_not(self):
-        for variant in sorted(INCOMPLETE_VARIANTS):
-            with self.subTest(variant=variant):
-                self.assertLessEqual(self.held_by(variant), VARIANT_PATHS)
-
 
 class KitNamesNoQuoroomRepositoryPathTests(unittest.TestCase):
     def test_no_kit_file_mentions_a_path_inside_the_quoroom_repository(self):
@@ -164,22 +140,16 @@ class SkillAgreementTests(unittest.TestCase):
             (lang, cli): self.skill(lang, cli)
             for lang in variants()
             for cli in kit.CLIS
-            if self.has_skill(lang, cli)
         }
 
-    def has_skill(self, lang: str, cli: str) -> bool:
-        resource = kit_root().joinpath(lang, cli, "skills", "chatlogin", "SKILL.md")
-        return resource.is_file()
-
-    def test_a_skill_is_compared_wherever_the_kit_holds_one_and_nowhere_else(self):
-        self.assertEqual(
-            set(self.skills()),
-            {
-                tuple(relative.split("/")[:2])
-                for relative in EXPECTED_KIT_FILES
-                if relative.endswith("/skills/chatlogin/SKILL.md")
-            },
-        )
+    def test_every_language_and_cli_pair_has_a_skill_to_compare(self):
+        for lang in variants():
+            for cli in kit.CLIS:
+                resource = kit_root().joinpath(
+                    lang, cli, "skills", "chatlogin", "SKILL.md"
+                )
+                with self.subTest(lang=lang, cli=cli):
+                    self.assertTrue(resource.is_file(), resource)
 
     def test_the_languages_of_one_cli_name_the_same_commands_and_flags(self):
         skills = self.skills()
@@ -237,34 +207,33 @@ class SkillAgreementTests(unittest.TestCase):
                 self.assertNotEqual(self.mentions(drifted), self.mentions(text))
 
 
-class TemporaryRussianOnlyVariantTests(unittest.TestCase):
-    def setUp(self):
-        scratch = tempfile.TemporaryDirectory()
-        self.addCleanup(scratch.cleanup)
-        self.source = Path(scratch.name) / "kit"
-        shutil.copytree(str(kit.KIT), self.source)
-        shutil.rmtree(self.source / "en")
+class KitCompletenessTests(unittest.TestCase):
+    FILES_OF_A_LANGUAGE = {
+        "claude/skills/chatlogin/SKILL.md",
+        "opencode/command/chatlogin.md",
+        "opencode/skills/chatlogin/SKILL.md",
+    }
 
-    def test_a_kit_without_english_ships_only_the_russian_variant(self):
-        self.assertEqual(variants(self.source), [kit.FALLBACK_VARIANT])
+    def paths_of(self, lang: str) -> set[str]:
+        found = files_under(kit_root().joinpath(lang))
+        return {relative for relative in found}
 
-    def test_the_language_that_has_a_variant_is_its_own(self):
-        for cli in kit.CLIS:
-            with self.subTest(cli=cli):
+    def test_every_language_ships_every_kit_file(self):
+        for lang in variants():
+            with self.subTest(lang=lang):
+                self.assertEqual(self.paths_of(lang), self.FILES_OF_A_LANGUAGE)
+
+    def test_every_language_ships_a_skill_for_both_clis(self):
+        for lang in variants():
+            with self.subTest(lang=lang):
                 self.assertEqual(
-                    kit.variant_of(kit.FALLBACK_VARIANT, cli, self.source)[1],
-                    kit.CODE_NONE,
+                    {relative.split("/", 1)[0] for relative in self.paths_of(lang)},
+                    set(kit.CLIS),
                 )
 
-    def test_a_language_without_a_variant_falls_back_and_says_so(self):
-        for cli in kit.CLIS:
-            with self.subTest(cli=cli):
-                root, code = kit.variant_of("en", cli, self.source)
-                self.assertEqual(code, kit.VARIANT_MISSING)
-                self.assertEqual(root.name, kit.FALLBACK_VARIANT)
-
-    def test_a_substituted_variant_is_not_a_refusal(self):
-        self.assertNotIn(kit.VARIANT_MISSING, kit.REFUSALS)
+    def test_a_language_without_a_file_is_reported_as_missing(self):
+        broken = self.paths_of("en") - {"opencode/command/chatlogin.md"}
+        self.assertNotEqual(broken, self.FILES_OF_A_LANGUAGE)
 
 
 if __name__ == "__main__":

@@ -902,20 +902,6 @@ class KitReportTests(ParticipantCase):
         self.assertNotIn(RESTART, given.stdout.getvalue())
         self.assertIn("Набор на месте и не менялся", given.stdout.getvalue())
 
-    def test_a_substituted_variant_is_a_successful_step_that_wrote_the_kit(self):
-        self.machine.kit_code = kit.VARIANT_MISSING
-        code, given = self.install()
-        self.assertEqual(code, DONE)
-        self.assertIn(RESTART, given.stdout.getvalue())
-        self.assertTrue(self.machine.target_for("claude").is_file())
-
-    def test_a_substituted_variant_that_wrote_nothing_asks_for_no_restart(self):
-        self.machine.kit_code = kit.VARIANT_MISSING
-        self.machine.kit_claims_no_writes = True
-        code, given = self.install()
-        self.assertEqual(code, DONE)
-        self.assertNotIn(RESTART, given.stdout.getvalue())
-
     def test_the_report_of_the_removal_is_asked_for_by_a_flag(self):
         self.install()
         self.machine.log.clear()

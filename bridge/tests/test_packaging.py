@@ -205,14 +205,26 @@ class KitFilesAreShippedTests(unittest.TestCase):
             sorted(path.relative_to(self.PACKAGE).as_posix() for path in unshipped), []
         )
 
-    def test_the_scan_sees_the_files_of_the_layout_with_variants(self):
+    def test_the_scan_sees_the_shared_file_and_every_variant(self):
         found = {path.relative_to(self.PACKAGE).as_posix() for path in self.kit_files()}
+        variants = sorted(
+            child.name
+            for child in (self.PACKAGE / "kit").iterdir()
+            if child.is_dir() and child.name != kit.COMMON
+        )
+        self.assertTrue(variants)
         self.assertLessEqual(
             {
                 f"kit/{kit.COMMON}/opencode/plugins/agentschat.js",
-                f"kit/{kit.FALLBACK_VARIANT}/claude/skills/chatlogin/SKILL.md",
-                f"kit/{kit.FALLBACK_VARIANT}/opencode/command/chatlogin.md",
-                f"kit/{kit.FALLBACK_VARIANT}/opencode/skills/chatlogin/SKILL.md",
+                *(
+                    f"kit/{variant}/{relative}"
+                    for variant in variants
+                    for relative in (
+                        "claude/skills/chatlogin/SKILL.md",
+                        "opencode/command/chatlogin.md",
+                        "opencode/skills/chatlogin/SKILL.md",
+                    )
+                ),
             },
             found,
         )
