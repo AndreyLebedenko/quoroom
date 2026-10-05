@@ -100,8 +100,9 @@ can be added through OpenCode.
 
 ## What is not there yet
 
-- The session registry lives in memory: restarting the broker requires
-  `/chatlogin` again in every session.
+- Broker restart keeps session registrations (SQLite; covered by unit tests
+  only, not tried live). Messages queued but not yet delivered are lost, and a
+  registration silent for over 3 minutes is released.
 - The depth limit, the rate limit, the listener's self-guard during a long
   broker outage, and the listener surviving automatic context compaction have
   not been tried live; they are covered by unit tests only.
