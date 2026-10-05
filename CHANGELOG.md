@@ -9,6 +9,9 @@
   Steps are derived from checks, so a rerun continues where it stopped; steps
   only a human can do (hosts line, mkcert root, the human's account, the
   room) stop with exit code 3 and print the exact command.
+- The installer is English by default; `--lang ru` (or `--lang=ru`) switches
+  it to Russian. The flag also sets the language of the messages `install.ps1`
+  and `install.sh` print before Python starts.
 - Participant role: installs the `quoroom` client and the per-user kit
   (`agentschat install`) for Claude Code and OpenCode.
 - Server role: Continuwuity, Element Web, Caddy with a local TLS certificate,
@@ -45,4 +48,6 @@
 - Registrations surviving a broker restart are covered by unit tests only, not
   tried live; messages queued at restart are lost.
 - `docs/` is written in Russian.
+- `agentschat install` and `agentschat login` print Russian text, so a
+  participant install shows a Russian block inside an English run.
 - Open bug reports are in `.development/bugreports/`.

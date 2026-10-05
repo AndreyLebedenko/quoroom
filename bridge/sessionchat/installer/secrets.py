@@ -1,10 +1,11 @@
 import urllib.parse
 
-PLACEHOLDER = "<скрыто>"
+from .catalogue import text
 
 
 class Secrets:
-    def __init__(self) -> None:
+    def __init__(self, lang: str) -> None:
+        self.lang = lang
         self.values: list[str] = []
 
     def register(self, value: str) -> str:
@@ -15,7 +16,8 @@ class Secrets:
                     self.values.append(form)
         return value
 
-    def scrub(self, text: str) -> str:
+    def scrub(self, line: str) -> str:
+        placeholder = text(self.lang, "secrets.hidden")
         for value in sorted(self.values, key=len, reverse=True):
-            text = text.replace(value, PLACEHOLDER)
-        return text
+            line = line.replace(value, placeholder)
+        return line

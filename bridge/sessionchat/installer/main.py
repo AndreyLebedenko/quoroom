@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from .boundaries import Boundaries
+from .catalogue import text
 from .confirmation import Confirmation
 from .errors import HelpRequested, UsageError
-from .options import parse
+from .options import chosen_language, parse
 from .ownership import Ownership, PurgeTarget
 from .roles import Role, consequence_of
 from .secrets import Secrets
@@ -16,8 +18,8 @@ FAILED = 1
 USAGE = 2
 HUMAN = 3
 CANCELLED = 4
-PREPARE = "подготовка запуска"
-REPORT = "отчёт после установки"
+PREPARE = "prepare"
+REPORT = "report"
 
 CODES = {
     Outcome.DONE: DONE,
@@ -29,14 +31,18 @@ CODES = {
 
 def main(argv: Sequence[str], boundaries: Boundaries, roles: Sequence[Role]) -> int:
     try:
-        plan = parse(argv, boundaries, roles)
+        speaking = replace(boundaries, lang=chosen_language(argv, boundaries.lang))
+        plan = parse(argv, speaking, roles)
     except HelpRequested:
         return DONE
     except UsageError as problem:
         boundaries.stderr.write(f"AGENTSCHAT: {problem}\n")
         return USAGE
+    return _carry_out(plan, speaking, roles)
 
-    secrets = Secrets()
+
+def _carry_out(plan: Plan, boundaries: Boundaries, roles: Sequence[Role]) -> int:
+    secrets = Secrets(boundaries.lang)
     by_name = {role.name: role for role in roles}
     selected = [by_name[name] for name in plan.roles]
     try:
@@ -53,9 +59,9 @@ def main(argv: Sequence[str], boundaries: Boundaries, roles: Sequence[Role]) -> 
         )
         targets = _targets(selected, plan, run)
         if plan.purge:
-            _confirmed(run, targets, consequence_of(selected, targets))
+            _confirmed(run, targets, consequence_of(selected, targets, boundaries.lang))
     except Cancelled:
-        boundaries.stderr.write("Отменено человеком, ничего не изменено.\n")
+        boundaries.stderr.write(text(boundaries.lang, "steps.cancelled") + "\n")
         return CANCELLED
     except Exception as error:
         return _failed(boundaries, secrets, PREPARE, error)
@@ -88,7 +94,7 @@ def _failed(
     completed: tuple[str, ...] = (),
 ) -> int:
     failure = Failure(step, completed, str(error))
-    boundaries.stderr.write(failure.render(secrets) + "\n")
+    boundaries.stderr.write(failure.render(secrets, boundaries.lang) + "\n")
     return FAILED
 
 

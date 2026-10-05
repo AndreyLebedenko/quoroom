@@ -11,13 +11,15 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import IO, Protocol
+
+from .catalogue import DEFAULT_LANGUAGE, text
 
 PROBE_TIMEOUT = 5.0
 WINDOWS = "windows"
 LINUX = "linux"
-PASSWORD_MISMATCH = "пароли не совпали"
 
 
 class Runner(Protocol):
@@ -57,9 +59,10 @@ class Boundaries:
     platform: str
     resolve: Resolver
     secret: SecretReader
+    lang: str
 
     @classmethod
-    def real(cls) -> "Boundaries":
+    def real(cls, lang: str = DEFAULT_LANGUAGE) -> "Boundaries":
         return cls(
             repo=repository_root(),
             home=Path.home(),
@@ -68,10 +71,11 @@ class Boundaries:
             stdout=sys.stdout,
             stderr=sys.stderr,
             run=run_command,
-            probe=answers,
+            probe=partial(answers, lang=lang),
             platform=platform_name(),
             resolve=resolved,
-            secret=ask_secret,
+            secret=partial(ask_secret, lang=lang),
+            lang=lang,
         )
 
 
@@ -123,14 +127,16 @@ def resolved(name: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item[4][0] for item in found))
 
 
-def ask_secret(prompt: str) -> str:
+def ask_secret(prompt: str, lang: str = DEFAULT_LANGUAGE) -> str:
     typed = getpass.getpass(prompt)
-    if typed != getpass.getpass("Повторите пароль: "):
-        raise ValueError(PASSWORD_MISMATCH)
+    if typed != getpass.getpass(text(lang, "boundaries.repeat_password")):
+        raise ValueError(text(lang, "boundaries.password_mismatch"))
     return typed
 
 
-def answers(url: str, timeout: float = PROBE_TIMEOUT) -> Probe:
+def answers(
+    url: str, timeout: float = PROBE_TIMEOUT, lang: str = DEFAULT_LANGUAGE
+) -> Probe:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(url, timeout=timeout) as response:
@@ -138,16 +144,16 @@ def answers(url: str, timeout: float = PROBE_TIMEOUT) -> Probe:
     except urllib.error.HTTPError as error:
         return Probe(error.code, None)
     except urllib.error.URLError as error:
-        return Probe(None, describe(error), certificate_refused(error))
+        return Probe(None, describe(error, lang), certificate_refused(error))
     except OSError as error:
-        return Probe(None, describe(error), certificate_refused(error))
+        return Probe(None, describe(error, lang), certificate_refused(error))
 
 
-def describe(error: BaseException) -> str:
+def describe(error: BaseException, lang: str) -> str:
     reason = getattr(error, "reason", error)
     if isinstance(reason, ssl.SSLCertVerificationError):
         message = getattr(reason, "verify_message", None) or str(reason)
-        return f"сертификат не подтверждён: {message}"
+        return text(lang, "boundaries.certificate_unverified", message=message)
     return str(reason)
 
 

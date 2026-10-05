@@ -190,6 +190,9 @@ quoroom (uv)» и оставляет его. Файлы сессий в `~/.agen
 не трогает. Всё выполняется **из Git Bash** (или любого Linux), не из
 PowerShell.
 
+Ожидаемые строки ниже русские, поэтому каждый вызов `install.sh` идёт с
+`--lang ru`: по умолчанию установщик печатает английский текст.
+
 Живой доступ к Element: человек останавливает стенд Windows, публикует 443
 движка лаборатории на 443 хоста и открывает `https://agentschat.local` в
 браузере Windows, приняв предупреждение о сертификате (CA контейнера Windows не
@@ -213,7 +216,7 @@ Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue 
 ```sh
 cd tools/linux-container
 ./run.sh up --publish-443
-./run.sh exec 'cd /home/lab/repo && ./install.sh --help'
+./run.sh exec 'cd /home/lab/repo && ./install.sh --lang ru --help'
 ```
 
 Ожидать: копия репозитория с текущим кодом в `/home/lab/repo`, `--help`
@@ -230,7 +233,7 @@ printf '127.0.0.1 agentschat.local\n' | ./run.sh exec-root \
 ### Шаг 2. Первый прогон установщика: он выпускает сертификат
 
 ```sh
-./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role server --admin-user labadmin'
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --lang ru --role server --admin-user labadmin'
 ```
 
 Ожидать: шаги до доверия - «готово» или «уже сделано» (проверки
@@ -252,7 +255,7 @@ CAROOT=$(./run.sh exec 'cd /home/lab/repo && mkcert -CAROOT')
 ### Шаг 4. Продолжение установки до комнаты
 
 ```sh
-./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role server --admin-user labadmin'
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --lang ru --role server --admin-user labadmin'
 ```
 
 Ожидать: аккаунты заведены, регистрация закрыта, код `3` на «Записать
@@ -265,7 +268,7 @@ Windows `https://agentschat.local`, войдите под `labadmin` (парол
 settings -> Advanced -> Internal room ID.
 
 ```sh
-./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role server --admin-user labadmin --room-id <комната>'
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --lang ru --role server --admin-user labadmin --room-id <комната>'
 ```
 
 Ожидать: код `0`, адрес брокера и адрес Element в отчёте.
@@ -273,7 +276,7 @@ settings -> Advanced -> Internal room ID.
 ### Шаг 5. Участник
 
 ```sh
-./run.sh exec 'cd /home/lab/repo && ./install.sh --role participant'
+./run.sh exec 'cd /home/lab/repo && ./install.sh --lang ru --role participant'
 ./run.sh exec 'cd /home/lab/repo && AGENTSCHAT_URL=http://127.0.0.1:8770 agentschat status'
 ```
 
@@ -310,10 +313,10 @@ Element `@claude-code <вопрос>`:
 ### Шаг 7. Снятие и повтор снятия
 
 ```sh
-./run.sh exec 'cd /home/lab/repo && ./install.sh --role both --remove'
+./run.sh exec 'cd /home/lab/repo && ./install.sh --lang ru --role both --remove'
 ./run.sh exec 'cd /home/lab/repo && docker volume ls --format "{{.Name}}"'
 ./run.sh exec 'cd /home/lab/repo && ls bridge/state docker/continuwuity/continuwuity.toml'
-./run.sh exec 'cd /home/lab/repo && ./install.sh --role both --remove'
+./run.sh exec 'cd /home/lab/repo && ./install.sh --lang ru --role both --remove'
 ```
 
 Ожидать: тома на месте, `continuwuity.toml` и состояние брокера на месте,
@@ -322,7 +325,7 @@ Element `@claude-code <вопрос>`:
 ### Шаг 8. Повторная установка
 
 ```sh
-./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role both --admin-user labadmin'
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --lang ru --role both --admin-user labadmin'
 ```
 
 Ожидать: код `0`, существующая конфигурация не перезаписана, переписка в
@@ -333,7 +336,7 @@ Element `@claude-code <вопрос>`:
 Сначала сервер, и проверить, что данные участника целы:
 
 ```sh
-printf 'PURGE\n' | ./run.sh exec 'cd /home/lab/repo && ./install.sh --role server --remove --purge'
+printf 'PURGE\n' | ./run.sh exec 'cd /home/lab/repo && ./install.sh --lang ru --role server --remove --purge'
 ./run.sh exec 'cd /home/lab/repo && ls -a $HOME/.agentschat && cat $HOME/.agentschat/kit.json | head -3'
 ```
 
@@ -344,9 +347,9 @@ printf 'PURGE\n' | ./run.sh exec 'cd /home/lab/repo && ./install.sh --role serve
 Потом участник:
 
 ```sh
-printf 'PURGE\n' | ./run.sh exec 'cd /home/lab/repo && ./install.sh --role participant --remove --purge'
+printf 'PURGE\n' | ./run.sh exec 'cd /home/lab/repo && ./install.sh --lang ru --role participant --remove --purge'
 ./run.sh exec 'cd /home/lab/repo && ls -a $HOME/.agentschat'
-printf 'PURGE\n' | ./run.sh exec 'cd /home/lab/repo && ./install.sh --role participant --remove --purge'
+printf 'PURGE\n' | ./run.sh exec 'cd /home/lab/repo && ./install.sh --lang ru --role participant --remove --purge'
 ```
 
 Ожидать: файлы сессий удалены, повторный прогон - код `0` без вопроса.

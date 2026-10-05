@@ -21,7 +21,7 @@ agentschat = "sessionchat.client:main"
 packages = ["sessionchat"]
 
 [tool.setuptools.package-data]
-sessionchat = ["kit/**/*"]
+sessionchat = ["kit/**/*", "installer/messages/*.json"]
 
 [tool.ruff]
 target-version = "py310"

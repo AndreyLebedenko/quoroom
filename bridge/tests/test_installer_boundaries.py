@@ -16,7 +16,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sessionchat.installer.boundaries import (
-    PASSWORD_MISMATCH,
     Probe,
     answers,
     ask_secret,
@@ -26,6 +25,7 @@ from sessionchat.installer.boundaries import (
 )
 
 MISSING = "/missing"
+PASSWORD_MISMATCH = "пароли не совпали"
 
 
 class Quiet(http.server.BaseHTTPRequestHandler):
@@ -80,8 +80,8 @@ class UntrustedProbeTests(unittest.TestCase):
         )
         refusing = self.refusing(urllib.error.URLError(failure))
         with patch("urllib.request.build_opener", return_value=refusing):
-            result = answers("https://agentschat.local/status")
-        self.assertEqual(result, Probe(None, describe(failure), True))
+            result = answers("https://agentschat.local/status", lang="ru")
+        self.assertEqual(result, Probe(None, describe(failure, "ru"), True))
         self.assertTrue(result.untrusted)
 
     def test_a_refused_connection_is_not_untrusted(self):
@@ -96,14 +96,14 @@ class UntrustedProbeTests(unittest.TestCase):
 class DescribeTests(unittest.TestCase):
     def test_a_certificate_failure_is_named_as_such(self):
         failure = ssl.SSLCertVerificationError("certificate verify failed", 18)
-        self.assertIn("сертификат", describe(urllib.error.URLError(failure)))
+        self.assertIn("сертификат", describe(urllib.error.URLError(failure), "ru"))
 
     def test_a_refused_connection_keeps_its_reason(self):
         reason = ConnectionRefusedError("отказано в соединении")
-        self.assertIn("отказано", describe(urllib.error.URLError(reason)))
+        self.assertIn("отказано", describe(urllib.error.URLError(reason), "ru"))
 
     def test_a_plain_error_is_described_as_is(self):
-        self.assertIn("таймаут", describe(TimeoutError("таймаут")))
+        self.assertIn("таймаут", describe(TimeoutError("таймаут"), "ru"))
 
 
 def echo_child() -> list[str]:
@@ -268,7 +268,7 @@ class AskSecretTests(unittest.TestCase):
         fake, _ = self.typed("первый", "второй")
         with patch("getpass.getpass", fake):
             with self.assertRaises(ValueError) as caught:
-                ask_secret("Пароль: ")
+                ask_secret("Пароль: ", "ru")
         self.assertEqual(str(caught.exception), PASSWORD_MISMATCH)
 
 

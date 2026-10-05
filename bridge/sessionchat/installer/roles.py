@@ -6,25 +6,27 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .boundaries import Boundaries
+from .catalogue import DEFAULT_LANGUAGE, text
 from .ownership import PurgeTarget
 from .steps import Destructive, FoundStep, Plan, Run, Step
 
 INSTALL_ORDER = ("server", "participant")
 REMOVE_ORDER = ("participant", "server")
-DEFAULT_CONSEQUENCE = "восстановить эти данные будет нечем."
 
 
 class RoleOptions:
-    def __init__(self, parser: ArgumentParser, role: str) -> None:
+    def __init__(self, parser: ArgumentParser, role: str, lang: str) -> None:
         self.parser = parser
         self.role = role
+        self.lang = lang
         self.dests: list[str] = []
+
+    def t(self, key: str, **params: object) -> str:
+        return text(self.lang, key, **params)
 
     def add(self, flag: str, **kwargs) -> None:
         if "dest" in kwargs:
-            raise TypeError(
-                f"роль {self.role} не задаёт dest: имя ключа {flag} даёт его само"
-            )
+            raise TypeError(self.t("roles.dest_not_allowed", role=self.role, flag=flag))
         dest = f"{self.role}_{flag.lstrip('-').replace('-', '_')}"
         self.parser.add_argument(flag, dest=dest, **kwargs)
         self.dests.append(dest)
@@ -38,8 +40,8 @@ def no_report(run: Run) -> None:
     return None
 
 
-def unrestorable(targets: Sequence[PurgeTarget]) -> str:
-    return DEFAULT_CONSEQUENCE
+def unrestorable(targets: Sequence[PurgeTarget], lang: str) -> str:
+    return text(lang, "roles.default_consequence")
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,7 @@ class Role:
     install: tuple[Step, ...] = ()
     remove: tuple[Step, ...] = ()
     purge: tuple[Step, ...] = ()
-    purge_consequence: Callable[[Sequence[PurgeTarget]], str] = unrestorable
+    purge_consequence: Callable[[Sequence[PurgeTarget], str], str] = unrestorable
     report: Callable[[Run], None] = no_report
     add_options: Callable[[RoleOptions], None] = no_options
 
@@ -57,13 +59,22 @@ class Role:
         for step in self.purge:
             if not isinstance(step, Destructive):
                 raise TypeError(
-                    f"шаг очистки «{step.name}» роли {self.name} не объявляет, что удаляет"
+                    text(
+                        DEFAULT_LANGUAGE,
+                        "roles.purge_step_not_destructive",
+                        step=step.name,
+                        role=self.name,
+                    )
                 )
         for step in self.remove:
             if isinstance(step, FoundStep):
                 raise TypeError(
-                    f"шаг удаления «{step.name}» роли {self.name} ищет незаписанное:"
-                    " такое удаляют только с вопросом, то есть в очистке"
+                    text(
+                        DEFAULT_LANGUAGE,
+                        "roles.remove_step_finds_unrecorded",
+                        step=step.name,
+                        role=self.name,
+                    )
                 )
 
     def steps_for(self, plan: Plan) -> tuple[Step, ...]:
@@ -83,8 +94,8 @@ class Role:
             step for step in self.purge if isinstance(step, Destructive)
         )
 
-    def consequence(self, targets: Sequence[PurgeTarget]) -> str:
-        return self.purge_consequence(targets) or DEFAULT_CONSEQUENCE
+    def consequence(self, targets: Sequence[PurgeTarget], lang: str) -> str:
+        return self.purge_consequence(targets, lang) or unrestorable(targets, lang)
 
 
 def built_in_roles() -> tuple[Role, ...]:
@@ -102,11 +113,13 @@ def order(names: Sequence[str], remove: bool) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def consequence_of(roles: Sequence[Role], targets: Sequence[PurgeTarget]) -> str:
+def consequence_of(
+    roles: Sequence[Role], targets: Sequence[PurgeTarget], lang: str
+) -> str:
     owners = {target.role for target in targets}
     said = [
-        role.consequence(targets)
+        role.consequence(targets, lang)
         for role in roles
         if role.purge and role.name in owners
     ]
-    return " ".join(dict.fromkeys(said)) or DEFAULT_CONSEQUENCE
+    return " ".join(dict.fromkeys(said)) or unrestorable(targets, lang)

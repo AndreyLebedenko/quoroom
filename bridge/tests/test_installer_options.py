@@ -4,7 +4,9 @@ import unittest
 
 from tests.installer_fakes import InstallerTestCase, Marker, option, role
 from sessionchat.installer.main import DONE, USAGE, main
-from sessionchat.installer.options import NO_ROLES, UsageError, parse
+from sessionchat.installer.options import UsageError, parse
+
+NO_ROLES = "в этой сборке нет ни одной роли: установщик без ролей делать нечего."
 
 
 def both_roles():

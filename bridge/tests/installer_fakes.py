@@ -62,6 +62,7 @@ def boundaries(
     platform: str = WINDOWS,
     resolve: Callable[[str], Sequence[str]] | None = None,
     secret: Callable[[str], str] | None = None,
+    lang: str = "ru",
 ) -> Boundaries:
     return Boundaries(
         repo=repo or home,
@@ -75,6 +76,7 @@ def boundaries(
         platform=platform,
         resolve=resolve or (lambda name: ("127.0.0.1",)),
         secret=secret or (lambda prompt: ""),
+        lang=lang,
     )
 
 
@@ -153,7 +155,11 @@ def role(
         install=tuple(install),
         remove=tuple(remove),
         purge=tuple(purge),
-        purge_consequence=consequence or unrestorable,
+        purge_consequence=(
+            (lambda targets, lang: consequence(targets))
+            if consequence
+            else unrestorable
+        ),
         report=report or (lambda run: None),
         add_options=add_options or (lambda options: None),
     )
@@ -211,7 +217,7 @@ def make_run(
     purge: bool = False,
     answers: dict[str, dict[str, object]] | None = None,
 ) -> Run:
-    secrets = Secrets()
+    secrets = Secrets(given.lang)
     plan = Plan(tuple(ownerships or ()), remove, purge, answers or {})
     return Run(given, plan, secrets, Confirmation(given, secrets), ownerships or {})
 

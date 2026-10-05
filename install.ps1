@@ -14,8 +14,34 @@ $bridge        = Join-Path $root 'bridge'
 $layer         = Join-Path $bridge 'sessionchat\installer\__main__.py'
 $missingPython = 9
 
-function Die($text) {
-    Write-Host "ОШИБКА: $text" -ForegroundColor Red
+$language = 'en'
+for ($position = 0; $position -lt $args.Count; $position++) {
+    $argument = "$($args[$position])"
+    if ($argument -ceq '--lang' -and $position + 1 -lt $args.Count) {
+        $language = "$($args[$position + 1])"
+    } elseif ($argument.StartsWith('--lang=', [System.StringComparison]::Ordinal)) {
+        $language = $argument.Substring('--lang='.Length)
+    }
+}
+
+if ($language -ceq 'ru') {
+    $errorLabel = 'ОШИБКА'
+    $texts = @{
+        layer  = 'общий слой установщика не найден: {0}. Запускайте скрипт из корня репозитория Quoroom.'
+        python = 'подходящий Python не найден: нужен 3.10 или новее (bridge/pyproject.toml, requires-python). Установите его и повторите: winget install Python.Python.3.11'
+        start  = 'не удалось запустить {0} : {1}'
+    }
+} else {
+    $errorLabel = 'ERROR'
+    $texts = @{
+        layer  = 'the shared installer layer was not found: {0}. Run the script from the root of the Quoroom repository.'
+        python = 'no suitable Python found: 3.10 or newer is required (bridge/pyproject.toml, requires-python). Install it and run again: winget install Python.Python.3.11'
+        start  = 'could not start {0} : {1}'
+    }
+}
+
+function Die($key, $values) {
+    Write-Host "${errorLabel}: $($texts[$key] -f @($values))" -ForegroundColor Red
     exit $missingPython
 }
 
@@ -28,7 +54,7 @@ function Quote-Arg([string]$value) {
 }
 
 if (-not (Test-Path -LiteralPath $layer)) {
-    Die "общий слой установщика не найден: $layer. Запускайте скрипт из корня репозитория Quoroom."
+    Die 'layer' @($layer)
 }
 
 $marker = 'quoroom-python='
@@ -55,7 +81,7 @@ foreach ($candidate in $candidates) {
     }
 }
 if (-not $interpreter) {
-    Die "подходящий Python не найден: нужен 3.10 или новее (bridge/pyproject.toml, requires-python). Установите его и повторите: winget install Python.Python.3.11"
+    Die 'python' @()
 }
 
 $run = @('-X', 'utf8', '-m', 'sessionchat.installer') + @($args)
@@ -69,7 +95,7 @@ $start.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
 try {
     $process = [System.Diagnostics.Process]::Start($start)
 } catch {
-    Die "не удалось запустить $interpreter : $($_.Exception.Message)"
+    Die 'start' @($interpreter, $_.Exception.Message)
 }
 $process.WaitForExit()
 exit $process.ExitCode
