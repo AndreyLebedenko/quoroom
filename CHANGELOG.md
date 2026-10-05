@@ -42,5 +42,7 @@
 - The live Linux scenario has not been run by a human. Linux is verified by
   automated tests and functional runs in the lab container only. The Windows
   scenario was run by hand on 2026-10-05; see `docs/VERIFICATION.md`.
+- Registrations surviving a broker restart are covered by unit tests only, not
+  tried live; messages queued at restart are lost.
 - `docs/` is written in Russian.
 - Open bug reports are in `.development/bugreports/`.
