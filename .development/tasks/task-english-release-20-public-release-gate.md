@@ -64,3 +64,9 @@ housekeeping that a public tree needs and a private one does not.
       (human).
 - [ ] CHANGELOG describes the release; the full suite, `node --test`,
       `ruff check`, `ruff format --check` are green on the release commit.
+
+## Note from task 02 (orchestrator, 2026-10-05)
+
+An existing `config.yaml` without a `language` key now means `en`. A room that
+has been running in Russian needs `language: ru` added by hand. State this in
+the CHANGELOG as an upgrade note.

@@ -59,3 +59,13 @@ both the state and its text, and tests match the text.
       `ru.json`.
 - [ ] Room notices follow the room language.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Note from task 02 (orchestrator, 2026-10-05)
+
+`/status` is plain text today, not JSON. Task 02 added the room `language` by
+content negotiation: with `Accept: application/json` it answers
+`{"language": ..., "text": <plain answer>}`; without it, the plain text, which
+`client.do_status` prints raw. This task makes the JSON form the real one (per
+session `state` code plus rendered line, and `language`) and removes the
+`text` wrapper and the negotiation if nothing needs the plain form any more;
+state in the report what was kept and why.

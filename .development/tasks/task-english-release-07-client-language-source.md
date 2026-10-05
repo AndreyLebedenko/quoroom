@@ -68,3 +68,11 @@ every successful answer, removes the guess.
 - [ ] After one successful answer under `ru`, an unreachable-broker message is
       Russian.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Note from task 02 (orchestrator, 2026-10-05)
+
+Until task 04 lands, `/status` carries `language` only when the request sends
+`Accept: application/json` (answer: `{"language": ..., "text": ...}`). The
+client's language refresh must send that header on its status call, or read the
+language from login, wait and say answers, which carry it after tasks 03-04.
+Check what the broker actually returns at the time you implement this.
