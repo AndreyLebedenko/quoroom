@@ -1,6 +1,6 @@
 # Task english-release-01: One catalogue loader for installer, broker and client
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task installer-bilingual (completed).
 **Estimate:** 2 hours.
