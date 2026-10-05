@@ -17,6 +17,16 @@ from sessionchat.i18n import Catalogue
 from tests.catalogue_contract import CatalogueContract
 
 TOKEN = "test-token"
+STATUS_ANSWER = {
+    "language": "ru",
+    "sessions": [
+        {
+            "agent": "claude-code",
+            "state": "not_connected",
+            "line": "claude-code  не подключён",
+        }
+    ],
+}
 
 
 class Answer:
@@ -316,9 +326,7 @@ class FailTests(ClientLanguageTestCase):
         with patch.object(
             client.requests,
             "get",
-            return_value=Answer(
-                {"language": "ru", "text": "claude-code  не подключён\n"}
-            ),
+            return_value=Answer(STATUS_ANSWER),
         ):
             self.silently(client.do_status, argparse.Namespace())
         self.fresh_run()
@@ -379,17 +387,14 @@ class EveryBrokerAnswerRefreshesTheLanguageTests(ClientLanguageTestCase):
             self.assertIsNone(client.poll_once("claude-code", TOKEN))
         self.assert_refreshed()
 
-    def test_status_asks_for_json_and_remembers_the_language(self):
-        answer = Answer({"language": "ru", "text": "claude-code  не подключён\n"})
-        with patch.object(client.requests, "get", return_value=answer) as get:
+    def test_status_remembers_the_language(self):
+        answer = Answer(STATUS_ANSWER)
+        with patch.object(client.requests, "get", return_value=answer):
             self.silently(client.do_status, argparse.Namespace())
-        self.assertEqual(
-            get.call_args.kwargs["headers"], {"Accept": "application/json"}
-        )
         self.assert_refreshed()
 
     def test_status_prints_the_text_of_the_answer_exactly_as_before(self):
-        answer = Answer({"language": "ru", "text": "claude-code  не подключён\n"})
+        answer = Answer(STATUS_ANSWER)
         output = io.StringIO()
         with (
             patch.object(client.requests, "get", return_value=answer),

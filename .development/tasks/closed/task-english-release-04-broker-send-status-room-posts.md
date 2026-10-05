@@ -1,6 +1,6 @@
 # Task english-release-04: Send, inbox, status and room notices in the room language
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-03 (the error helper and the catalogue).
 **Estimate:** 3 hours.

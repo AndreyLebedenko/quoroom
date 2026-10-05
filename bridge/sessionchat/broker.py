@@ -80,6 +80,14 @@ SLOT_TAKEN_SENTENCES = (
     "slot_taken_force",
 )
 
+SESSION_STATES = ("listening", "processing", "not_listening")
+NOT_CONNECTED = "not_connected"
+AGENT_COLUMN = 14
+
+
+def dump_json(body: object) -> str:
+    return json.dumps(body, ensure_ascii=False)
+
 
 class LanguageRefused(ValueError):
     pass
@@ -125,7 +133,7 @@ class Registration:
     # не говорит ничего: пустой /wait, вернувший 204, обновляет отметку так
     # же, как доставка. О живости не говорит ничего: файл с токеном переживает
     # смерть процесса, и предъявить его может осиротевший listener. Это факт о
-    # прошлом; живость считает state(), опираясь на open_waits и
+    # прошлом; живость считает state_code(), опираясь на open_waits и
     # listening_until.
     last_contact: float = 0.0
     # Глубина последнего доставленного сообщения: исходящие получают +1.
@@ -169,9 +177,6 @@ class Registration:
         if self.last_delivery and now - self.last_delivery < 120:
             return "processing"
         return "not_listening"
-
-    def state(self) -> str:
-        return BROKER_CATALOGUE.text("ru", f"broker.state_{self.state_code()}")
 
     def stale(self) -> bool:
         """Можно ли считать сессию исчезнувшей и отдать её слот новому входу.
@@ -221,6 +226,7 @@ class Registration:
 class Broker:
     def __init__(self, cfg: dict, store_path: Path | None = None):
         self.language = room_language(cfg)
+        self.state_width = max(len(self.state_word(state)) for state in SESSION_STATES)
         self.room = cfg["room_id"]
         self.port = int(cfg.get("sessionchat_port", DEFAULT_PORT))
         self.max_depth = int(cfg.get("max_depth", MAX_DEPTH))
@@ -374,8 +380,10 @@ class Broker:
                 if human:
                     await self.publish(
                         agent,
-                        f"(сессия {agent} не подключена, сообщение не доставлено. "
-                        f"Выполните @chatlogin в нужной сессии {agent}.)",
+                        self._notice(
+                            ("notice_not_connected", "notice_not_connected_login"),
+                            agent=agent,
+                        ),
                         0,
                     )
                 continue
@@ -410,6 +418,15 @@ class Broker:
             for key in keys
         )
 
+    def _notice(self, keys: tuple[str, ...], **params: object) -> str:
+        return f"({self._compose(keys, **params)})"
+
+    def state_word(self, state: str) -> str:
+        return self._compose((f"state_{state}",))
+
+    def _answer(self, body: dict) -> web.Response:
+        return web.json_response(body, dumps=dump_json)
+
     def _refusal(
         self,
         status: type[web.HTTPException],
@@ -421,10 +438,7 @@ class Broker:
         params = params or {}
         message = self._compose(keys or (code,), **params, **words)
         body = {"code": code, "message": message, "params": params}
-        return status(
-            text=json.dumps(body, ensure_ascii=False),
-            content_type="application/json",
-        )
+        return status(text=dump_json(body), content_type="application/json")
 
     def registration_of(self, data: dict) -> Registration:
         agent = str(data.get("agent", ""))
@@ -474,7 +488,7 @@ class Broker:
             "slot_taken",
             params,
             keys,
-            state_word=self._compose((f"state_{state}",)),
+            state_word=self.state_word(state),
         )
 
     async def handle_login(self, request: web.Request) -> web.Response:
@@ -627,14 +641,18 @@ class Broker:
 
     async def handle_inbox(self, request: web.Request) -> web.Response:
         registration = self.registration_of(dict(request.query))
-        return web.json_response({"pending": registration.drain()})
+        return self._answer(
+            {"language": self.language, "pending": registration.drain()}
+        )
 
     async def handle_say(self, request: web.Request) -> web.Response:
         data = await request.json()
         registration = self.registration_of(data)
         text = str(data.get("text", "")).strip()
         if not text:
-            raise web.HTTPBadRequest(text="пустое сообщение")
+            raise self._refusal(
+                web.HTTPBadRequest, "empty_message", keys=("say_empty",)
+            )
         depth = registration.depth + 1
         if depth > self.max_depth:
             # Человек, который просто наблюдает, иначе увидит тишину и не
@@ -642,21 +660,28 @@ class Broker:
             # комнате не появляется ничего.
             await self.publish(
                 registration.agent,
-                f"(цепочка достигла предела глубины {self.max_depth} без "
-                "участия человека, дальше агенты продолжать не могут. "
-                "Напишите что-нибудь в комнату — это обнулит счётчик.)",
+                self._notice(
+                    ("notice_depth_limit", "notice_depth_limit_reset"),
+                    max_depth=self.max_depth,
+                ),
                 0,
             )
-            raise web.HTTPForbidden(
-                text=(
-                    f"достигнута предельная глубина цепочки ({self.max_depth}) "
-                    "без участия человека. Сообщение не отправлено: нужен "
-                    "человек. Об этом сказано в комнате, повторять не надо."
-                )
+            raise self._refusal(
+                web.HTTPForbidden,
+                "depth_limit",
+                {"max_depth": self.max_depth},
+                (
+                    "say_depth_limit",
+                    "say_depth_limit_not_sent",
+                    "say_depth_limit_announced",
+                ),
             )
         if registration.throttled():
-            raise web.HTTPTooManyRequests(
-                text=f"превышен предел {MAX_SENDS_PER_MINUTE} сообщений в минуту"
+            raise self._refusal(
+                web.HTTPTooManyRequests,
+                "rate_limit",
+                {"limit": MAX_SENDS_PER_MINUTE},
+                ("say_rate_limit",),
             )
         registration.sends.append(time.time())
         # Сообщение без обращения попадает в комнату, но не доставляется никому:
@@ -665,50 +690,65 @@ class Broker:
         # протокол в пустоту, а frontend ждал его и не дождался.
         reach = [a for a in self.addressees(text, None) if a != registration.agent]
         event_id = await self.publish(registration.agent, text, depth)
-        answer = {"event_id": event_id, "depth": depth}
-        if not reach and self.addressed_to_a_person(text):
+        answer = {"event_id": event_id, "depth": depth, "language": self.language}
+        if not reach:
+            answer.update(self._unreached(registration, text))
+        return self._answer(answer)
+
+    def _unreached(self, registration: Registration, text: str) -> dict[str, str]:
+        if self.addressed_to_a_person(text):
             # Обращение есть, просто не к агенту: ответ человеку на его же
             # вопрос — обычное дело, и пугать отправителя тут нечем.
-            answer["note"] = (
-                "агентам сообщение не доставлено: обращение в нём не к агенту. "
-                "Человек видит его в комнате."
-            )
-        elif not reach:
-            others = [a for a in self.registrations if a != registration.agent]
-            answer["warning"] = (
-                "сообщение опубликовано, но НИ ОДИН агент его не получил: в нём "
-                "нет обращения. Адресуй явно — @имя или @room. Сейчас "
-                + (
-                    f"подключены: {', '.join(sorted(others))}."
-                    if others
-                    else "других подключённых сессий нет."
-                )
-            )
-        return web.json_response(answer)
+            return {
+                "note": self._compose(("say_to_person", "say_to_person_visible")),
+                "note_code": "addressed_to_person",
+            }
+        others = sorted(a for a in self.registrations if a != registration.agent)
+        connected = "say_unaddressed_connected" if others else "say_unaddressed_alone"
+        return {
+            "warning": self._compose(
+                ("say_unaddressed", "say_unaddressed_how", connected),
+                others=", ".join(others),
+            ),
+            "warning_code": "unaddressed",
+        }
+
+    def _session_status(self, agent: str) -> dict[str, object]:
+        registration = self.registrations.get(agent)
+        column = f"{agent:<{AGENT_COLUMN}}"
+        if registration is None:
+            return {
+                "agent": agent,
+                "state": NOT_CONNECTED,
+                "line": self._compose(("status_not_connected",), agent=column),
+            }
+        quiet = int(
+            time.time() - max(registration.last_delivery, registration.registered_at)
+        )
+        registered = datetime.fromtimestamp(registration.registered_at).strftime(
+            "%H:%M:%S"
+        )
+        state = registration.state_code()
+        line = self._compose(
+            ("status_session",),
+            agent=column,
+            state_word=self.state_word(state).ljust(self.state_width),
+            label=registration.label,
+            registered=registered,
+            quiet=quiet,
+        )
+        return {
+            "agent": agent,
+            "state": state,
+            "label": registration.label,
+            "registered": registered,
+            "quiet": quiet,
+            "line": line,
+        }
 
     async def handle_status(self, request: web.Request) -> web.Response:
-        lines = []
-        for agent in self.clients:
-            registration = self.registrations.get(agent)
-            if registration is None:
-                lines.append(f"{agent:<14} не подключён")
-                continue
-            quiet = int(
-                time.time()
-                - max(registration.last_delivery, registration.registered_at)
-            )
-            registered = datetime.fromtimestamp(registration.registered_at).strftime(
-                "%H:%M:%S"
-            )
-            lines.append(
-                f"{registration.agent:<14} {registration.state():<12} "
-                f"{registration.label} "
-                f"(подключена {registered}, тишина {quiet}с)"
-            )
-        text = "\n".join(lines) + "\n"
-        if "application/json" in request.headers.get("Accept", "").lower():
-            return web.json_response({"language": self.language, "text": text})
-        return web.Response(text=text, content_type="text/plain")
+        sessions = [self._session_status(agent) for agent in self.clients]
+        return self._answer({"language": self.language, "sessions": sessions})
 
     def app(self) -> web.Application:
         app = web.Application()
