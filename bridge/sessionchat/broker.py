@@ -18,6 +18,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import re
 import secrets
@@ -41,7 +42,7 @@ from nio import (
     RoomSendResponse,
 )
 
-from .i18n import DEFAULT_LANGUAGE, LANGUAGES
+from .i18n import DEFAULT_LANGUAGE, LANGUAGES, Catalogue
 from .protocol import (
     DEFAULT_PORT,
     LISTEN_GRACE,
@@ -64,6 +65,20 @@ from .store import (
 log = logging.getLogger("agentschat.broker")
 
 REGISTRATIONS_DB = Path(__file__).resolve().parent.parent / "state" / "agentschat.db"
+BROKER_CATALOGUE = Catalogue("sessionchat", "broker_messages")
+
+ADVICE_SENTENCES = {
+    "over_limit": ("advice_over_limit",),
+    "polled": ("advice_polled", "advice_polled_meaning"),
+    "silent": ("advice_silent", "advice_silent_meaning"),
+}
+
+SLOT_TAKEN_SENTENCES = (
+    "slot_taken_not_yours",
+    "slot_taken_token_proof",
+    "slot_taken_ask_human",
+    "slot_taken_force",
+)
 
 
 class LanguageRefused(ValueError):
@@ -147,13 +162,16 @@ class Registration:
             envelope.render(self.restart_listener, self.max_depth) for envelope in taken
         ]
 
-    def state(self) -> str:
+    def state_code(self) -> str:
         now = time.time()
         if self.open_waits > 0 or now < self.listening_until:
-            return "слушает"
+            return "listening"
         if self.last_delivery and now - self.last_delivery < 120:
-            return "обрабатывает"
-        return "НЕ СЛУШАЕТ"
+            return "processing"
+        return "not_listening"
+
+    def state(self) -> str:
+        return BROKER_CATALOGUE.text("ru", f"broker.state_{self.state_code()}")
 
     def stale(self) -> bool:
         """Можно ли считать сессию исчезнувшей и отдать её слот новому входу.
@@ -171,7 +189,7 @@ class Registration:
         last = max(self.registered_at, self.last_delivery, self.last_contact)
         return now - last > STALE_SECONDS
 
-    def advice(self) -> str:
+    def advice(self) -> tuple[str, dict[str, int]]:
         """Что делать тому, кому отказано во входе на этот слот.
 
         Отказ без срока провоцирует перехват: сессия видит «занято», не знает,
@@ -183,21 +201,15 @@ class Registration:
         quiet = int(now - last)
         # Освободится, когда кончится и фора слушателя, и счёт молчания.
         left = int(max(self.listening_until, last + STALE_SECONDS) - now)
+        timing = {"quiet": quiet, "left": left}
         if left <= 0:
-            return "Та сессия молчит дольше предела; повтори вход — слот твой."
+            return "over_limit", timing
         if self.open_waits > 0 or now < self.listening_until:
             # «Она жива» здесь сказать нельзя: убитый процесс оставляет свой
             # запрос висеть, и брокер ещё минуту видит опрос от того, кого уже
             # нет. Известно только, когда был последний опрос.
-            return (
-                f"Та сессия опрашивала брокера {quiet}с назад. Если она жива, "
-                f"слот занят по делу; если её только что убили, он освободится "
-                f"сам через {left}с — повтори вход тогда."
-            )
-        return (
-            f"Та сессия молчит {quiet}с. Если её больше нет, слот освободится "
-            f"сам через {left}с — повтори вход тогда, перехват не нужен."
-        )
+            return "polled", timing
+        return "silent", timing
 
     def throttled(self) -> bool:
         now = time.time()
@@ -226,8 +238,11 @@ class Broker:
             kind = str(data.get("delivery", "listener"))
             if kind not in ("listener", "plugin"):
                 raise ValueError(
-                    f"агент {agent}: неизвестный delivery: {kind!r}. "
-                    "Допустимые значения: listener, plugin."
+                    self._compose(
+                        ("unknown_delivery", "unknown_delivery_allowed"),
+                        agent=agent,
+                        kind=kind,
+                    )
                 )
             if kind == "plugin":
                 self.delivery_kinds[agent] = kind
@@ -389,11 +404,33 @@ class Broker:
 
     # ------------------------------------------------------------------ HTTP
 
+    def _compose(self, keys: tuple[str, ...], **params: object) -> str:
+        return " ".join(
+            BROKER_CATALOGUE.text(self.language, f"broker.{key}", **params)
+            for key in keys
+        )
+
+    def _refusal(
+        self,
+        status: type[web.HTTPException],
+        code: str,
+        params: dict[str, object] | None = None,
+        keys: tuple[str, ...] | None = None,
+        **words: str,
+    ) -> web.HTTPException:
+        params = params or {}
+        message = self._compose(keys or (code,), **params, **words)
+        body = {"code": code, "message": message, "params": params}
+        return status(
+            text=json.dumps(body, ensure_ascii=False),
+            content_type="application/json",
+        )
+
     def registration_of(self, data: dict) -> Registration:
         agent = str(data.get("agent", ""))
         registration = self.registrations.get(agent)
         if registration is None or registration.token != str(data.get("token", "")):
-            raise web.HTTPConflict(text="сессия не подключена или токен неверен")
+            raise self._refusal(web.HTTPConflict, "session_not_registered")
         registration.last_contact = time.time()
         return registration
 
@@ -421,42 +458,49 @@ class Broker:
 
     def _refuse_taken_slot(self, agent: str, existing: Registration) -> NoReturn:
         registered = datetime.fromtimestamp(existing.registered_at).strftime("%H:%M:%S")
-        raise web.HTTPConflict(
-            text=(
-                f"агент {agent} уже подключён с {registered} "
-                f"({existing.label}, {existing.state()}). "
-                f"{existing.advice()} "
-                "Не решай, что слот занят тобой же: метка и успешный "
-                "inbox этого не доказывают. Доказывает только токен — если "
-                "эта регистрация твоя, из неё же и заведена, повтори вход "
-                "с ключом --reconnect: брокер сверит токен и вернёт тебе "
-                "её. Не сверится — скажи человеку. Освободить немедленно "
-                f"может он: agentschat logout --agent {agent} --force"
-            )
+        advice, timing = existing.advice()
+        state = existing.state_code()
+        params = {
+            "agent": agent,
+            "registered": registered,
+            "label": existing.label,
+            "state": state,
+            "advice": advice,
+            **timing,
+        }
+        keys = ("slot_taken", *ADVICE_SENTENCES[advice], *SLOT_TAKEN_SENTENCES)
+        raise self._refusal(
+            web.HTTPConflict,
+            "slot_taken",
+            params,
+            keys,
+            state_word=self._compose((f"state_{state}",)),
         )
 
     async def handle_login(self, request: web.Request) -> web.Response:
         data = await request.json()
         agent = str(data.get("agent", ""))
         if agent not in self.clients:
-            raise web.HTTPNotFound(text=f"неизвестный агент: {agent}")
+            raise self._refusal(web.HTTPNotFound, "unknown_agent", {"agent": agent})
         async with self._login_lock(agent):
             existing = await self._release_stale(agent)
             if data.get("reconnect"):
                 if existing is None:
-                    raise web.HTTPConflict(
-                        text=(
-                            f"переподключаться к регистрации {agent} не к чему: "
-                            "её нет. Повтори вход без --reconnect, и брокер "
-                            "заведёт новую."
-                        )
+                    raise self._refusal(
+                        web.HTTPConflict,
+                        "reconnect_without_registration",
+                        {"agent": agent},
+                        (
+                            "reconnect_without_registration",
+                            "reconnect_without_registration_hint",
+                        ),
                     )
                 if existing.token != str(data.get("token", "")):
-                    raise web.HTTPConflict(
-                        text=(
-                            f"переподключиться к регистрации {agent} нельзя: токен "
-                            "не совпадает. Она заведена не этой сессией."
-                        )
+                    raise self._refusal(
+                        web.HTTPConflict,
+                        "reconnect_token_mismatch",
+                        {"agent": agent},
+                        ("reconnect_token_mismatch", "reconnect_token_mismatch_owner"),
                     )
                 existing.label = str(data.get("label", "")) or existing.label
                 existing.last_contact = time.time()
@@ -501,13 +545,11 @@ class Broker:
                 restored = self._restore_one(agent)
                 if restored is not None:
                     self.registrations[agent] = restored
-                raise web.HTTPConflict(
-                    text=(
-                        f"агент {agent} уже имеет регистрацию в хранилище. "
-                        "Повтори вход с --reconnect, если токен совпадёт, "
-                        "или пусть человек освободит слот: "
-                        f"agentschat logout --agent {agent} --force"
-                    )
+                raise self._refusal(
+                    web.HTTPConflict,
+                    "slot_in_store",
+                    {"agent": agent},
+                    ("slot_in_store", "slot_in_store_next"),
                 ) from None
             self.registrations[agent] = registration
             log.info("подключена сессия %s (%s)", agent, registration.label)

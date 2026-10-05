@@ -25,6 +25,7 @@ from sessionchat.store import (
 CONFIG = {
     "homeserver_url": "https://matrix.invalid",
     "verify_ssl": False,
+    "language": "ru",
     "room_id": "!room:local",
     "sessionchat_port": 18770,
     "agents": {

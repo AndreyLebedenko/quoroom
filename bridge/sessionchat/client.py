@@ -69,6 +69,12 @@ def fail(message: str) -> None:
 
 
 def explain(response: requests.Response) -> str:
+    try:
+        message = response.json().get("message")
+    except (ValueError, AttributeError):
+        message = None
+    if isinstance(message, str) and message.strip():
+        return message.strip()
     return response.text.strip() or f"HTTP {response.status_code}"
 
 

@@ -1,6 +1,6 @@
 # Task english-release-03: Broker errors carry a code; login refusals localised
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-02.
 **Estimate:** 3 hours.
