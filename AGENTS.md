@@ -100,7 +100,7 @@
 9. Use ASCII punctuation and status markers in English documentation, code
    identifiers, logs, and commit messages. Avoid symbols that render poorly in
    some terminals, such as long dashes and check marks.
-   Exception: Russian text is data, not documentation — `README.md`, `docs/`,
+   Exception: Russian text is data, not documentation — `README.ru.md`, `docs/`,
    the skills and command under `bridge/sessionchat/kit/`, and every runtime
    string an agent or a human reads (envelopes, refusals, broker notices).
    Normal Russian typography applies there; do not "fix" it.
@@ -261,8 +261,9 @@ After reading the relevant story card, task card, docs, and source code:
 
 - Russian for conceptual and architectural discussion; English for code,
   identifiers, commit messages, and development documentation under
-  `.development/`. `README.md`, `docs/` and the skills are Russian — they are
-  read by the human and by agents at runtime, not by the build.
+  `.development/`. `README.md` is English and is the main README; `README.ru.md`,
+  `docs/` and the skills are Russian — they are read by the human and by agents
+  at runtime, not by the build. Keep the two READMEs in step.
 - Be concise. No preamble, no postamble, no restating the task back.
 - Prose by default; minimal markdown.
 - Push back directly when you disagree or see a problem. Do not validate

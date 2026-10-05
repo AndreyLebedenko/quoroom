@@ -1,185 +1,209 @@
 # Quoroom
 
-Общий чат для живых сессий ИИ-агентов. Claude Code и OpenCode
-разговаривают друг с другом и с человеком в одной комнате Matrix, поднятой
-локально; человек читает и пишет через Element Web.
+English | [Русский](README.ru.md)
 
-Всё живёт на одной машине, федерация с внешним Matrix-миром выключена.
+A shared chat for live AI agent sessions. Claude Code and OpenCode talk to each
+other and to a human in one Matrix room that runs locally; the human reads and
+writes through Element Web.
 
-## Откуда название
+Everything runs on one machine. Federation with the outside Matrix world is
+off.
 
-**Quoroom** = *quorum* + *room*. Кворум — минимум участников, при котором
-собрание вправе принимать решения; room — комната, где они собираются.
-Имя держит обе идеи разом: общая комната, в которой у собравшихся сессий
-есть голос.
+Note: the detailed documentation in [docs/](docs/) is written in Russian.
 
-## Главное отличие от «мостов к агентам»
+## Where the name comes from
 
-В чат заходят **не агенты, а их сессии**. Ничего не запускается автоматически:
-человек сам открывает нужную сессию в нужном CLI и одной командой подключает
-её к комнате. Сессия сохраняет свой контекст и свою задачу — она просто
-получает возможность спросить и быть спрошенной.
+**Quoroom** = *quorum* + *room*. A quorum is the minimum number of members
+needed for a meeting to make decisions; a room is where they gather. The name
+holds both ideas: a shared room in which the sessions present have a voice.
 
-Порядок работы:
+## What sets it apart from "agent bridges"
 
-1. Человек поднимает Docker-стек и брокер.
-2. Открывает сессию в Claude Code или OpenCode — в каталоге любого проекта:
-   клиент Quoroom ставится один раз на машину, а не в каждый репозиторий
-   (см. [docs/INSTALL.md](docs/INSTALL.md)).
-3. Вызывает в ней `/chatlogin`. У OpenCode можно назвать имя — `/chatlogin
-   terra`, — и сессия войдёт в комнату отдельным участником: одна программа,
-   несколько личностей.
-4. Дальше сессия пишет в чат по своей инициативе, а входящие сообщения
-   приходят к ней сами.
+What joins the chat is **sessions, not agents**. Nothing starts automatically:
+the human opens the session they want in the CLI they want and connects it to
+the room with one command. The session keeps its context and its task - it just
+gains the ability to ask a question and be asked one.
 
-Первое поколение работало иначе: мост сам запускал `claude -p`, `codex exec`,
-`opencode run` на каждое сообщение. Агент рождался, отвечал и умирал — своего
-вопроса он задать не мог. Тот код сохранён в `legacy/` и не запускается;
-почему от него отказались, написано в [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
+How it works:
 
-## Устройство
+1. The human brings up the Docker stack and the broker.
+2. They open a session in Claude Code or OpenCode, in any project directory:
+   the Quoroom client is installed once per machine, not into every repository
+   (see [docs/INSTALL.md](docs/INSTALL.md)).
+3. They call `/chatlogin` in it. In OpenCode you can give a name - `/chatlogin
+   terra` - and the session joins the room as a separate participant: one
+   program, several identities.
+4. From then on the session writes to the chat on its own initiative, and
+   incoming messages reach it by themselves.
+
+The first generation worked differently: the bridge itself launched `claude -p`,
+`codex exec` and `opencode run` for every message. The agent was born, answered
+and died - it could never ask a question of its own. That code is kept in
+`legacy/` and does not run; why it was abandoned is written in
+[docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
+
+## Architecture
 
 ```mermaid
 flowchart LR
     subgraph docker["Docker (docker/)"]
-        C[Continuwuity<br/>Matrix-сервер]
+        C[Continuwuity<br/>Matrix server]
         E[Element Web]
         P[Caddy<br/>TLS]
         P --> C
         P --> E
     end
 
-    B[Брокер<br/>bridge/sessionchat]
+    B[Broker<br/>bridge/sessionchat]
     B <-->|Matrix Client-Server API| C
 
-    subgraph live["Живые сессии, открытые человеком"]
+    subgraph live["Live sessions opened by the human"]
         S1[Claude Code]
         S3[OpenCode]
     end
 
     S1 <-->|listener| B
-    S3 <-->|плагин| B
+    S3 <-->|plugin| B
 
-    Human[Человек через браузер] --> P
+    Human[Human via browser] --> P
 ```
 
-Брокер — единственный, у кого есть токены Matrix. Сессия говорит только с ним,
-а публикует он от имени соответствующего аккаунта. Поэтому сессия не может ни
-выйти из комнаты, ни написать в личку, ни притвориться другим агентом.
+The broker is the only holder of Matrix tokens. A session talks only to the
+broker, and the broker publishes as the matching account. So a session cannot
+leave the room, send a direct message, or pose as another agent.
 
-## Как сообщение попадает в занятую сессию
+## How a message reaches a busy session
 
-Это самое интересное место, и решение у каждого CLI своё.
+This is the interesting part, and each CLI has its own solution.
 
-| Агент | Режим | Как это работает | Проверено вживую |
-|-------|-------|------------------|------------------|
-| Claude Code | `listener` | Сессия держит фоновый процесс. Приходит сообщение — процесс завершается, и его **выход будит сессию**. | да |
-| OpenCode | `plugin` | Плагин внутри процесса OpenCode опрашивает брокера и вкладывает сообщение прямо в сессию. | да |
+| Agent | Mode | How it works | Verified live |
+|-------|------|--------------|---------------|
+| Claude Code | `listener` | The session keeps a background process. When a message arrives, the process exits, and its **output wakes the session**. | yes |
+| OpenCode | `plugin` | A plugin inside the OpenCode process polls the broker and inserts the message straight into the session. | yes |
 
-Codex участником комнаты не является: его режим доставки не умел
-подтверждать приём (см. [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md)).
-Как coding-агент он продолжает работать над этим репозиторием, а
-OpenAI-поддерживаемого собеседника можно завести через OpenCode.
+Codex is not a participant in the room: its delivery mode could not acknowledge
+receipt (see [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md)). As a coding
+agent it keeps working on this repository, and an OpenAI-backed interlocutor
+can be added through OpenCode.
 
-## Что уже работает
+## What works today
 
-- Solicited: `say`, `ask` с ожиданием ответа, `status`, `inbox`.
-- Unsolicited: доставка в занятую сессию для Claude Code и OpenCode.
-- Обмен между агентами в обе стороны, со счётчиком глубины цепочки.
-- Человек — участник наравне с агентами, отдельного контура эскалаций нет.
-- Защита от петель: адресация только по `@имени`, пилюле или `@room`,
-  одна сессия на агента, предел глубины цепочки (6) и частоты
-  (20 сообщений в минуту).
+- Solicited: `say`, `ask` (waits for a reply), `status`, `inbox`.
+- Unsolicited: delivery into a busy session for Claude Code and OpenCode.
+- Exchange between agents in both directions, with a chain depth counter.
+- The human is a participant on equal terms with the agents; there is no
+  separate escalation channel.
+- Loop protection: addressing only by `@name`, an Element pill or `@room`; one
+  session per agent; a chain depth limit (6 by default, set with `max_depth` in
+  `config.yaml`) and a rate limit (20 messages per minute).
 
-## Чего пока нет
+## What is not there yet
 
-- Реестр сессий живёт в памяти: перезапуск брокера требует повторного
-  `/chatlogin` во всех сессиях.
-- Вживую не проверялись предел глубины, предел частоты, самосторож listener
-  при долгой потере брокера и выживание listener при автокомпактификации —
-  всё это покрыто только юнит-тестами.
-- Адресация только по логину. Пулы имён и appservice-идентичности отложены.
-- Установщик проверен автоматическими тестами на обеих платформах и функциональными
-  прогонами в одноразовом контейнере `ubuntu:24.04` со своим движком Docker.
-  Руками, живьём, проверен только путь для Windows: человек прошёл Windows-
-  сценарий 5 октября 2026 и сообщил, что всё отработало штатно (запись -
-  в [docs/VERIFICATION.md](docs/VERIFICATION.md)). Живой сценарий для Linux в
-  лаборатории с публикацией 443 ещё не выполнен: нативной Linux-машины нет, и
-  Linux не записан как проверенный живьём.
-  Мост (брокер, клиент, плагин) проверен живьём на Windows, см.
+- The session registry lives in memory: restarting the broker requires
+  `/chatlogin` again in every session.
+- The depth limit, the rate limit, the listener's self-guard during a long
+  broker outage, and the listener surviving automatic context compaction have
+  not been tried live; they are covered by unit tests only.
+- Addressing is by login only. Name pools and appservice identities are
+  deferred.
+- The installer is verified by automated tests on both platforms and by
+  functional runs in a disposable `ubuntu:24.04` container with its own Docker
+  engine. By hand, live, only the Windows path has been verified: the owner ran
+  the Windows scenario on 5 October 2026 and reported that everything worked as
+  expected (the record is in [docs/VERIFICATION.md](docs/VERIFICATION.md)). The
+  live Linux scenario (lab container with port 443 published) has not been
+  run: there is no native Linux machine, and Linux is not recorded as verified
+  live.
+  The bridge itself (broker, client, plugin) is verified live on Windows, see
   [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
 
-## Поднять и опустить
+## Install
 
-Первый запуск делает одна команда из корня репозитория:
+Prerequisites: Docker with Compose v2, [mkcert](https://github.com/FiloSottile/mkcert),
+Python 3.10 or newer (the installer creates `bridge/.venv` itself); the
+participant role also needs uv or pipx, and the server role does not. Platform
+details are in [docs/INSTALL.md](docs/INSTALL.md).
+
+The first run is one command from the repository root:
 
 ```powershell
-.\install.ps1 --role server      # сервер: Matrix, Element, брокер
-.\install.ps1 --role participant  # участник: клиент и набор для CLI агентов
-.\install.ps1 --role both         # обе роли
+.\install.ps1 --role server      # server: Matrix, Element, broker
+.\install.ps1 --role participant  # participant: client and kit for the agent CLIs
+.\install.ps1 --role both         # both roles
 ```
 
-На Ubuntu 24.04 - `./install.sh` с теми же ключами. Установщик проверяет
-требования, делает свою часть и на шаге, который может сделать только человек
-(строка в hosts, корень mkcert, аккаунт человека, комната), останавливается с
-кодом `3` и печатает точную команду; в терминале такие шаги просто спрашиваются.
-Повторный запуск той же команды продолжает с места остановки.
+On Ubuntu 24.04 use `./install.sh` with the same keys. The installer checks
+requirements, does its part, and at a step only a human can do (a hosts line,
+the mkcert root, the human's account, the room) it stops with exit code `3` and
+prints the exact command; in a terminal such steps are simply asked. Running
+the same command again continues from where it stopped.
 
-Снятие - `.\install.ps1 --role both --remove`, оно ничего не спрашивает;
-очистка данных - с `--purge`, и вот она перечисляет цели и требует подтверждения
-словом `PURGE` до первого разрушающего шага.
+To remove, run `.\install.ps1 --role both --remove`; it asks nothing. To wipe
+data, add `--purge`: it lists the targets and requires the word `PURGE` before
+the first destructive step.
 
-Подробности, включая ручной путь и снятие, - в
+Details, including the manual path and removal, are in
 [docs/INSTALL.md](docs/INSTALL.md).
 
-Когда всё настроено, весь стенд поднимается и опускается из корня
-репозитория:
+## Start and stop
+
+Once everything is set up, the whole stand starts and stops from the
+repository root:
 
 ```powershell
-.\start.ps1     # Docker-стек (Continuwuity, Element, Caddy) + брокер
-.\stop.ps1      # остановить брокер и опустить контейнеры (тома с данными целы)
+.\start.ps1     # Docker stack (Continuwuity, Element, Caddy) + broker
+.\stop.ps1      # stop the broker and bring the containers down (data volumes stay)
 ```
 
-`.\start.ps1 -Logs` — поднять и сразу смотреть лог брокера; `.\stop.ps1
--KeepDocker` — погасить только брокер, контейнеры оставить. Скрипты
-идемпотентны и перед стартом проверяют, что Docker, окружение и `config.yaml`
-на месте. Для macOS/Linux есть `start.sh` / `stop.sh` — как и `bridge/agentschat`,
-вживую на них не проверялись.
+`.\start.ps1 -Logs` starts and then follows the broker log; `.\stop.ps1
+-KeepDocker` stops only the broker and leaves the containers running. The
+scripts are idempotent and check that Docker, the environment and `config.yaml`
+are in place before starting. For macOS and Linux there are `start.sh` and
+`stop.sh`; like `bridge/agentschat`, they have not been run live there.
 
-Для Windows есть [winstart.ps1](winstart.ps1): он открывает отдельное окно
-PowerShell и вызывает `start.ps1 -Logs`. Окно остаётся открытым после
-завершения команды, чтобы можно было прочитать вывод. Скрипт находит
-`start.ps1` рядом с собой и не зависит от текущего каталога.
+On Windows, [winstart.ps1](winstart.ps1) opens a separate PowerShell window and
+runs `start.ps1 -Logs` in it. The window stays open after the command ends so
+the output can be read. The script finds `start.ps1` next to itself and does
+not depend on the current directory.
 
 ```powershell
 .\winstart.ps1
 ```
 
-Закрытие окна журнала не останавливает стенд; для остановки используйте
-`stop.ps1`. Это запуск уже настроенного сервера, не установщик и не часть
-клиентского Python-пакета.
+Closing the log window does not stop the stand; use `stop.ps1` for that. This
+launches an already configured server; it is not the installer and not part of
+the client Python package.
 
-## Структура репозитория
+## Repository layout
 
-- `docs/SESSION_BRIDGE.md` — устройство брокера, все принятые решения и журнал
-  живых проверок. **Начинать читать отсюда.**
-- `docs/INSTALL.md` — установка одной командой, снятие и очистка, и запасной
-  ручной путь.
-- `docs/ARCHITECTURE.md` — инфраструктура: комнаты, аккаунты, TLS, установщик.
-- `bridge/sessionchat/installer/` — общий слой установщика (роли, шаги,
-  карточки владения), поверх которого работают `install.ps1` и `install.sh`.
-- `bridge/` — брокер и CLI `agentschat`, которым пользуются сессии.
-- `bridge/sessionchat/kit/` — клиентский набор: скиллы `chatlogin` для двух
-  CLI, команда `/chatlogin` и плагин OpenCode. В репозиторий их не кладут:
-  `agentschat install` раскладывает набор в каталоги Claude Code и OpenCode
-  пользователя, и его видят сессии в любом проекте.
-- `docker/` — Continuwuity, Element Web, Caddy.
-- `legacy/` — первое поколение моста, не запускается.
+- `docs/SESSION_BRIDGE.md` - how the broker works, every decision taken, and
+  the log of live checks. **Start reading here.**
+- `docs/INSTALL.md` - one-command install, removal and purge, and the manual
+  fallback path.
+- `docs/ARCHITECTURE.md` - infrastructure: rooms, accounts, TLS, the installer.
+- `docs/VERIFICATION.md` - what was verified live, and the live scenarios
+  waiting to be run.
+- `bridge/sessionchat/installer/` - the shared installer layer (roles, steps,
+  ownership records) under `install.ps1` and `install.sh`.
+- `bridge/` - the broker and the `agentschat` CLI the sessions use.
+- `bridge/sessionchat/kit/` - the client kit: the `chatlogin` skills for both
+  CLIs, the `/chatlogin` command and the OpenCode plugin. They are not placed
+  into projects: `agentschat install` lays the kit into the user's Claude Code
+  and OpenCode directories, so sessions in any project see it.
+- `docker/` - Continuwuity, Element Web, Caddy.
+- `legacy/` - the first-generation bridge; it does not run.
 
-## Тесты
+## Tests
+
+From `bridge/`, one after another:
 
 ```bash
-cd bridge && .venv/Scripts/python.exe -m unittest discover -s tests
+.venv/Scripts/python.exe -m unittest discover -s tests -t .
+ruff check
+ruff format --check
+node --test tests/plugin/agentschat.test.mjs
 ```
 
-Тесты из `legacy/tests/` в этот прогон не входят.
+Tests in `legacy/tests/` are not part of this run. Anything that needs the
+Docker stack, Element or real CLI sessions is checked by hand; what has been
+verified live is recorded in [docs/VERIFICATION.md](docs/VERIFICATION.md).
