@@ -126,8 +126,8 @@ export const AgentsChat = async ({ client }) => {
     const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
     if (response.status === 204) return null
     if (response.status === 409) {
-      // Сессия отключена, либо на диске остался токен от прошлого запуска
-      // брокера. Ждём нового login и не дёргаемся на каждое сообщение.
+      // Токен не принят: сессия отключена, слот освобождён молчанием или
+      // bridge/state удалён. Ждём нового login и не дёргаемся на каждое сообщение.
       note(`${agent}: брокер больше не знает эту сессию: ${(await response.text()).trim()}`)
       state.bindings.delete(agent)
       return null
