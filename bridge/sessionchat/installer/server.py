@@ -78,6 +78,7 @@ KIND_WORDS = {
 INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
 ISSUED = re.compile(r"using the registration token ([A-Za-z0-9]+)")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+LANGUAGE_LINE = re.compile(r"^language:.*$", re.M)
 IMAGE = re.compile(r"^\s*image:\s*(\S+)", re.M)
 SEQUENCE = 0x30
 CONTEXT_0 = 0xA0
@@ -696,10 +697,16 @@ class ConfigStep:
     def apply(self, run: Run) -> None:
         if config_path(run).is_file():
             return
-        config_path(run).write_text(
-            config_example(run).read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        config_path(run).write_text(new_config(run), encoding="utf-8")
         run.record(ROLE, FILE_KIND, str(config_path(run)))
+
+
+def new_config(run: Run) -> str:
+    return LANGUAGE_LINE.sub(
+        f"language: {run.boundaries.lang}",
+        config_example(run).read_text(encoding="utf-8"),
+        count=1,
+    )
 
 
 @dataclass

@@ -41,6 +41,7 @@ from nio import (
     RoomSendResponse,
 )
 
+from .i18n import DEFAULT_LANGUAGE, LANGUAGES
 from .protocol import (
     DEFAULT_PORT,
     LISTEN_GRACE,
@@ -63,6 +64,20 @@ from .store import (
 log = logging.getLogger("agentschat.broker")
 
 REGISTRATIONS_DB = Path(__file__).resolve().parent.parent / "state" / "agentschat.db"
+
+
+class LanguageRefused(ValueError):
+    pass
+
+
+def room_language(cfg: dict) -> str:
+    value = cfg.get("language", DEFAULT_LANGUAGE)
+    if isinstance(value, str) and value in LANGUAGES:
+        return value
+    raise LanguageRefused(
+        f'The config key "language" must be one of: {", ".join(LANGUAGES)} '
+        f"(got {ascii(value)})."
+    )
 
 
 def bounded(needle: str, haystack: str) -> bool:
@@ -193,6 +208,7 @@ class Registration:
 
 class Broker:
     def __init__(self, cfg: dict, store_path: Path | None = None):
+        self.language = room_language(cfg)
         self.room = cfg["room_id"]
         self.port = int(cfg.get("sessionchat_port", DEFAULT_PORT))
         self.max_depth = int(cfg.get("max_depth", MAX_DEPTH))
@@ -647,7 +663,10 @@ class Broker:
                 f"{registration.label} "
                 f"(подключена {registered}, тишина {quiet}с)"
             )
-        return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
+        text = "\n".join(lines) + "\n"
+        if "application/json" in request.headers.get("Accept", "").lower():
+            return web.json_response({"language": self.language, "text": text})
+        return web.Response(text=text, content_type="text/plain")
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -728,6 +747,8 @@ def main() -> None:
     logging.getLogger("nio").setLevel(logging.WARNING)
     try:
         asyncio.run(run(Path(args.config).resolve(), args.agents))
+    except LanguageRefused as error:
+        raise SystemExit(f"BROKER NOT STARTED: {error}") from None
     except ValueError as error:
         # Опечатка в --agents или имя, которого ещё нет в конфиге. Причина
         # известна точно, и traceback к ней ничего не добавляет.
