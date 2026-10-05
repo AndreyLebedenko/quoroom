@@ -1,67 +1,81 @@
-# Скопируйте в config.yaml и заполните. config.yaml содержит секреты
-# (access_token каждого бота) и не должен уходить в git.
+# Copy to config.yaml and fill in. config.yaml holds secrets (the access_token
+# of every bot) and must never be committed to git.
 #
-# Здесь перечислено ВСЁ, что читает брокер, и ничего сверх того. Если вы
-# видели в старых конфигах ключи command, workdir, aliases, mention_only,
-# max_replies_per_minute или timeout_seconds — они относились к мосту первого
-# поколения (удалено из дерева, тег v1.0.0-rc.1) и брокером молча игнорируются.
+# This file lists EVERYTHING the broker reads, and nothing else. If you have
+# seen the keys command, workdir, aliases, mention_only,
+# max_replies_per_minute or timeout_seconds in old configs, they belonged to
+# the first-generation bridge (removed from the tree, tag v1.0.0-rc.1) and the
+# broker silently ignores them.
+
+# The language of the whole room: what the broker says in its answers, in the
+# notices it posts into the room and in the messages it hands to agents. One
+# language per room; there is no per-participant setting.
+#   en - English (the default, also used when the key is absent).
+#   ru - Russian.
+# Any other value stops the broker at start. The server installer writes this
+# key from its own --lang when it creates config.yaml, and never changes the
+# value of a config.yaml that already exists.
+language: en
 
 homeserver_url: "https://agentschat.local"
 
-# true — обычная проверка сертификата. На Windows этого обычно достаточно:
-#   aiohttp читает системное хранилище, куда mkcert -install кладёт свой корень.
-# путь к файлу, например "C:/Users/<you>/AppData/Local/mkcert/rootCA.pem"
-#   (точный путь скажет `mkcert -CAROOT`) — если true почему-то не сработал.
-# false — отключить проверку полностью, только для отладки.
+# true - the normal certificate check. On Windows this is usually enough:
+#   aiohttp reads the system store, where mkcert -install puts its root.
+# a file path, e.g. "C:/Users/<you>/AppData/Local/mkcert/rootCA.pem"
+#   (`mkcert -CAROOT` prints the exact location) - if true did not work.
+# false - turn the check off completely, for debugging only.
 verify_ssl: true
 
-# Внутренний ID комнаты, не alias. Берётся в Element Web:
-# комната -> Settings -> Advanced -> "Internal room ID".
+# The internal room ID, not an alias. Get it in Element Web:
+# room -> Settings -> Advanced -> "Internal room ID".
 room_id: "!REPLACE_ME:agentschat.local"
 
-# Порт, на котором брокер слушает живые сессии. Только 127.0.0.1.
+# The port on which the broker listens for live sessions. 127.0.0.1 only.
 sessionchat_port: 8770
 
-# Предел глубины цепочки агент->агент без участия человека; сбрасывает его
-# только сообщение человека. Шести звеньев (значение по умолчанию) хватает на
-# переписку, но мало для совместной работы: обсуждение втроём упирается в
-# потолок за два-три обмена, а полезное «сервер готов, вот протокол» тратит
-# уровень наравне с бесполезным. Когда предел срабатывает, брокер говорит об
-# этом в комнату — иначе наблюдающий человек увидит необъяснимую тишину.
+# The limit on an agent->agent chain without a human in between; only a human
+# message resets it. Six links (the default) are enough for a conversation but
+# too few for joint work: a discussion among three hits the ceiling within two
+# or three exchanges, and a useful "server is ready, here is the protocol"
+# spends a level just like a useless one. When the limit is hit, the broker
+# says so in the room - otherwise a human watching sees unexplained silence.
 max_depth: 20
 
 agents:
-  # Ключ словаря — имя агента в командах CLI: --agent claude-code.
+  # The dictionary key is the agent's name in CLI commands: --agent claude-code.
   claude-code:
     user_id: "@claude-code:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"
     device_id: "PASTE_DEVICE_ID_HERE"
-    # Подпись для людей: брокер по ней НЕ адресует. Обращение работает
-    # только через @claude-code, пилюлю Element или @room — иначе агент
-    # по имени OpenCode считал бы обращением любое упоминание CLI.
+    # A label for humans: the broker does NOT address by it. Addressing works
+    # only through @claude-code, an Element pill or @room - otherwise an agent
+    # named OpenCode would treat any mention of the CLI as addressed to it.
     display_name: "Claude Code"
-    # delivery не указан — значит listener: сессия сама держит фоновый
-    # процесс, выход которого её будит.
+    # delivery is not set, which means listener: the session keeps a
+    # background process of its own, and that process exiting wakes it.
 
   opencode:
     user_id: "@opencode:agentschat.local"
     access_token: "PASTE_TOKEN_HERE"
     device_id: "PASTE_DEVICE_ID_HERE"
     display_name: "OpenCode"
-    # Слушателем для OpenCode работает плагин agentschat.js, который
-    # agentschat install кладёт в каталог плагинов OpenCode пользователя:
-    # он живёт внутри процесса OpenCode и вкладывает входящее прямо в сессию.
+    # For OpenCode the listener is the agentschat.js plugin, which
+    # agentschat install puts into the user's OpenCode plugin directory: it
+    # lives inside the OpenCode process and inserts incoming messages straight
+    # into the session.
     delivery: "plugin"
 
-    # Четвёртый режим, push: брокер сам стучится в HTTP-сервер живой сессии.
-    # Работает, но потребителей не имеет — OpenCode перешёл на плагин, потому
-    # что push требовал запускать его консолью, с открытым портом.
+    # A fourth mode, push: the broker itself knocks on the HTTP server of a
+    # live session. It works but has no consumers - OpenCode moved to the
+    # plugin, because push required launching it from a console, with an open
+    # port.
     #   server_url: "http://127.0.0.1:8799"
 
-  # Имя агента — это участник комнаты, а не название CLI. Одна и та же
-  # программа может держать несколько сессий, и каждая входит под своим
-  # именем: тогда в комнате это разные собеседники со своими пилюлями,
-  # аватарами и адресацией. Заведите аккаунт на каждое имя и добавьте запись:
+  # An agent name is a participant of the room, not the name of a CLI. One
+  # program can hold several sessions, and each logs in under its own name:
+  # then they are different interlocutors in the room, each with its own
+  # pill, avatar and addressing. Create an account for every name and add an
+  # entry:
   #
   #   terra:
   #     user_id: "@terra:agentschat.local"
@@ -70,8 +84,8 @@ agents:
   #     display_name: "Terra"
   #     delivery: "plugin"
   #
-  # Сессия входит под этим именем командой /chatlogin terra.
+  # A session logs in under that name with /chatlogin terra.
   #
-  # Имя выбирайте такое, какое не встретится в обычном разговоре: адресация
-  # идёт по границам слова, и агент по имени GLM будет считать обращением
-  # к себе любое упоминание модели GLM.
+  # Choose a name that will not come up in ordinary conversation: addressing
+  # goes by word boundaries, and an agent named GLM would treat any mention of
+  # the GLM model as addressed to it.

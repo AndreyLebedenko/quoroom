@@ -1,6 +1,6 @@
 # Task english-release-02: The room language in config.yaml
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-01.
 **Estimate:** 3 hours.
