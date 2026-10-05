@@ -7,7 +7,6 @@ bridge/*.local
 bridge/coordination.yaml
 bridge/state/
 bridge/live-checks/
-workspace/session-check/
 docker/caddy/certs/
 
 # Виртуальное окружение Python

@@ -61,8 +61,9 @@
    implementer programs the guess. The cost of a wrong guess here is real
    code doing real work for no one (polling dead subscriptions, restoring
    queues nobody will drain), not just a wrong sentence.
-3. `legacy/` holds the first-generation bridge. It does not run and is not
-   maintained. Do not import from it, fix it, or use it as a pattern.
+3. The first-generation bridge was removed from the tree in v1.0.0-rc.2; it
+   lives in git history at the tag `v1.0.0-rc.1`. Do not restore it, import
+   from it, or use it as a pattern.
 4. Documentation references to project files should use stable filename
    identity when the filename is unique in the repository. Directory paths in
    prose are hints, not authority, unless the path is part of an executable

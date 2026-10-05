@@ -6,8 +6,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quoroom"
-version = "1.0.0rc1"
+version = "1.0.0rc2"
 requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
 dependencies = ["requests>=2.31.0"]
 
 [project.optional-dependencies]

@@ -1,6 +1,10 @@
 # Story: Cross-platform local installation for servers and participants
 
-**Status:** In progress (branch `feat/local-installers`). Implementation gate resolved 2026-10-03.
+**Status:** Completed, merged to `master` (released as v1.0.0-rc.2). Implementation
+gate resolved 2026-10-03. Known limitation: the live Linux scenario has not
+been run by a human (no native Linux host); Linux is verified only by automated
+tests and functional runs in the lab container. The pending scenario stays in
+`docs/VERIFICATION.md`.
 **Depends on:** The per-user client kit (completed).
 
 ## Summary

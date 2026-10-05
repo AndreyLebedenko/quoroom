@@ -36,8 +36,9 @@
 
 Первое поколение работало иначе: мост сам запускал `claude -p`, `codex exec`,
 `opencode run` на каждое сообщение. Агент рождался, отвечал и умирал — своего
-вопроса он задать не мог. Тот код сохранён в `legacy/` и не запускается;
-почему от него отказались, написано в [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
+вопроса он задать не мог. Тот код убран из дерева в v1.0.0-rc.2 и остался в истории git на теге
+`v1.0.0-rc.1`; почему от него отказались, написано в
+[docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
 
 ## Устройство
 
@@ -165,6 +166,10 @@ PowerShell и вызывает `start.ps1 -Logs`. Окно остаётся от
 `stop.ps1`. Это запуск уже настроенного сервера, не установщик и не часть
 клиентского Python-пакета.
 
+## Лицензия
+
+Apache License 2.0, см. [LICENSE](LICENSE) и [NOTICE](NOTICE).
+
 ## Структура репозитория
 
 - `docs/SESSION_BRIDGE.md` — устройство брокера, все принятые решения и журнал
@@ -182,7 +187,6 @@ PowerShell и вызывает `start.ps1 -Logs`. Окно остаётся от
   `agentschat install` раскладывает набор в каталоги Claude Code и OpenCode
   пользователя, и его видят сессии в любом проекте.
 - `docker/` — Continuwuity, Element Web, Caddy.
-- `legacy/` — первое поколение моста, не запускается.
 
 ## Тесты
 
@@ -195,6 +199,6 @@ ruff format --check
 node --test tests/plugin/agentschat.test.mjs
 ```
 
-Тесты из `legacy/tests/` в этот прогон не входят. Всё, что требует Docker-стека,
+Всё, что требует Docker-стека,
 Element или настоящих сессий CLI, проверяется руками; что именно проверено
 живьём - в [docs/VERIFICATION.md](docs/VERIFICATION.md).
