@@ -1,6 +1,6 @@
 # Task english-release-16: Launch scripts and configuration templates
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-02 (the `language` key).
 **Estimate:** 3 hours.
