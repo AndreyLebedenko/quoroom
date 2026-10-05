@@ -47,6 +47,8 @@ BROKER_UNREACHABLE = "broker_unreachable"
 BROKER_REFUSED = "broker_refused"
 NOT_LOGGED_IN = "not_logged_in"
 UNEXPECTED_ANSWER = "unexpected_answer"
+NOTHING_TO_SEND = "nothing_to_send"
+FRAME = "=== AGENTSCHAT: {title} ==="
 
 
 class ContractError(RuntimeError):
@@ -75,11 +77,14 @@ def not_logged_in_message(agent: str) -> str:
     )
 
 
-def credentials(agent: str) -> dict:
+def credentials(agent: str, command: str | None = None) -> dict:
     saved = saved_credentials(agent)
-    if saved is None:
-        fail(not_logged_in_message(agent))
-    return saved
+    if saved is not None:
+        return saved
+    message = not_logged_in_message(agent)
+    if command is None:
+        fail(message)
+    fail_with_result(command, NOT_LOGGED_IN, message, agent=agent)
 
 
 def speak(key: str, **params: object) -> str:
@@ -266,7 +271,11 @@ def poll_once(agent: str, token: str) -> str | None:
                 speak("envelope_without_text", code=ENVELOPE_WITHOUT_TEXT),
             )
         return rendered
-    raise RuntimeError(explain(response))
+    raise ContractError(refusal_code(response), explain(response))
+
+
+def frame(title_key: str) -> str:
+    return FRAME.format(title=speak(title_key))
 
 
 def do_wait(args: argparse.Namespace) -> None:
@@ -282,17 +291,26 @@ def do_wait(args: argparse.Namespace) -> None:
             deaf_since = deaf_since or now
             if now - deaf_since >= DEAF_SECONDS:
                 print(
-                    "=== AGENTSCHAT: связь с брокером потеряна ===\n"
-                    f"Брокер {base()} недоступен уже "
-                    f"{int(now - deaf_since)}с: {error}\n"
-                    "Listener завершился, чтобы не изображать работу вслепую.\n"
-                    "Проверь, запущен ли брокер, и подними listener заново."
+                    "\n".join(
+                        (
+                            frame("wait_broker_lost_title"),
+                            speak(
+                                "wait_broker_lost_unreachable",
+                                url=base(),
+                                seconds=int(now - deaf_since),
+                                error=error,
+                            ),
+                            speak("wait_broker_lost_exited"),
+                            speak("wait_broker_lost_restart"),
+                        )
+                    )
                 )
                 raise SystemExit(1) from None
             time.sleep(3)
             continue
         except RuntimeError as error:
-            print(f"=== AGENTSCHAT: listener остановлен ===\n{error}")
+            print(frame("wait_listener_stopped_title"))
+            print(error)
             raise SystemExit(1) from None
         deaf_since = 0.0
         if rendered is not None:
@@ -304,7 +322,8 @@ def show_pending(pending: list) -> None:
     """Печатает очередь, накопленную для агента без непрошеной доставки."""
     if not pending:
         return
-    print(f"\nAGENTSCHAT: пока тебя не было, пришло сообщений: {len(pending)}.")
+    print()
+    print(speak("inbox_pending", count=len(pending)))
     for item in pending:
         print()
         print(item)
@@ -319,14 +338,14 @@ def do_inbox(args: argparse.Namespace) -> None:
             timeout=30,
         )
     except requests.RequestException as error:
-        fail(f"брокер недоступен: {error}")
+        fail(speak("inbox_broker_unreachable", error=error))
     if response.status_code != 200:
         fail(explain(response))
     answer = response.json()
     learn_language(answer)
     pending = answer.get("pending") or []
     if not pending:
-        print("AGENTSCHAT: новых сообщений нет.")
+        print(speak("inbox_empty"))
         return
     show_pending(pending)
 
@@ -347,48 +366,97 @@ def message_text(args: argparse.Namespace) -> str:
     if text == "-":
         return sys.stdin.read().strip()
     if not text:
-        fail("нечего отправлять: укажите текст, --file или - для стандартного ввода")
+        fail(speak("usage_nothing_to_send"))
     return text
 
 
-def do_say(args: argparse.Namespace) -> None:
-    args.text = message_text(args)
-    token = credentials(args.agent)["token"]
+def outgoing_text(command: str, args: argparse.Namespace) -> str:
+    try:
+        return message_text(args)
+    except SystemExit:
+        report(command, False, agent=args.agent, code=NOTHING_TO_SEND)
+        raise
+
+
+def deliver(command: str, args: argparse.Namespace) -> dict:
+    text = outgoing_text(command, args)
+    token = credentials(args.agent, command)["token"]
     try:
         response = requests.post(
             f"{base()}/say",
-            json={"agent": args.agent, "token": token, "text": args.text},
+            json={"agent": args.agent, "token": token, "text": text},
             timeout=30,
         )
     except requests.RequestException as error:
-        fail(f"брокер недоступен: {error}")
+        fail_with_result(
+            command,
+            BROKER_UNREACHABLE,
+            speak("say_broker_unreachable", error=error),
+            agent=args.agent,
+        )
     if response.status_code != 200:
-        fail(explain(response))
+        fail_with_result(
+            command, refusal_code(response), explain(response), agent=args.agent
+        )
     data = response.json()
     learn_language(data)
-    print(f"AGENTSCHAT: отправлено ({data['event_id']}).")
+    print(speak("say_sent", event_id=data["event_id"]))
     if data.get("warning"):
-        print(f"AGENTSCHAT: ВНИМАНИЕ — {data['warning']}")
+        print(speak("say_warning", warning=data["warning"]))
     if data.get("note"):
-        print(f"AGENTSCHAT: {data['note']}")
+        print(speak("say_note", note=data["note"]))
+    return data
+
+
+def delivered_fields(data: dict) -> dict:
+    fields = {"event_id": data["event_id"]}
+    if data.get("warning_code"):
+        fields["warning"] = data["warning_code"]
+    if data.get("note_code"):
+        fields["note"] = data["note_code"]
+    return fields
+
+
+def wait_failure_code(error: Exception) -> str:
+    if isinstance(error, ContractError):
+        return error.code
+    if isinstance(error, requests.RequestException):
+        return BROKER_UNREACHABLE
+    return BROKER_REFUSED
+
+
+def do_say(args: argparse.Namespace) -> None:
+    data = deliver("say", args)
+    report("say", True, agent=args.agent, **delivered_fields(data))
 
 
 def do_ask(args: argparse.Namespace) -> None:
-    do_say(args)
-    token = credentials(args.agent)["token"]
+    fields = {"agent": args.agent, **delivered_fields(deliver("ask", args))}
+    token = credentials(args.agent, "ask")["token"]
     deadline = time.time() + args.timeout
     while time.time() < deadline:
         try:
             rendered = poll_once(args.agent, token)
         except (requests.RequestException, RuntimeError) as error:
-            fail(f"ожидание ответа прервано: {error}")
+            fail_with_result(
+                "ask",
+                wait_failure_code(error),
+                speak("ask_interrupted", error=error),
+                **fields,
+            )
         if rendered is not None:
             print(rendered)
+            report("ask", True, **fields, answered=True)
             return
     print(
-        f"AGENTSCHAT: за {args.timeout}с ответа не пришло. Сообщение доставлено; "
-        "не жди дальше в этом ходе — ответ придёт через listener."
+        " ".join(
+            (
+                speak("ask_timeout", timeout=args.timeout),
+                speak("ask_timeout_delivered"),
+            )
+        )
     )
+    report("ask", True, **fields, answered=False)
 
 
 def status_answer(response: requests.Response) -> dict | None:
@@ -488,24 +556,24 @@ def main() -> None:
     )
     login.set_defaults(run=do_login)
 
-    wait = sub.add_parser("wait", help="listener: ждать сообщение и выйти")
+    wait = sub.add_parser("wait", help=speak("wait_help"))
     wait.add_argument("--agent", required=True)
     wait.set_defaults(run=do_wait)
 
-    say = sub.add_parser("say", help="отправить сообщение в чат")
+    say = sub.add_parser("say", help=speak("say_help"))
     say.add_argument("--agent", required=True)
-    say.add_argument("text", nargs="?", help="текст; - читать со stdin")
-    say.add_argument("--file", help="взять текст из файла (для многострочного)")
+    say.add_argument("text", nargs="?", help=speak("say_text_help"))
+    say.add_argument("--file", help=speak("say_file_help"))
     say.set_defaults(run=do_say)
 
-    ask = sub.add_parser("ask", help="отправить и подождать ответ")
+    ask = sub.add_parser("ask", help=speak("ask_help"))
     ask.add_argument("--agent", required=True)
     ask.add_argument("--timeout", type=float, default=300.0)
-    ask.add_argument("text", nargs="?", help="текст; - читать со stdin")
-    ask.add_argument("--file", help="взять текст из файла (для многострочного)")
+    ask.add_argument("text", nargs="?", help=speak("say_text_help"))
+    ask.add_argument("--file", help=speak("say_file_help"))
     ask.set_defaults(run=do_ask)
 
-    inbox = sub.add_parser("inbox", help="забрать накопленные сообщения")
+    inbox = sub.add_parser("inbox", help=speak("inbox_help"))
     inbox.add_argument("--agent", required=True)
     inbox.set_defaults(run=do_inbox)
 

@@ -1,6 +1,6 @@
 # Task english-release-09: wait, inbox, say, ask and the rest of the client text
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-07.
 **Estimate:** 3 hours.
