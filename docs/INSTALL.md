@@ -580,7 +580,7 @@ agentschat install
 ## Дальнейшие шаги
 
 - Поднять и опустить стенд: `start.ps1` / `stop.ps1` (или `start.sh` /
-  `stop.sh`) - см. [README](../README.md).
+  `stop.sh`) - см. [README](../README.ru.md).
 - Прочитать [SESSION_BRIDGE.md](SESSION_BRIDGE.md): там устройство брокера,
   способы доставки и журнал живых проверок.
 - Не забыть закрыть регистрацию на сервере, если ещё не сделали.
