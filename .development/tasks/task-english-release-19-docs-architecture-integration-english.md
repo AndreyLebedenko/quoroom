@@ -53,3 +53,10 @@ translate the contracts twice.
       envelope kinds and the result line.
 - [ ] READMEs link to the right documents.
 - [ ] No code changed; the suite is untouched.
+
+## Note from task 08 (orchestrator, 2026-10-05)
+
+When documenting the `AGENTSCHAT-RESULT` line, state that a reader takes the last
+line with that prefix, and that the login line has `mode` and `reconnected`, not
+a session id. The exact format and code table are in the report of task 08;
+`say` / `ask` are in the report of task 09 once it exists.

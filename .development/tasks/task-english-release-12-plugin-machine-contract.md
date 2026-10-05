@@ -56,3 +56,15 @@ also logs in Russian, which makes a log that switches language with the room.
 - [ ] An English login binds a session; the Russian phrases alone do not.
 - [ ] The plugin log is English only.
 - [ ] `node --test` and the Python suite green; `ruff` clean.
+
+## Note from task 08 (orchestrator, 2026-10-05)
+
+The result line the client prints has no `session` key: the broker has no
+session id and the plugin already knows the session of the tool call from the
+hook itself. A login line is
+`AGENTSCHAT-RESULT {"command":"login","ok":true,"agent":"<name>","mode":"listener|plugin","reconnected":false}`
+and a logout line is `{"command":"logout","ok":true,"agent":"<name>"}`; a
+refusal carries `"ok":false` and `"code"`. Read the LAST line of the output that
+starts with `AGENTSCHAT-RESULT `: sentences before it can contain text the
+participant chose (the session label), so an earlier line must never decide.
+Read the report of task 08 for the exact format and the code table.

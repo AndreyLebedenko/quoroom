@@ -60,3 +60,12 @@ Russian sentences.
       finishes that).
 - [ ] `say` / `ask` print a result line.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Note from task 08 (orchestrator, 2026-10-05)
+
+The result-line helper is `bridge/sessionchat/client_result.py` (`line()`,
+`PREFIX`) and `client.report()`; reuse them, with the same conventions: ASCII
+JSON, stdout, once per command after the sentences, a refusal sentence on stderr.
+Broker answers for `say` carry `warning` (rendered) beside `warning_code`
+(`unaddressed`) and `note` beside `note_code` (`addressed_to_person`); see the
+report of task 04. `/wait` and `/login` answers now carry `language` (task 08).
