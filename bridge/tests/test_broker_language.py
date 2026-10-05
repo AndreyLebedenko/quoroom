@@ -123,31 +123,12 @@ class StatusLanguageTests(StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCa
         self.assertEqual(response.status, 200)
         self.assertEqual(response.content_type, "application/json")
 
-    async def test_the_json_status_keeps_the_text_the_plain_status_has(self):
-        client = await self.serve()
-        plain = await (await client.get("/status")).text()
-        answer = await (await client.get("/status", headers=JSON)).json()
-        self.assertEqual(answer["text"], plain)
-
-    async def test_the_plain_status_stays_plain_text_for_a_client_that_asks_for_anything(
+    async def test_the_status_is_valid_json_with_only_the_language_and_the_sessions(
         self,
     ):
-        client = await self.serve(language="ru")
-        for headers in ({}, {"Accept": "*/*"}, {"Accept": "text/plain"}):
-            with self.subTest(headers=headers):
-                response = await client.get("/status", headers=headers)
-                self.assertEqual(response.content_type, "text/plain")
-                self.assertIn("claude-code", await response.text())
-
-    async def test_the_plain_status_text_does_not_change_with_the_language(self):
-        english = await (await (await self.serve(language="en")).get("/status")).text()
-        russian = await (await (await self.serve(language="ru")).get("/status")).text()
-        self.assertEqual(english, russian)
-
-    async def test_the_json_status_is_valid_json_with_only_text_fields(self):
         client = await self.serve()
         body = await (await client.get("/status", headers=JSON)).text()
-        self.assertEqual(set(json.loads(body)), {"language", "text"})
+        self.assertEqual(set(json.loads(body)), {"language", "sessions"})
 
 
 class MainRefusalTests(unittest.TestCase):

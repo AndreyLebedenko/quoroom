@@ -323,16 +323,17 @@ def status_text(response: requests.Response) -> str:
         return response.text
     answer = response.json()
     learn_language(answer)
-    return str(answer.get("text", ""))
+    sessions = answer.get("sessions") if isinstance(answer, dict) else None
+    return "\n".join(
+        str(session.get("line", ""))
+        for session in sessions or []
+        if isinstance(session, dict)
+    )
 
 
 def do_status(args: argparse.Namespace) -> None:
     try:
-        response = requests.get(
-            f"{base()}/status",
-            headers={"Accept": "application/json"},
-            timeout=15,
-        )
+        response = requests.get(f"{base()}/status", timeout=15)
     except requests.RequestException as error:
         fail(f"брокер недоступен на {base()}: {error}")
     print(status_text(response).rstrip())

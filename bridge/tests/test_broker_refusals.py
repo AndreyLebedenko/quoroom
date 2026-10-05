@@ -60,19 +60,26 @@ class BrokerCatalogueUseTests(unittest.TestCase):
         }
         self.assertEqual(keys, reported)
 
-    def test_no_russian_literal_is_left_in_the_login_and_slot_code(self):
+    def test_no_russian_literal_is_left_in_the_answering_code(self):
         tree = ast.parse(BROKER_SOURCE.read_text(encoding="utf-8"))
         in_scope = {
-            "state",
             "state_code",
+            "state_word",
             "advice",
             "__init__",
             "_compose",
+            "_notice",
+            "_answer",
             "_refusal",
             "registration_of",
             "_refuse_taken_slot",
             "handle_login",
             "handle_logout",
+            "handle_inbox",
+            "handle_say",
+            "_unreached",
+            "handle_status",
+            "_session_status",
         }
         offenders = []
         for function in ast.walk(tree):
@@ -102,6 +109,24 @@ class BrokerCatalogueUseTests(unittest.TestCase):
                     offenders.append(f"{function.name}: {node.value!r}")
         self.assertEqual(offenders, [])
 
+    def test_no_text_published_into_the_room_is_a_russian_literal(self):
+        tree = ast.parse(BROKER_SOURCE.read_text(encoding="utf-8"))
+        offenders = []
+        for call in ast.walk(tree):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "publish"
+            ):
+                offenders += [
+                    repr(node.value)
+                    for node in ast.walk(call)
+                    if isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and CYRILLIC.search(node.value)
+                ]
+        self.assertEqual(offenders, [])
+
 
 class RegistrationStateTests(unittest.TestCase):
     def registration(self) -> Registration:
@@ -127,12 +152,13 @@ class RegistrationStateTests(unittest.TestCase):
 
     def test_the_russian_state_word_is_still_what_status_prints(self):
         session = self.registration()
-        self.assertEqual(session.state(), "НЕ СЛУШАЕТ")
+        broker = Broker(RUSSIAN_CONFIG)
+        self.assertEqual(broker.state_word(session.state_code()), "НЕ СЛУШАЕТ")
         session.open_waits = 1
-        self.assertEqual(session.state(), "слушает")
+        self.assertEqual(broker.state_word(session.state_code()), "слушает")
         session.open_waits = 0
         session.last_delivery = time.time() - 30
-        self.assertEqual(session.state(), "обрабатывает")
+        self.assertEqual(broker.state_word(session.state_code()), "обрабатывает")
 
 
 class RefusalCase(StoreBackedBrokerMixin, unittest.IsolatedAsyncioTestCase):
