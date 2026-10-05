@@ -67,3 +67,16 @@ and `CHANGELOG.md`); this task closes it.
 - [ ] An English participant install contains no Russian.
 - [ ] `kit.py` and the install part of `client.py` have no Cyrillic literal.
 - [ ] Full suite, `node --test`, `ruff check`, `ruff format --check` green.
+
+## Note from task 10 (orchestrator, 2026-10-05)
+
+The participant installer now runs `agentschat install --json` /
+`uninstall --json` and no longer echoes the client's human lines into its own
+report (`_spoken` was removed in task 10). So the earlier "client lines
+included" Cyrillic exclusion no longer exists to remove, and the installer's
+report shows no per-file lines. Decide in this task, with the owner's wording
+in mind, whether the per-file lines should come back; if so, the installer
+renders them itself from the JSON document with its own catalogue keys (never
+by parsing client prose), and the report lists the new keys. If not, say so in
+the report and keep the test that proves the installer's report holds no
+client text.
