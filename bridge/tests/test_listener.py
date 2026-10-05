@@ -15,13 +15,14 @@ from unittest.mock import patch
 import requests
 
 from sessionchat import client
+from sessionchat.broker import broker_text
 from sessionchat.protocol import DEAF_SECONDS, Envelope
 
 # poll_once возвращает готовый текст конверта: собирает его брокер, потому
 # что только он знает режим доставки сессии.
 MESSAGE = Envelope(
-    "@human:local", "человек", "проверка связи", "$e", "22:00:00", 0
-).render()
+    "@human:local", "human", "проверка связи", "$e", "22:00:00", 0
+).render("ru", broker_text)
 
 
 class Clock:

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from aiohttp.test_utils import TestClient, TestServer
 
 from sessionchat import broker as broker_module
+from sessionchat import protocol as protocol_module
 from sessionchat.broker import BROKER_CATALOGUE, Broker, Registration
 from sessionchat.i18n import LANGUAGES
 from sessionchat.protocol import LISTEN_GRACE
@@ -19,6 +20,7 @@ from tests.test_sessionchat import CONFIG as RUSSIAN_CONFIG
 from tests.test_sessionchat import StoreBackedBrokerMixin
 
 BROKER_SOURCE = Path(broker_module.__file__)
+PROTOCOL_SOURCE = Path(protocol_module.__file__)
 AGENT = "claude-code"
 ASCII_LABEL = "refactoring"
 TIMED_SLOT_PARAMS = {
@@ -42,7 +44,9 @@ class BrokerCatalogueTests(CatalogueContract, unittest.TestCase):
 
 class BrokerCatalogueUseTests(unittest.TestCase):
     def test_every_sentence_key_is_used_by_the_broker(self):
-        source = BROKER_SOURCE.read_text(encoding="utf-8")
+        source = BROKER_SOURCE.read_text(encoding="utf-8") + PROTOCOL_SOURCE.read_text(
+            encoding="utf-8"
+        )
         unused = [
             key
             for key in BROKER_CATALOGUE.templates("en")

@@ -1,6 +1,6 @@
 # Task english-release-06: The envelope agents receive, in the room language
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-02, task english-release-03.
 **Estimate:** 3 hours.

@@ -50,6 +50,8 @@ from .protocol import (
     MAX_SENDS_PER_MINUTE,
     STALE_SECONDS,
     WAIT_SECONDS,
+    KIND_AGENT,
+    KIND_HUMAN,
     Envelope,
 )
 from .store import (
@@ -66,6 +68,11 @@ log = logging.getLogger("agentschat.broker")
 
 REGISTRATIONS_DB = Path(__file__).resolve().parent.parent / "state" / "agentschat.db"
 BROKER_CATALOGUE = Catalogue("sessionchat", "broker_messages")
+
+
+def broker_text(language: str, name: str, **params: object) -> str:
+    return BROKER_CATALOGUE.text(language, f"broker.{name}", **params)
+
 
 ADVICE_SENTENCES = {
     "over_limit": ("advice_over_limit",),
@@ -151,16 +158,14 @@ class Registration:
         """
         return self.mode == "listener"
 
-    def drain(self) -> list[str]:
+    def drain(self) -> list[Envelope]:
         """Отдаёт всё накопленное разом и очищает очередь."""
         taken = list(self.inbox)
         self.inbox.clear()
         if taken:
             self.last_delivery = time.time()
             self.depth = taken[-1].depth
-        return [
-            envelope.render(self.restart_listener, self.max_depth) for envelope in taken
-        ]
+        return taken
 
     def state_code(self) -> str:
         now = time.time()
@@ -360,7 +365,7 @@ class Broker:
         stamp = datetime.fromtimestamp(event.server_timestamp / 1000)
         envelope = Envelope(
             event.sender,
-            "человек" if human else "агент",
+            KIND_HUMAN if human else KIND_AGENT,
             body,
             event.event_id,
             stamp.strftime("%Y-%m-%d %H:%M:%S"),
@@ -405,9 +410,14 @@ class Broker:
     # ------------------------------------------------------------------ HTTP
 
     def _compose(self, keys: tuple[str, ...], **params: object) -> str:
-        return " ".join(
-            BROKER_CATALOGUE.text(self.language, f"broker.{key}", **params)
-            for key in keys
+        return " ".join(broker_text(self.language, key, **params) for key in keys)
+
+    def _render(self, envelope: Envelope, registration: Registration) -> str:
+        return envelope.render(
+            self.language,
+            broker_text,
+            registration.restart_listener,
+            registration.max_depth,
         )
 
     def _refusal(
@@ -616,9 +626,7 @@ class Broker:
             return web.json_response(
                 {
                     **envelope.as_dict(),
-                    "rendered": envelope.render(
-                        registration.restart_listener, registration.max_depth
-                    ),
+                    "rendered": self._render(envelope, registration),
                 }
             )
         finally:
@@ -627,7 +635,10 @@ class Broker:
 
     async def handle_inbox(self, request: web.Request) -> web.Response:
         registration = self.registration_of(dict(request.query))
-        return web.json_response({"pending": registration.drain()})
+        pending = [
+            self._render(envelope, registration) for envelope in registration.drain()
+        ]
+        return web.json_response({"pending": pending})
 
     async def handle_say(self, request: web.Request) -> web.Response:
         data = await request.json()
