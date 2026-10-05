@@ -1,6 +1,6 @@
 # Task english-release-14: The Claude Code chatlogin skill in English
 
-**Status:** Planned.
+**Status:** Implemented, awaiting owner review of the text.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-13 (the layout), task english-release-08 and task english-release-09 (the CLI text it describes).
 **Estimate:** 3 hours.

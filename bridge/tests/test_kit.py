@@ -7,6 +7,7 @@ from sessionchat import kit
 
 EXPECTED_KIT_FILES = {
     "common/opencode/plugins/agentschat.js",
+    "en/claude/skills/chatlogin/SKILL.md",
     "ru/claude/skills/chatlogin/SKILL.md",
     "ru/opencode/command/chatlogin.md",
     "ru/opencode/skills/chatlogin/SKILL.md",
