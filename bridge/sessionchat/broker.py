@@ -23,6 +23,7 @@ import logging
 import re
 import secrets
 import ssl
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ from .protocol import (
 )
 from .store import (
     DuplicateAgent,
+    StoreError,
     delete_registration,
     insert_registration,
     load_registrations,
@@ -100,6 +102,10 @@ class LanguageRefused(ValueError):
     pass
 
 
+class StartRefused(ValueError):
+    pass
+
+
 def room_language(cfg: dict) -> str:
     value = cfg.get("language", DEFAULT_LANGUAGE)
     if isinstance(value, str) and value in LANGUAGES:
@@ -108,6 +114,35 @@ def room_language(cfg: dict) -> str:
         f'The config key "language" must be one of: {", ".join(LANGUAGES)} '
         f"(got {ascii(value)})."
     )
+
+
+def startup_language(config: Path) -> str:
+    try:
+        cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
+        return room_language(cfg) if isinstance(cfg, dict) else DEFAULT_LANGUAGE
+    except (OSError, ValueError, yaml.YAMLError):
+        return DEFAULT_LANGUAGE
+
+
+def build_parser(language: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=broker_text(language, "start_help_description")
+    )
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument(
+        "--agents",
+        default="",
+        help=broker_text(language, "start_help_agents"),
+    )
+    parser.add_argument("--verbose", action="store_true")
+    return parser
+
+
+def configured_path(argv: list[str]) -> Path:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default="config.yaml")
+    known, _ = pre_parser.parse_known_args(argv)
+    return Path(known.config).resolve()
 
 
 def bounded(needle: str, haystack: str) -> bool:
@@ -248,7 +283,7 @@ class Broker:
         for agent, data in cfg["agents"].items():
             kind = str(data.get("delivery", "listener"))
             if kind not in ("listener", "plugin"):
-                raise ValueError(
+                raise StartRefused(
                     self._compose(
                         ("unknown_delivery", "unknown_delivery_allowed"),
                         agent=agent,
@@ -271,7 +306,10 @@ class Broker:
             self.clients[agent] = client
         self.user_ids = {a: c.user_id for a, c in self.clients.items()}
         self.store_path = store_path or REGISTRATIONS_DB
-        self.registrations: dict[str, Registration] = self._restore_registrations()
+        try:
+            self.registrations: dict[str, Registration] = self._restore_registrations()
+        except StoreError as error:
+            raise StartRefused(self.store_message(error)) from error
         self._login_locks: dict[str, asyncio.Lock] = {}
         self.reader = next(iter(self.clients.values()))
         self.started_ms = int(time.time() * 1000)
@@ -310,7 +348,12 @@ class Broker:
             response = await client._send(JoinResponse, "POST", path, data="{}")
             if not isinstance(response, JoinResponse):
                 raise RuntimeError(
-                    f"{agent}: не удалось войти в {self.room}: {response}"
+                    self._compose(
+                        ("start_join_failed",),
+                        agent=agent,
+                        room=self.room,
+                        response=response,
+                    )
                 )
             self.room = response.room_id
 
@@ -408,7 +451,7 @@ class Broker:
             },
         )
         if not isinstance(response, RoomSendResponse):
-            raise RuntimeError(f"публикация не удалась: {response}")
+            raise RuntimeError(f"publishing failed: {response}")
         return response.event_id
 
     async def sync_forever(self) -> None:
@@ -433,6 +476,24 @@ class Broker:
 
     def state_word(self, state: str) -> str:
         return self._compose((f"state_{state}",))
+
+    def store_message(self, error: StoreError) -> str:
+        return broker_text(
+            self.language,
+            f"store_{error.code}",
+            **error.params,
+            recovery=broker_text(self.language, "start_store_recovery"),
+        )
+
+    def start_refusal(self, reason: str) -> str:
+        return broker_text(self.language, "start_refused", reason=reason)
+
+    def port_busy_refusal(self, reason: str | None) -> str:
+        first = self._compose(("start_port_busy",), port=self.port, reason=reason)
+        rest = self._compose(
+            ("start_port_busy_running", "start_port_busy_check"), port=self.port
+        )
+        return self.start_refusal(f"{first}\n{rest}")
 
     def _answer(self, body: dict) -> web.Response:
         return web.json_response(body, dumps=dump_json)
@@ -471,7 +532,7 @@ class Broker:
             )
         )
         log.info(
-            "слот %s освобождён: прежняя сессия молчала %sс (%s)",
+            "slot %s freed: the previous session was silent for %ss (%s)",
             agent,
             quiet,
             existing.label,
@@ -533,7 +594,9 @@ class Broker:
                         store, agent, label=existing.label
                     )
                 )
-                log.info("переподключение к регистрации %s (%s)", agent, existing.label)
+                log.info(
+                    "reattached to the registration of %s (%s)", agent, existing.label
+                )
                 return web.json_response(
                     {
                         "token": existing.token,
@@ -576,7 +639,7 @@ class Broker:
                     ("slot_in_store", "slot_in_store_next"),
                 ) from None
             self.registrations[agent] = registration
-            log.info("подключена сессия %s (%s)", agent, registration.label)
+            log.info("session %s connected (%s)", agent, registration.label)
             return web.json_response(
                 {
                     "token": token,
@@ -597,7 +660,7 @@ class Broker:
             self.registration_of(data)
         await self._delete_stored(agent)
         self.registrations.pop(agent, None)
-        log.info("отключена сессия %s", agent)
+        log.info("session %s disconnected", agent)
         return web.json_response({"ok": True})
 
     async def _delete_stored(self, agent: str) -> None:
@@ -782,7 +845,11 @@ def only_agents(cfg: dict, names: str) -> dict:
     wanted = [n.strip() for n in names.split(",") if n.strip()]
     unknown = [n for n in wanted if n not in cfg.get("agents", {})]
     if unknown:
-        raise ValueError(f"нет таких агентов в конфиге: {', '.join(unknown)}")
+        raise StartRefused(
+            broker_text(
+                room_language(cfg), "start_unknown_agents", agents=", ".join(unknown)
+            )
+        )
     return {**cfg, "agents": {n: cfg["agents"][n] for n in wanted}}
 
 
@@ -800,13 +867,8 @@ async def run(config: Path, agents: str = "") -> None:
             # Занятый порт — не редкость, а обычный способ ошибиться: брокер
             # уже работает в другом окне, и второй запуск с другими ключами
             # молча ничего не меняет. Traceback здесь только прячет причину.
-            raise SystemExit(
-                f"БРОКЕР НЕ ЗАПУЩЕН: порт {broker.port} занят ({error.strerror}).\n"
-                "Скорее всего, брокер уже работает в другом окне. Проверьте: "
-                f"curl http://127.0.0.1:{broker.port}/status — и остановите "
-                "прежний, если хотите запустить этот с другими ключами."
-            ) from None
-        log.info("БРОКЕР ГОТОВ комната=%s порт=%s", broker.room, broker.port)
+            raise SystemExit(broker.port_busy_refusal(error.strerror)) from None
+        log.info("BROKER READY room=%s port=%s", broker.room, broker.port)
         await broker.sync_forever()
     finally:
         if runner is not None:
@@ -818,15 +880,9 @@ async def run(config: Path, agents: str = "") -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Quoroom session broker")
-    parser.add_argument("--config", default="config.yaml")
-    parser.add_argument(
-        "--agents",
-        default="",
-        help="обслуживать только этих агентов, через запятую (по умолчанию всех)",
-    )
-    parser.add_argument("--verbose", action="store_true")
-    args = parser.parse_args()
+    config = configured_path(sys.argv[1:])
+    language = startup_language(config)
+    args = build_parser(language).parse_args()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
@@ -837,15 +893,17 @@ def main() -> None:
     log.setLevel(logging.DEBUG if args.verbose else logging.INFO)
     logging.getLogger("nio").setLevel(logging.WARNING)
     try:
-        asyncio.run(run(Path(args.config).resolve(), args.agents))
+        asyncio.run(run(config, args.agents))
     except LanguageRefused as error:
-        raise SystemExit(f"BROKER NOT STARTED: {error}") from None
+        raise SystemExit(
+            broker_text(DEFAULT_LANGUAGE, "start_refused", reason=error)
+        ) from None
     except ValueError as error:
         # Опечатка в --agents или имя, которого ещё нет в конфиге. Причина
         # известна точно, и traceback к ней ничего не добавляет.
-        raise SystemExit(f"БРОКЕР НЕ ЗАПУЩЕН: {error}") from None
+        raise SystemExit(broker_text(language, "start_refused", reason=error)) from None
     except KeyboardInterrupt:
-        log.info("брокер остановлен")
+        log.info("broker stopped")
 
 
 if __name__ == "__main__":

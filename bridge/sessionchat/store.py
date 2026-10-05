@@ -1,11 +1,12 @@
-"""Долговременное хранилище брокера: регистрации и подписки.
+"""The broker's durable store: registrations and subscriptions.
 
-SQLite под `bridge/state/`. Хранит только то, что Matrix выразить не может:
-кто каким токеном владеет, на что подписан и до чего подтвердил получение.
-Тел сообщений здесь нет и быть не может: единственный источник данных - комната.
+SQLite under `bridge/state/`. It keeps only what Matrix cannot express: who
+owns which token, what each agent is subscribed to and how far it has
+acknowledged. Message bodies are not kept here and never can be: the room is
+the only source of them.
 
-Обоснование решений - .development/tasks/story-v1.0.0-pubsub-core.md, разделы
-"The store" и "What transfers from the Jarvis journal".
+Rationale: .development/tasks/story-v1.0.0-pubsub-core.md, sections
+"The store" and "What transfers from the Jarvis journal".
 """
 
 import sqlite3
@@ -43,19 +44,53 @@ _SCHEMA_STATEMENTS = (
     """,
 )
 
-_RECOVERY = "удалите файл и заново выполните /chatlogin в каждой сессии"
+DEVELOPER_SENTENCES = {
+    "missing_file": (
+        "{path}: the store file does not exist; delete it and run /chatlogin"
+        " again in every session."
+    ),
+    "corrupted": (
+        "{path}: the file is damaged or is not a database ({error}); delete it"
+        " and run /chatlogin again in every session."
+    ),
+    "bad_schema_version": (
+        "{path}: the meta table holds a value that is not a version: {value!r};"
+        " delete the file and run /chatlogin again in every session."
+    ),
+    "schema_too_new": (
+        "{path}: schema version {version} is newer than the supported one"
+        " ({supported}); it cannot be read."
+    ),
+    "duplicate_agent": (
+        "Agent {agent} already has a registration; overwriting is refused."
+    ),
+    "unknown_registration": "There is no registration for {agent}; nothing to update.",
+    "unknown_subscription": (
+        "There is no subscription of {agent} to {topic}; nothing to acknowledge."
+    ),
+    "subscription_without_registration": (
+        "A subscription of {agent} to {topic} is impossible: the agent has no"
+        " registration ({error})."
+    ),
+}
+STORE_ERROR_CODES = tuple(sorted(DEVELOPER_SENTENCES))
 
 
 class StoreError(Exception):
-    pass
+    code: str | None = None
+
+    def __init__(self, code: str | None = None, **params: object):
+        self.code = code or type(self).code
+        self.params = params
+        super().__init__(DEVELOPER_SENTENCES[self.code].format(**params))
 
 
 class DuplicateAgent(StoreError):
-    pass
+    code = "duplicate_agent"
 
 
 class UnknownRegistration(StoreError):
-    pass
+    code = "unknown_registration"
 
 
 class StoreOpenError(StoreError):
@@ -63,21 +98,21 @@ class StoreOpenError(StoreError):
 
 
 class StoreSchemaTooNew(StoreOpenError):
-    pass
+    code = "schema_too_new"
 
 
 class UnknownSubscription(StoreError):
-    pass
+    code = "unknown_subscription"
 
 
 @contextmanager
 def open_store(path: Path):
-    """Открывает хранилище на запись, создавая схему, если файла ещё нет.
+    """Opens the store for writing, creating the schema if the file is new.
 
-    База новее, чем знает код, не открывается вовсе: таблицы под версию,
-    которую мы не понимаем, могут уже содержать то, что мы перезапишем.
-    Закрывает соединение при выходе: запись коммитится внутри операций,
-    а не при закрытии.
+    A database newer than the code is not opened at all: tables of a version
+    we do not understand may already hold what we would overwrite. The
+    connection is closed on exit: writes are committed inside the operations,
+    not on close.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,10 +127,10 @@ def open_store(path: Path):
 
 @contextmanager
 def open_read_only(path: Path):
-    """Чтение без права записи: испорченный путь токенов здесь не запишется."""
+    """Reads without the right to write: a damaged token path is not written here."""
     path = Path(path)
     if not path.exists():
-        raise StoreOpenError(f"{path}: файла нет; {_RECOVERY}.")
+        raise StoreOpenError("missing_file", path=str(path))
     connection = _connect(path, mode="ro")
     try:
         _check_schema(connection, path)
@@ -129,9 +164,7 @@ def insert_registration(
                 (agent, label, token, registered_at, depth),
             )
         except sqlite3.IntegrityError:
-            raise DuplicateAgent(
-                f"агент {agent} уже имеет регистрацию; перезапись запрещена"
-            ) from None
+            raise DuplicateAgent(agent=agent) from None
 
 
 def update_registration(
@@ -148,7 +181,7 @@ def update_registration(
             (label, depth, agent),
         )
         if cursor.rowcount == 0:
-            raise UnknownRegistration(f"регистрации {agent} нет, обновлять нечего")
+            raise UnknownRegistration(agent=agent)
 
 
 def load_registrations(store: sqlite3.Connection) -> list[tuple]:
@@ -171,11 +204,11 @@ def add_subscription(
     created_at: float,
     seed_event_id: str,
 ) -> None:
-    """Создаёт подпись с позицией, взятой из комнаты в момент подписки.
+    """Creates a subscription at the position taken from the room when it is made.
 
-    Идемпотентность - "уже есть, ничего не делать": перезапись seed затёрла бы
-    накопленную ACK-позицию, а это потеря доставленных сообщений. Позиция есть
-    у каждой подписи с рождения, поэтому у resume один код пути.
+    Idempotence means "already there, do nothing": overwriting the seed would
+    erase the accumulated ACK position, which loses delivered messages. Every
+    subscription has a position from birth, so resume has a single code path.
     """
     with store:
         try:
@@ -191,7 +224,10 @@ def add_subscription(
             ).fetchone():
                 return
             raise StoreError(
-                f"подписка {agent} на {topic} невозможна: нет регистрации ({error})"
+                "subscription_without_registration",
+                agent=agent,
+                topic=topic,
+                error=str(error),
             ) from None
 
 
@@ -215,7 +251,7 @@ def load_subscriptions(store: sqlite3.Connection, agent: str) -> list[tuple]:
 def record_ack(
     store: sqlite3.Connection, agent: str, topic: str, event_id: str, at: float
 ) -> None:
-    """Подтверждение получения: позиция и её время, один стейтмент, один commit."""
+    """Acknowledgement: the position and its time, one statement, one commit."""
     with store:
         cursor = store.execute(
             "UPDATE subscriptions SET acked_event_id = ?, acked_at = ?"
@@ -223,9 +259,7 @@ def record_ack(
             (event_id, at, agent, topic),
         )
         if cursor.rowcount == 0:
-            raise UnknownSubscription(
-                f"подписка {agent} на {topic} не существует, подтверждать нечего"
-            )
+            raise UnknownSubscription(agent=agent, topic=topic)
 
 
 def _check_schema(connection: sqlite3.Connection, path: Path) -> None:
@@ -253,16 +287,13 @@ def _check_schema(connection: sqlite3.Connection, path: Path) -> None:
             version = int(row[0])
         except ValueError:
             raise StoreOpenError(
-                f"{path}: в meta лежит не версия: {row[0]!r}. {_RECOVERY}."
+                "bad_schema_version", path=str(path), value=row[0]
             ) from None
         if version > SCHEMA_VERSION:
             raise StoreSchemaTooNew(
-                f"{path}: схема версии {version} новее, чем знает код "
-                f"({SCHEMA_VERSION}); читать её нельзя"
+                path=str(path), version=version, supported=SCHEMA_VERSION
             )
 
 
 def _open_error(path: Path, error: Exception) -> StoreOpenError:
-    return StoreOpenError(
-        f"{path}: файл повреждён или не является базой ({error}). {_RECOVERY}."
-    )
+    return StoreOpenError("corrupted", path=str(path), error=str(error))
