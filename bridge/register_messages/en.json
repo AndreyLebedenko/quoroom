@@ -1,0 +1,13 @@
+{
+  "ca_bundle_help": "path to rootCA.pem from mkcert, for example \"$(mkcert -CAROOT)\\rootCA.pem\"",
+  "certificate_failed": "\nCertificate verification failed. requests does not read the Windows system store where mkcert -install puts its root. Add:\n    --ca-bundle \"$(mkcert -CAROOT)\\rootCA.pem\"\nto the same command and run it again.",
+  "description": "Register an account on Continuwuity",
+  "homeserver_help": "for example https://agentschat.local",
+  "lang_help": "language of the messages (default: en)",
+  "no_session": "The server's response has no session: {text}",
+  "no_verify_ssl_help": "turn certificate verification off completely (blunter than --ca-bundle)",
+  "paste_heading": "\n--- paste into bridge/config.yaml ---",
+  "registration_failed": "Registration failed: {status} {text}",
+  "unexpected_step_one": "Unexpected response at step 1: {status} {text}",
+  "username_help": "localpart, for example claude-code"
+}

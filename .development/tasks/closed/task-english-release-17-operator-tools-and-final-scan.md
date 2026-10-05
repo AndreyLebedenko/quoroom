@@ -1,6 +1,6 @@
 # Task english-release-17: Operator tools and the scan that keeps it English
 
-**Status:** Planned.
+**Status:** Completed.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** all of tasks english-release-01 to 16.
 **Estimate:** 2 hours.

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Quoroom - установка и удаление одной машиной одной командой:
+# Quoroom - install and remove one machine with one command:
 #
 #     ./install.sh
 #     ./install.sh --role both
