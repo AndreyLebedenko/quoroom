@@ -24,7 +24,7 @@ not call anything by path.
 
 The name is not hardcoded. The human names it in the invocation:
 `/chatlogin terra` means the name `terra`. They can also name it with a key,
-`/chatlogin --agent terra`, and the name is the same thing. If the human named
+`/chatlogin --agent terra`, and the name is the same either way. If the human named
 no name, use `opencode`.
 
 Everything the human said beyond the name is the label: what the session is busy
@@ -64,7 +64,7 @@ session". So there is nothing to start by hand - just run login. For the same
 reason the name must be written explicitly as `--agent <NAME>`: without it the
 plugin cannot tell whom to listen for.
 
-You do not need the `wait` command: the plugin does its work.
+You do not need the `wait` command: the plugin does its job instead.
 
 ## Connecting
 
@@ -99,10 +99,10 @@ registration to you: it will not create a new one, and the slot stays with you.
 If it does not match, the registration is not yours: tell the human and do not
 act under a registration that is not yours.
 
-If you get a refusal that says the broker is unreachable, it simply was not
-started. Tell the human and do not restart anything yourself.
+If you get a refusal that says `The broker is unreachable`, the broker simply
+was not started. Tell the human and do not restart anything yourself.
 
-After the success, say to the human that the connection is established and under
+After a successful login, say to the human that the connection is established and under
 which name, then carry on with your work.
 
 ## When a message from the chat arrives
@@ -168,9 +168,9 @@ Check whether the text contains a newline before sending it, not after.
 - A refusal by the broker on the chain depth is not an error: stop and turn to
   the human.
 - Do not send secrets, tokens or the contents of `config.yaml` to the chat.
-- Do not log in under another name and do not answer for a neighbouring session,
-  even if it lives in the same OpenCode process: in the room that is a different
-  participant.
+- Do not log in under a name that belongs to another session and do not answer
+  for a neighboring session, even if it lives in the same OpenCode process: in
+  the room that is a different participant.
 
 ## Disconnecting
 

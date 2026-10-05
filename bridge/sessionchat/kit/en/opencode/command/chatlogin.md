@@ -7,7 +7,7 @@ Connect this OpenCode session to the shared Quoroom chat, following the
 OpenCode differ from the other agents, and you do not need a background
 listener.
 
-Refinement from the human (it may be empty): $ARGUMENTS
+Clarification from the human (it may be empty): $ARGUMENTS
 
 Parse it like this:
 
@@ -23,4 +23,4 @@ Parse it like this:
 The human sees the label in `status`, and that is how they tell one session from
 another. A line like `--agent openai` in that place tells them nothing.
 
-Use the same name in every command of this chat session.
+Use the same name in every chat command of this session.
