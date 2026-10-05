@@ -517,6 +517,9 @@ class StatusTests(StatusCase):
 class StatusAsTheClientPrintsItTests(StatusCase, ClientLanguageTestCase):
     async def printed(self, language: str, state: str) -> str:
         answer, _ = await self.state_of(language, state)
+        return self.printed_from(answer)
+
+    def printed_from(self, answer: dict) -> str:
         output = io.StringIO()
         with (
             patch.object(client.requests, "get", return_value=Answer(answer)),
@@ -530,9 +533,7 @@ class StatusAsTheClientPrintsItTests(StatusCase, ClientLanguageTestCase):
             with self.subTest(language=language):
                 answer, _ = await self.state_of(language, "listening")
                 lines = [entry["line"] for entry in answer["sessions"]]
-                self.assertEqual(
-                    await self.printed(language, "listening"), "\n".join(lines) + "\n"
-                )
+                self.assertEqual(self.printed_from(answer), "\n".join(lines) + "\n")
 
     async def test_the_russian_output_is_what_the_client_printed_before(self):
         text = await self.printed("ru", "listening")
