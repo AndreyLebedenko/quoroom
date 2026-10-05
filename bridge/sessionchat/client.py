@@ -33,7 +33,7 @@ import requests
 from . import kit
 from .client_language import RoomLanguage
 from .i18n import Catalogue
-from .protocol import DEAF_SECONDS, DEFAULT_URL, WAIT_SECONDS, Envelope
+from .protocol import DEAF_SECONDS, DEFAULT_URL, WAIT_SECONDS
 
 STORE = Path.home() / ".agentschat"
 CATALOGUE = Catalogue("sessionchat", "client_messages")
@@ -41,6 +41,13 @@ ROOM_LANGUAGE = RoomLanguage()
 FAILURE = 1
 REFUSED = 5
 JSON_HELP = "отчёт кодом, без предложений"
+ENVELOPE_WITHOUT_TEXT = "envelope_without_text"
+
+
+class ContractError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 def base() -> str:
@@ -192,7 +199,13 @@ def poll_once(agent: str, token: str) -> str | None:
     if response.status_code == 200:
         data = response.json()
         learn_language(data)
-        return str(data.get("rendered") or Envelope.from_dict(data).render())
+        rendered = data.get("rendered") if isinstance(data, dict) else None
+        if not isinstance(rendered, str) or not rendered:
+            raise ContractError(
+                ENVELOPE_WITHOUT_TEXT,
+                speak("envelope_without_text", code=ENVELOPE_WITHOUT_TEXT),
+            )
+        return rendered
     raise RuntimeError(explain(response))
 
 

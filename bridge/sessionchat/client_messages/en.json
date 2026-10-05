@@ -1,3 +1,4 @@
 {
+  "envelope_without_text": "The broker answered without the envelope text (code: {code}).",
   "failure_line": "AGENTSCHAT: {message}"
 }

@@ -1,3 +1,4 @@
 {
+  "envelope_without_text": "Брокер ответил без текста конверта (код: {code}).",
   "failure_line": "AGENTSCHAT: {message}"
 }
