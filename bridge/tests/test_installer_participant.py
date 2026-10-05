@@ -34,6 +34,9 @@ STATUS = "/status"
 STORE = participant.STORE
 MANIFEST = participant.KIT_MANIFEST
 RESTART = "Перезапустите открытые сессии"
+NOISE = "погода в Казани дождливая, ничего не значит"
+WRAP_BEFORE = "отчёт клиента ниже, прочитайте сами:\n"
+WRAP_AFTER = "\nэто был отчёт."
 
 
 class Machine:
@@ -113,13 +116,16 @@ class Machine:
             return completed("", "agentschat: сбой удаления", 1)
         if "install" in argv[1:]:
             if self.kit_conflict:
-                return completed(self.conflict_kit(), "", self.kit_conflict_code)
+                return completed(self.conflict_kit(), NOISE, self.kit_conflict_code)
             if self.kit_answers == "words":
-                return completed(self.refusal_words(), "", 1)
+                return completed(self.refusal_words(), NOISE, 1)
             if self.kit_answers == "nothing":
                 return completed("", "", 0)
-            return completed(self.install_kit(argv[2:]))
-        return completed(self.uninstall_kit(argv[2:]))
+            document = self.install_kit(argv[2:])
+            if self.kit_answers == "wrapped":
+                return completed(f"{WRAP_BEFORE}{document}{WRAP_AFTER}", NOISE, 0)
+            return completed(document, NOISE)
+        return completed(self.uninstall_kit(argv[2:]), NOISE)
 
     def clis_for(self, flags: list[str]) -> list[str]:
         picked = [flag[2:] for flag in flags if flag[2:] in kit.CLIS]
@@ -684,14 +690,25 @@ class KitInstallTests(ParticipantCase):
         )
 
     def test_the_clients_own_words_are_not_echoed_into_the_installers_report(self):
+        code, given = self.install()
+        self.assertEqual(code, DONE)
+        self.assertNotIn(NOISE, given.stdout.getvalue())
+        self.assertEqual(
+            [
+                line
+                for line in given.stdout.getvalue().splitlines()
+                if line.startswith("{")
+            ],
+            [],
+        )
+
+    def test_the_clients_own_words_do_not_reach_a_removal_report_either(self):
         self.install()
         self.machine.log.clear()
-        _, given = self.install()
-        spoken = given.stdout.getvalue()
-        self.assertNotIn("AGENTSCHAT: набор Quoroom", spoken)
-        self.assertEqual(
-            [line for line in spoken.splitlines() if line.startswith("{")], []
-        )
+        code, given = self.remove()
+        self.assertEqual(code, DONE)
+        self.assertNotIn(NOISE, given.stdout.getvalue())
+        self.assertNotIn(NOISE, given.stderr.getvalue())
 
     def test_the_kit_is_refreshed_on_every_run(self):
         self.install()
@@ -841,6 +858,39 @@ class KitReportTests(ParticipantCase):
         code, given = self.install()
         self.assertEqual(code, FAILED)
         self.assertIn("Причина: agentschat не отработал", given.stderr.getvalue())
+
+    def test_unrelated_words_around_the_report_make_it_no_report_at_all(self):
+        self.machine.kit_answers = "wrapped"
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: agentschat не отработал", given.stderr.getvalue())
+
+    def test_unrelated_words_of_the_client_change_nothing_in_a_finished_install(self):
+        code, given = self.install()
+        self.assertEqual(code, DONE)
+        self.assertIn(RESTART, given.stdout.getvalue())
+
+    def test_a_conflict_the_client_exits_zero_with_is_still_a_conflict(self):
+        self.machine.kit_conflict = True
+        self.machine.kit_conflict_code = 0
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: конфликт набора Quoroom", given.stderr.getvalue())
+
+    def test_a_conflict_says_that_nothing_was_written_and_how_to_force_it(self):
+        self.machine.kit_conflict = True
+        _, given = self.install()
+        said = given.stderr.getvalue()
+        self.assertIn("ничего не записано", said)
+        self.assertIn("отличаются от набора Quoroom", said)
+        self.assertIn("повторите с --force", said)
+
+    def test_a_refusal_that_blames_no_file_does_not_leave_the_reason_empty(self):
+        blank = kit.Report(kit.COMMAND_INSTALL, kit.CODE_CONFLICT).as_json()
+        said = participant.kit_failure(
+            self.plan_run(), completed(blank, "", 1), kit.COMMAND_INSTALL
+        )
+        self.assertIn(blank, said)
 
     def test_the_restart_hint_follows_the_report_rather_than_the_files_on_disk(self):
         self.machine.kit_claims_no_writes = True

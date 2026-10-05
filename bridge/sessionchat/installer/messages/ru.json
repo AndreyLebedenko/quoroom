@@ -33,6 +33,8 @@
   "participant.help_opencode": "набор только для OpenCode",
   "participant.kept_not_session": "оставлено, это не файл сессии: {path}",
   "participant.kit_conflict": "конфликт набора Quoroom: {detail}",
+  "participant.kit_conflict_files": "установка отменена, ничего не записано. Эти файлы уже существуют, отличаются от набора Quoroom и установлены не им: {files}",
+  "participant.kit_conflict_force": "Чтобы перезаписать их, повторите с --force: agentschat install --force",
   "participant.kit_edited_kept": "Набор для {cli}: файлы, изменённые вручную, оставлены как есть: {files}. Следующий agentschat install перезапишет их - так он и работает.",
   "participant.kit_failed": "agentschat не отработал: {detail}",
   "participant.kit_files_orphaned": "Файлы набора вызывают agentschat, которого больше нет: удалите их или поставьте участника снова.",

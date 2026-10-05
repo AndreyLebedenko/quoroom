@@ -230,3 +230,129 @@ is one JSON line and nothing else, and that a run over a foreign file exits
    reverse) reports a plain failure with argparse's own complaint in the detail.
    That is loud, which is the intent; pinning the client's minimum version
    belongs to task 20.
+
+## Review round 1
+
+Independent review returned five changes. All five are in, nothing else moved.
+
+### 1. The document is ASCII (`kit.Report.as_json`)
+
+`ensure_ascii=False` meant `print` of the document could die with
+`UnicodeEncodeError` on a console whose code page cannot encode the path - after
+the files and `kit.json` were already written, so the installer would report
+`kit_failed` about a kit that is in fact installed. That is precisely the case
+this flag exists for: an English locale and a Cyrillic Windows user name.
+
+`ensure_ascii=True` now. `json.loads` returns the same text, so nothing on the
+read side moved. Verified live, not only in a test: a subprocess with
+`PYTHONIOENCODING=cp1252` installing into `<tmp>/Андрей` printed a pure-ASCII
+document and exited `0`, and `uninstall --json` did the same.
+
+Two tests, `test_a_cyrillic_path_reaches_the_document_of_an_install_as_ascii`
+and `..._of_a_removal_as_ascii`. Both are red on the pre-fix code: with
+`ensure_ascii=False` `out.isascii()` is `False` and the message shows the raw
+Cyrillic path. Checked by reverting that one line, running
+`tests.test_kit_installer.ReportTests` (2 failures, exactly those two), and
+restoring it.
+
+### 2. The conflict names the reason and the way out again (`kit_failure`)
+
+The first round replaced the whole `KitConflict` sentence with a list of paths,
+so a human lost "nothing was written", "they differ from the Quoroom kit" and
+"repeat with `--force`". Now the paths come from the document and everything
+else is rendered by the installer's catalogue.
+
+New keys, paired, identical placeholders, sorted, `en.json` free of Cyrillic:
+
+| Key | Placeholders |
+|-----|--------------|
+| `participant.kit_conflict_files` | `{files}` |
+| `participant.kit_conflict_force` | none |
+
+The Russian is word for word from the old sentence, with `{files}` where the
+paths stood:
+
+```
+ru: "установка отменена, ничего не записано. Эти файлы уже существуют,
+     отличаются от набора Quoroom и установлены не им: {files}"
+ru: "Чтобы перезаписать их, повторите с --force: agentschat install --force"
+en: "the install is cancelled and nothing was written. These files already
+     exist, differ from the Quoroom kit and were not installed by it: {files}"
+en: "To overwrite them, run the same command again with --force:
+     agentschat install --force"
+```
+
+`participant.kit_conflict` keeps its text and takes the two rendered pieces as
+its `detail`. `participant.py` still holds no Cyrillic, and nothing of the
+client's text is parsed: the paths are read from `steps`.
+
+### 3. A document that is not `ok` fails the step (`KitInstallStep.apply`)
+
+Only `.wrote` was read, so `exit 0` with `{"code": "conflict"}` counted as a
+successful install that wrote nothing. The step now asks `kit_failure` for any
+document that is not `ok`. Covered by
+`test_a_conflict_the_client_exits_zero_with_is_still_a_conflict`, and the same
+document with `exit 1` is the older `test_a_conflict_is_a_conflict_whatever_code_
+the_client_exits_with`.
+
+### 4. The proof that the installer does not read prose
+
+The first round proved it by absence: the fake said nothing on the happy path,
+so there was nothing to misread. Now:
+
+- the fake writes `NOISE` ("погода в Казани дождливая, ничего не значит") to
+  stderr on every happy `install` and `uninstall`, and the whole existing suite
+  runs against that noise - every install, removal and report expectation is
+  unchanged by it;
+- `test_the_clients_own_words_are_not_echoed_into_the_installers_report` and
+  `..._reach_a_removal_report_either` now assert the client's own words reach
+  neither stream of the installer's report;
+- `test_unrelated_words_of_the_client_change_nothing_in_a_finished_install` pins
+  that the run still ends with the restart instruction;
+- `test_unrelated_words_around_the_report_make_it_no_report_at_all` covers prose
+  on stdout around the document.
+
+**Chosen behaviour, pinned:** `Report.read` does not salvage a document out of
+prose. `json.loads` fails on anything around it, `read` returns `None`, and the
+step fails with the client's own output as the detail. Chosen because the
+alternative - searching for the first `{` - would make the installer depend on
+where the client puts its document, which is the same class of bug this card
+removes. One client, one document, one line.
+
+The scan test is now two tests: the module holds no Cyrillic at all, and an AST
+walk of `participant.py` finds no reference to `Action`, `WRITES`, `KitConflict`
+or any `.value`. AST rather than substring, so a word appearing in a comment or
+a string does not pass for a reference.
+
+### 5. `Report.read` checks what it was asked for
+
+`read` now takes the command it expects and returns `None` unless the document
+agrees: the `command` field must be that command, `ok` must be exactly the
+boolean the code implies (not `1`, not `"true"`), and a code other than `none`
+must blame at least one step. `kit_report` / `kit_failure` pass
+`kit.COMMAND_INSTALL` or `kit.COMMAND_UNINSTALL` accordingly, which is also what
+stops a stale `uninstall` document from being read as an install.
+
+The last rule is the answer to "the detail must not be empty": a refusal with no
+steps is not a document, so `read` rejects it and the plain failure carries what
+the client actually printed.
+`test_a_refusal_that_blames_no_file_does_not_leave_the_reason_empty` pins it at
+the installer's level, `ReportReadingTests` at the format's.
+
+### Check results after the review
+
+| Check | Result |
+|-------|--------|
+| `.venv/Scripts/python.exe -m unittest discover -s tests -t .` | 1122 tests, OK, 2 skipped |
+| `node --test tests/plugin/agentschat.test.mjs` | 4 tests, 4 pass |
+| `.venv/Scripts/ruff.exe check` | All checks passed |
+| `.venv/Scripts/ruff.exe format --check` | 47 files already formatted |
+
+### Edits to existing tests in this round
+
+One call site changed: `participant.kit_failure` gained the `command`
+argument, so the three calls in `KitFailureTests`
+(`test_installer_participant_languages.py`) pass `kit.COMMAND_INSTALL`. No
+expectation changed. The fake `Machine` grew the `NOISE` output and the
+`wrapped` answer; `KitReportTests` and `ReportTextTests` in
+`test_kit_installer.py` grew new tests only.
