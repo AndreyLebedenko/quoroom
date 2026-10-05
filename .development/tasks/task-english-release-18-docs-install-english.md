@@ -1,8 +1,12 @@
-# Task install-doc-english: docs/INSTALL.md in English
+# Task english-release-18: docs/INSTALL.md in English
 
 **Status:** Planned.
-**Depends on:** task installer-bilingual (the English installer output that the
-document describes).
+**Story:** story-english-release.md (shared rules apply).
+**Depends on:** task english-release-11 (the English output of the whole
+participant install, client lines included).
+**Estimate:** 3 hours. At 616 lines the Russian document is near the limit; if
+the translation is not done in three hours, split at the middle section
+boundary and say so in the report.
 
 ## Summary
 
@@ -14,8 +18,8 @@ step.
 
 `README.md` is English and the main one, and it links to `docs/INSTALL.md` for
 everything past the first command. A reader who follows that link lands in
-Russian. Task installer-bilingual makes the installer itself English by
-default; the document that describes it should follow.
+Russian. The installer and, after tasks 01-17, the whole runtime path are English by
+default; the document that describes them should follow.
 
 ## Context you need
 
@@ -52,9 +56,12 @@ default; the document that describes it should follow.
   same, and nothing is strengthened.
 - `README.md` links to the English document; `README.ru.md` keeps linking to
   the Russian one; each document names its counterpart.
-- The document states which parts of the installer's output are still Russian
-  at the time of writing (the client block, if task client-bilingual has not
-  landed).
+- The document says that the room language is chosen once in
+  `bridge/config.yaml` (`language: en|ru`), that the kit is installed in that
+  language, and that changing it later means editing the key and re-running
+  `agentschat install` (see tasks 02 and 13).
+- The result line of `agentschat login` / `say` / `ask` (task 08) is not
+  documented here; it belongs to the integration guide (task 19).
 
 ## Acceptance criteria
 
