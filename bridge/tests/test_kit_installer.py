@@ -22,6 +22,15 @@ BRIDGE = Path(__file__).resolve().parents[1]
 RUSSIAN = "ru"
 
 
+def copy_of_the_kit_without_english(test: unittest.TestCase) -> Path:
+    scratch = tempfile.TemporaryDirectory()
+    test.addCleanup(scratch.cleanup)
+    source = Path(scratch.name) / "kit"
+    shutil.copytree(str(kit.KIT), source)
+    shutil.rmtree(source / "en")
+    return source
+
+
 def tree(root: Path) -> dict[str, bytes | None]:
     return {
         path.relative_to(root).as_posix(): path.read_bytes() if path.is_file() else None
@@ -592,7 +601,7 @@ class ReportTests(AgentschatCase):
         self.assertIn(str(roots["claude"]), json.loads(out)["steps"][0]["target"])
 
     def test_a_repeat_install_reports_every_file_as_unchanged(self):
-        self.run_agentschat("install", *self.dir_flags())
+        self.run_agentschat("install", "--lang", RUSSIAN, *self.dir_flags())
         document, _, code = self.document("install", *self.dir_flags())
         self.assertEqual(code, 0)
         self.assertEqual({step["action"] for step in document["steps"]}, {"unchanged"})
@@ -705,10 +714,7 @@ class PartialEnglishVariantTests(KitSandbox):
 
     def setUp(self):
         super().setUp()
-        scratch = tempfile.TemporaryDirectory()
-        self.addCleanup(scratch.cleanup)
-        self.source = Path(scratch.name) / "kit"
-        shutil.copytree(str(kit.KIT), self.source)
+        self.source = copy_of_the_kit_without_english(self)
         english = self.source / "en" / "claude" / "skills" / "chatlogin"
         english.mkdir(parents=True)
         (english / "SKILL.md").write_bytes(self.ENGLISH_SKILL)
@@ -823,19 +829,29 @@ class ReportReadTests(unittest.TestCase):
 
 
 class TemporaryVariantFallbackTests(KitSandbox):
+    def setUp(self):
+        super().setUp()
+        self.source = copy_of_the_kit_without_english(self)
+
     def test_a_language_without_a_variant_still_lays_the_kit_down(self):
-        report = kit.install(self.manifest_path, self.roots, lang="en")
+        report = kit.install(
+            self.manifest_path, self.roots, source=self.source, lang="en"
+        )
         self.assertEqual(report.code, kit.VARIANT_MISSING)
         self.assertTrue(report.ok)
         self.assertTrue(self.claude_skill().is_file())
         self.assertTrue(self.plugin().is_file())
 
     def test_the_fallback_lays_down_exactly_the_variant_that_exists(self):
-        kit.install(self.manifest_path, self.roots, lang="en")
+        kit.install(self.manifest_path, self.roots, source=self.source, lang="en")
         expected = {
             self.roots[cli].joinpath(*item.relative.parts): item.content
             for cli in kit.CLIS
-            for item in kit.kit_files(cli, kit.variant_of(kit.FALLBACK_VARIANT, cli)[0])
+            for item in kit.kit_files(
+                cli,
+                kit.variant_of(kit.FALLBACK_VARIANT, cli, self.source)[0],
+                self.source,
+            )
         }
         self.assertEqual({path: path.read_bytes() for path in expected}, expected)
 

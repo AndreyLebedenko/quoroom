@@ -1,7 +1,10 @@
 import re
+import shutil
+import tempfile
 import unittest
 from importlib.resources import files
 from importlib.resources.abc import Traversable
+from pathlib import Path
 
 from sessionchat import kit
 
@@ -26,6 +29,12 @@ BASE_DIGESTS = {
         "547be19a4e7cb374249207cc8cf048c307c83203cafcb0048c34d8ad9c26dd13"
     ),
 }
+INCOMPLETE_VARIANTS = frozenset({"en"})
+VARIANT_PATHS = {
+    "claude/skills/chatlogin/SKILL.md",
+    "opencode/command/chatlogin.md",
+    "opencode/skills/chatlogin/SKILL.md",
+}
 QUOROOM_REPOSITORY_PATHS = (
     "bridge\\agentschat",
     "bridge/agentschat",
@@ -41,10 +50,10 @@ def kit_root() -> Traversable:
     return files("sessionchat") / "kit"
 
 
-def variants() -> list[str]:
+def variants(root: Traversable | None = None) -> list[str]:
     return sorted(
         child.name
-        for child in kit_root().iterdir()
+        for child in (root or kit_root()).iterdir()
         if child.is_dir() and child.name != kit.COMMON
     )
 
@@ -98,21 +107,22 @@ class KitContentsTests(unittest.TestCase):
             ["common/opencode/plugins/agentschat.js"],
         )
 
-    def test_every_variant_directory_holds_the_same_relative_paths_for_both_clis(self):
-        for variant in sorted(variants()):
+    def held_by(self, variant: str) -> set[str]:
+        return {
+            relative.split("/", 1)[1]
+            for relative in EXPECTED_KIT_FILES
+            if relative.startswith(f"{variant}/")
+        }
+
+    def test_every_complete_variant_holds_the_same_relative_paths_for_both_clis(self):
+        for variant in sorted(set(variants()) - INCOMPLETE_VARIANTS):
             with self.subTest(variant=variant):
-                self.assertEqual(
-                    {
-                        relative.split("/", 1)[1]
-                        for relative in EXPECTED_KIT_FILES
-                        if relative.startswith(f"{variant}/")
-                    },
-                    {
-                        "claude/skills/chatlogin/SKILL.md",
-                        "opencode/command/chatlogin.md",
-                        "opencode/skills/chatlogin/SKILL.md",
-                    },
-                )
+                self.assertEqual(self.held_by(variant), VARIANT_PATHS)
+
+    def test_an_incomplete_variant_holds_no_path_a_complete_variant_does_not(self):
+        for variant in sorted(INCOMPLETE_VARIANTS):
+            with self.subTest(variant=variant):
+                self.assertLessEqual(self.held_by(variant), VARIANT_PATHS)
 
 
 class KitNamesNoQuoroomRepositoryPathTests(unittest.TestCase):
@@ -154,12 +164,31 @@ class SkillAgreementTests(unittest.TestCase):
             (lang, cli): self.skill(lang, cli)
             for lang in variants()
             for cli in kit.CLIS
+            if self.has_skill(lang, cli)
         }
+
+    def has_skill(self, lang: str, cli: str) -> bool:
+        resource = kit_root().joinpath(lang, cli, "skills", "chatlogin", "SKILL.md")
+        return resource.is_file()
+
+    def test_a_skill_is_compared_wherever_the_kit_holds_one_and_nowhere_else(self):
+        self.assertEqual(
+            set(self.skills()),
+            {
+                tuple(relative.split("/")[:2])
+                for relative in EXPECTED_KIT_FILES
+                if relative.endswith("/skills/chatlogin/SKILL.md")
+            },
+        )
 
     def test_the_languages_of_one_cli_name_the_same_commands_and_flags(self):
         skills = self.skills()
         for cli in kit.CLIS:
-            said = [self.mentions(skills[(lang, cli)]) for lang in variants()]
+            said = [
+                self.mentions(skills[(lang, cli)])
+                for lang in variants()
+                if (lang, cli) in skills
+            ]
             with self.subTest(cli=cli):
                 self.assertEqual(said[1:], said[:-1])
 
@@ -172,11 +201,10 @@ class SkillAgreementTests(unittest.TestCase):
     def test_the_listener_is_a_claude_command_and_lives_in_the_plugin_for_opencode(
         self,
     ):
-        skills = self.skills()
-        for lang in variants():
-            with self.subTest(lang=lang):
-                self.assertIn("wait", self.mentions(skills[(lang, "claude")])[0])
-                self.assertNotIn("wait", self.mentions(skills[(lang, "opencode")])[0])
+        for (lang, cli), text in sorted(self.skills().items()):
+            with self.subTest(lang=lang, cli=cli):
+                commands, _ = self.mentions(text)
+                self.assertEqual("wait" in commands, cli == "claude")
 
     def test_prose_that_names_the_tool_is_not_taken_for_a_command(self):
         text = "The agentschat tool prints the reply, see --help."
@@ -210,20 +238,28 @@ class SkillAgreementTests(unittest.TestCase):
 
 
 class TemporaryRussianOnlyVariantTests(unittest.TestCase):
-    def test_only_the_russian_variant_ships(self):
-        self.assertEqual(variants(), [kit.FALLBACK_VARIANT])
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.source = Path(scratch.name) / "kit"
+        shutil.copytree(str(kit.KIT), self.source)
+        shutil.rmtree(self.source / "en")
+
+    def test_a_kit_without_english_ships_only_the_russian_variant(self):
+        self.assertEqual(variants(self.source), [kit.FALLBACK_VARIANT])
 
     def test_the_language_that_has_a_variant_is_its_own(self):
         for cli in kit.CLIS:
             with self.subTest(cli=cli):
                 self.assertEqual(
-                    kit.variant_of(kit.FALLBACK_VARIANT, cli)[1], kit.CODE_NONE
+                    kit.variant_of(kit.FALLBACK_VARIANT, cli, self.source)[1],
+                    kit.CODE_NONE,
                 )
 
     def test_a_language_without_a_variant_falls_back_and_says_so(self):
         for cli in kit.CLIS:
             with self.subTest(cli=cli):
-                root, code = kit.variant_of("en", cli)
+                root, code = kit.variant_of("en", cli, self.source)
                 self.assertEqual(code, kit.VARIANT_MISSING)
                 self.assertEqual(root.name, kit.FALLBACK_VARIANT)
 

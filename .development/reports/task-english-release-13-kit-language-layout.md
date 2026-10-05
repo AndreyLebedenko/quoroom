@@ -296,3 +296,52 @@ Branch `fix/task-13-review-round-1`. Not committed.
 exists; it does not until tasks 14/15. Same inaccuracy as the one fixed in
 `SESSION_BRIDGE.md`; left alone because the brief limited the docs edit to that
 file.
+
+## Follow-up after task 14
+
+Task 14 added `kit/en/claude/skills/chatlogin/SKILL.md`, so `kit/en/` now holds
+the Claude Code skill only. 21 tests written for "no `kit/en` at all" went red.
+Only tests changed; `kit.py` and `test_skill_english.py` are untouched.
+
+### Tests reworked
+
+- `test_kit_installer.py`: new helper `copy_of_the_kit_without_english` copies
+  the kit into a temporary directory and deletes `en` there.
+  - `PartialEnglishVariantTests.setUp` builds `en/claude` on that copy, so the
+    class models "English has the Claude skill only" whatever the real tree
+    holds, before and after task 15.
+  - `TemporaryVariantFallbackTests` (the two `kit.install` tests, including
+    `test_the_fallback_lays_down_exactly_the_variant_that_exists`) now install
+    from that copy and compute the expectation from it. The two CLI-level tests
+    of the class still read the real kit: opencode has no `en` variant, so the
+    substitution code and notice remain true.
+  - `ReportTests.test_a_repeat_install_reports_every_file_as_unchanged`: the
+    first install had no `--lang`, so it took the room default (`en`, and the
+    Claude skill is now English), while the second passed `--lang ru`. The
+    first install now passes `--lang ru`. A repeat with the same language gives
+    `unchanged` (checked), so this hides no defect in `kit.py`.
+- `test_kit.py`:
+  - `TemporaryRussianOnlyVariantTests` works on a temporary kit copy without
+    `en` (`variants` takes an optional root); the first test is renamed to say
+    "a kit without English".
+  - `SkillAgreementTests.skills()` returns only pairs (language, CLI) whose
+    skill file exists; the language comparison and the listener test use only
+    those. New test `test_a_skill_is_compared_wherever_the_kit_holds_one_and_nowhere_else`
+    ties the compared pairs to `EXPECTED_KIT_FILES`, so `en/opencode` joins the
+    comparison once task 15 adds it to that set, and a skill dropped silently
+    would be caught. The listener test is now per pair: `wait` is mentioned
+    exactly when the CLI is `claude`.
+  - `KitContentsTests`: the "same relative paths" test is split. Complete
+    variants (all but `INCOMPLETE_VARIANTS = {"en"}`) hold exactly
+    `VARIANT_PATHS`; an incomplete variant holds a subset of it. Task 15 empties
+    `INCOMPLETE_VARIANTS`, which makes `en` strict, and adds its own
+    completeness checks.
+
+### Checks
+
+| Check | Result |
+|-------|--------|
+| `python.exe -m unittest discover -s tests -t .` | 1654 tests, OK, 2 skipped |
+| `node --test tests/plugin/agentschat.test.mjs` | 28 tests, 28 pass |
+| `ruff.exe check` | All checks passed |
+| `ruff.exe format --check` | 68 files already formatted |
