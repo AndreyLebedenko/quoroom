@@ -34,7 +34,7 @@ configured twice.
 
 - `broker.py` (config reading, `/status`), `config.example.yaml`,
   `installer/server.py` (ConfigStep writes `language`), tests, and the one line
-  in `docs/INSTALL.md` that mentions the key (the English guide is task 17).
+  in `docs/INSTALL.md` that mentions the key (the English guide is task 18).
 - No broker catalogue is used yet; task 03 starts that. This task only carries
   the value.
 
