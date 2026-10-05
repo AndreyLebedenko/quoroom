@@ -45,10 +45,8 @@ class KitSandbox(unittest.TestCase):
         roots = {cli: self.roots[cli] for cli in clis}
         return kit.install(self.manifest_path, roots, force=force, lang=lang)
 
-    def uninstall(self, clis=kit.CLIS, force=False, lang=RUSSIAN):
-        return kit.uninstall(
-            self.manifest_path, self.roots, clis, force=force, lang=lang
-        )
+    def uninstall(self, clis=kit.CLIS, force=False):
+        return kit.uninstall(self.manifest_path, self.roots, clis, force=force)
 
     def expected(self, cli: str) -> dict[Path, bytes]:
         return {
@@ -370,7 +368,7 @@ class UninstallTests(KitSandbox):
             "claude": self.home / "elsewhere",
             "opencode": self.roots["opencode"],
         }
-        kit.uninstall(self.manifest_path, elsewhere, ("claude",), lang=RUSSIAN)
+        kit.uninstall(self.manifest_path, elsewhere, ("claude",))
         self.assertFalse(self.claude_skill().exists())
         self.assertTrue(self.claude_skill().parent.is_dir())
 
@@ -754,7 +752,7 @@ class StepLineTests(unittest.TestCase):
                     kit.uninstall_summary(steps, lang),
                 )
 
-    def test_the_confusal_names_the_file_the_reason_and_the_way_out_in_both_languages(
+    def test_the_refusal_names_the_file_the_reason_and_the_way_out_in_both_languages(
         self,
     ):
         steps = [kit.Step(Action.CONFLICT, Path("C:/x/SKILL.md"), "claude")]
@@ -768,7 +766,7 @@ class StepLineTests(unittest.TestCase):
         self.assertIn("nothing was written", said["en"])
         self.assertIn("differ from the Quoroom kit", said["en"])
 
-    def test_the_english_confusal_and_help_carry_no_cyrillic(self):
+    def test_the_english_refusal_and_help_carry_no_cyrillic(self):
         said = [
             kit.CATALOGUE.text("en", key, **{"default": "x", "files": "f"})
             for key in (
@@ -825,18 +823,13 @@ class HelpTests(AgentschatCase):
         self.assertIn("put the Quoroom kit into the Claude Code", shown)
         self.assertIn("remove the installed Quoroom kit", shown)
 
-    def test_the_russian_help_says_what_the_client_always_said(self):
+    def test_the_remembered_language_decides_the_help(self):
         (client.STORE).mkdir(parents=True, exist_ok=True)
         (client.STORE / "language").write_text("ru\n", encoding="utf-8")
         self.assertIn("перезаписать чужие файлы", self.helped("install"))
         self.assertIn("удалить и изменённые вручную файлы", self.helped("uninstall"))
         self.assertIn("отчёт кодом, без предложений", self.helped("install"))
         self.assertIn("разложить набор Quoroom", self.shown("--help")[0])
-
-    def test_the_remembered_language_decides_the_help(self):
-        (client.STORE).mkdir(parents=True, exist_ok=True)
-        (client.STORE / "language").write_text("ru\n", encoding="utf-8")
-        self.assertIn("перезаписать чужие файлы", self.helped("install"))
 
     def test_an_unknown_language_is_refused_before_anything_is_installed(self):
         shown, code = self.shown("install", "--lang", "fr")
@@ -876,20 +869,20 @@ class RealClientTests(unittest.TestCase):
             if path.is_file()
         )
 
-    def test_an_english_install_writes_the_kit_and_prints_no_russian(self):
+    def test_an_english_install_writes_the_kit_and_prints_only_ascii(self):
         done = self.client("install", "--lang", "en")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(self.kit_files())
-        self.assertIsNone(CYRILLIC.search(done.stdout), done.stdout)
-        self.assertIsNone(CYRILLIC.search(done.stderr), done.stderr)
+        self.assertTrue(done.stdout.isascii(), done.stdout)
+        self.assertTrue(done.stderr.isascii(), done.stderr)
 
-    def test_an_english_removal_takes_the_kit_back_and_prints_no_russian(self):
+    def test_an_english_removal_takes_the_kit_back_and_prints_only_ascii(self):
         self.client("install", "--lang", "en")
         done = self.client("uninstall", "--lang", "en")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.kit_files(), [])
-        self.assertIsNone(CYRILLIC.search(done.stdout), done.stdout)
-        self.assertIsNone(CYRILLIC.search(done.stderr), done.stderr)
+        self.assertTrue(done.stdout.isascii(), done.stdout)
+        self.assertTrue(done.stderr.isascii(), done.stderr)
 
     def test_a_russian_install_says_what_it_always_said(self):
         done = self.client("install", "--lang", "ru")
@@ -905,13 +898,13 @@ class RealClientTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(f"installed  {path}", done.stdout)
 
-    def test_a_refused_english_install_says_why_in_english_and_exits_non_zero(self):
+    def test_a_refused_english_install_says_why_in_ascii_and_exits_non_zero(self):
         foreign = self.home / ".claude" / "skills" / "chatlogin"
         foreign.mkdir(parents=True)
         (foreign / "SKILL.md").write_text("// not ours\n", encoding="utf-8")
         done = self.client("install", "--lang", "en")
         self.assertEqual(done.returncode, client.FAILURE)
-        self.assertIsNone(CYRILLIC.search(done.stderr), done.stderr)
+        self.assertTrue(done.stderr.isascii(), done.stderr)
         self.assertIn("nothing was written", done.stderr)
         self.assertIn("--force", done.stderr)
 

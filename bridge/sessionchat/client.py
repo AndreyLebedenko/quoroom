@@ -366,9 +366,7 @@ def do_install(args: argparse.Namespace) -> None:
 def do_uninstall(args: argparse.Namespace) -> None:
     lang = ROOM_LANGUAGE.current(STORE)
     clis = kit.chosen_clis(args.claude, args.opencode)
-    steps = kit.uninstall(
-        STORE / "kit.json", kit.DEFAULT_ROOTS, clis, args.force, lang=lang
-    )
+    steps = kit.uninstall(STORE / "kit.json", kit.DEFAULT_ROOTS, clis, args.force)
     reported(
         args, kit.COMMAND_UNINSTALL, steps, lang, kit.uninstall_summary(steps, lang)
     )

@@ -49,12 +49,17 @@ summaries and the restart hint.
    language per run and nothing mixed. The room keeps its own language for the
    agent sessions, which learn it from the broker on their next command.
 
-   And the honest part: **today the forwarded flag changes nothing a human
-   sees.** Since task 10 the installer asks for `--json` and prints only its own
-   sentences, and the JSON document is the same in both languages (proved by
-   `test_the_document_does_not_depend_on_the_language`). The flag matters the
-   moment anything renders the client's sentences - and it stops the client from
-   answering in a *remembered* language that has nothing to do with the run.
+   **Where the forwarded flag is visible.** On the happy path, nowhere: since
+   task 10 the installer asks for `--json`, prints only its own sentences, and
+   the document is the same in both languages (proved by
+   `test_the_document_does_not_depend_on_the_language`). It is visible on a
+   failure that is not a conflict. `participant.kit_failure` puts
+   `result.stderr or result.stdout` - the client's own words - into the
+   installer's failure report as the `detail` of `participant.kit_failed`. The
+   installer does not parse those words (the decision was made from the document
+   or the exit code); it quotes them, and a human reads them. So a Russian client
+   failure quoted in an English run is exactly what the forwarded `--lang` now
+   prevents.
 
 3. **The per-file lines do not come back.** As the orchestrator decided. The
    installer's report shows no per-file lines and no client text, and the test
@@ -248,3 +253,53 @@ subprocess tests redirect `HOME` and `USERPROFILE`, and `AgentschatCase` patches
 7. **`docs/INSTALL.md` section 5.10** describes `agentschat install` as printing a
    line per file. That is still true without `--json`; the section does not
    mention `--lang`. Left for task 18 together with the rest of the guide.
+
+## Review round 1
+
+No blocking findings; the reviewer checked the Russian output against the old
+one over 23 scenarios and it matched byte for byte. Four small changes, all of
+them in.
+
+1. **`kit.uninstall` no longer takes `lang`.** It was accepted and never used -
+   the language is needed by `uninstall_summary` and `Step.line`, which the
+   caller renders, not by the removal itself. Removed from `kit.uninstall`,
+   from `client.do_uninstall`, and from the two test helpers that passed it
+   (`KitSandbox.uninstall`, `test_a_listed_file_outside_its_root_is_removed_but_
+   no_directory_is`). `kit.install` keeps `lang`, because `apply_install` raises
+   `KitConflict`, which renders its sentence.
+2. **`client_messages/{en,ru}.json` end with a newline again.** The `write` that
+   created them dropped it, unlike every other catalogue in the repository.
+3. **`tests/test_kit_installer.py`.**
+   - `test_the_remembered_language_decides_the_help` repeated the first check of
+     its neighbour; the neighbour was renamed to
+     `test_the_russian_help_says_what_the_client_always_said` and kept the four
+     Russian assertions, the duplicate is gone.
+   - Two test names said "confusal"; both now say "refusal".
+   - The real-client checks asserted only `CYRILLIC.search`, while the card asks
+     for ASCII punctuation. The three English runs of `RealClientTests` now
+     assert `stdout.isascii()` and `stderr.isascii()`, which is the stronger
+     claim and subsumes the old one.
+4. **The report was wrong about the forwarded flag.** It said the flag changes
+   nothing a human sees. It does: on a client failure that is not a conflict,
+   `participant.kit_failure` quotes `result.stderr or result.stdout` into the
+   installer's report, and those words are now in the run's language. The
+   decision point above is corrected: the flag is invisible on the happy path and
+   visible in the quoted failure detail. A human reads that text; the installer
+   never parses it - the outcome came from the document or the exit code before
+   the words were looked at.
+
+### Check results after the review
+
+| Check | Result |
+|-------|--------|
+| `.venv/Scripts/python.exe -m unittest discover -s tests -t .` | 1453 tests, OK, 2 skipped |
+| `node --test tests/plugin/agentschat.test.mjs` | 4 tests, 4 pass |
+| `.venv/Scripts/ruff.exe check` | All checks passed |
+| `.venv/Scripts/ruff.exe format --check` | 60 files already formatted |
+
+### Edits to existing tests in this round
+
+Three call sites lost the `lang` argument that item 1 removed
+(`KitSandbox.uninstall` and one direct `kit.uninstall` call); one duplicate test
+was deleted; two test names were corrected; three English assertions moved from
+"Cyrillic-free" to "ASCII". No expectation text changed.

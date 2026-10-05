@@ -306,8 +306,6 @@ def uninstall(
     roots: dict[str, Path],
     clis: tuple[str, ...] = CLIS,
     force: bool = False,
-    *,
-    lang: str,
 ) -> list[Step]:
     manifest = load_manifest(manifest_path)
     steps = plan_uninstall(manifest, clis, force)
