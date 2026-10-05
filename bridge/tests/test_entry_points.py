@@ -2,6 +2,7 @@
 
 import base64
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -22,6 +23,28 @@ PWSH_7 = shutil.which("pwsh")
 CORE_CODES = (DONE, FAILED, USAGE, HUMAN, CANCELLED)
 MISSING_PYTHON = 9
 PROBE_MARKER = "quoroom-python="
+CYRILLIC = re.compile("[Ѐ-ӿ]")
+STAYS_ENGLISH = (
+    ["--lang", "xx"],
+    ["--lang=xx"],
+    ["--lang"],
+    ["--lang", "RU"],
+    ["--lang=RU"],
+    ["--LANG", "ru"],
+    ["--lang="],
+)
+ASKS_FOR_RUSSIAN = (
+    ["--lang", "ru"],
+    ["--lang=ru"],
+    ["--role", "both", "--lang", "ru"],
+    ["--lang=ru", "--role", "both"],
+)
+FORWARDED = (
+    ["--lang", "ru", "--role", "both"],
+    ["--role", "server", "--lang=ru"],
+    ["--lang", "xx"],
+    ["--lang"],
+)
 
 STUB = """\
 import os
@@ -47,6 +70,12 @@ exit $LASTEXITCODE
 RUSSIAN_CONSOLE_CALLER = """\
 [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(866)
 & $args[0] --role both
+exit $LASTEXITCODE
+"""
+
+UTF8_CALLER = """\
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+& $args[0] {arguments}
 exit $LASTEXITCODE
 """
 
@@ -196,6 +225,21 @@ class EntryPointCase(unittest.TestCase):
             if row.startswith(f"{key}:"):
                 return row[len(key) + 1 :]
         self.fail(f"в выводе нет {key}:\n{done.stdout}\n{done.stderr}")
+
+    def assertEnglishRefusal(
+        self, done: subprocess.CompletedProcess, sentence: str, root: Path
+    ) -> None:
+        said = done.stdout + done.stderr
+        self.assertEqual(done.returncode, MISSING_PYTHON, said)
+        self.assertIn(f"ERROR: {sentence}", said)
+        self.assertIsNone(CYRILLIC.search(said.replace(str(root), "")), said)
+
+    def assertRussianRefusal(
+        self, done: subprocess.CompletedProcess, sentence: str
+    ) -> None:
+        said = done.stdout + done.stderr
+        self.assertEqual(done.returncode, MISSING_PYTHON, said)
+        self.assertIn(f"ОШИБКА: {sentence}", said)
 
 
 class WindowsEntryPointTests(EntryPointCase):
@@ -431,6 +475,89 @@ class WindowsEntryPointTests(EntryPointCase):
         done = self.powershell(root, [], self.without_python())
         self.assertIn("winget install Python.Python.3.11", done.stdout + done.stderr)
 
+    def russian_run(
+        self, root: Path, argv: list[str], env: dict[str, str]
+    ) -> subprocess.CompletedProcess:
+        caller = UTF8_CALLER.format(arguments=" ".join(argv))
+        return self.through_caller(caller, root, env)
+
+    def nowhere_environment(self, root: Path) -> dict[str, str]:
+        launcher = self.tmp / "nowhere"
+        launcher.mkdir()
+        nowhere = str(root / "absent" / "nowhere-python.exe").encode("utf-8")
+        answer = PROBE_MARKER + base64.b64encode(nowhere).decode("ascii")
+        (launcher / "python.bat").write_text(
+            f"@echo {answer}\r\n@exit /b 0\r\n", encoding="utf-8"
+        )
+        return self.launcher_env(launcher)
+
+    def test_a_missing_python_is_explained_in_english_by_default(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        done = self.powershell(root, [], self.without_python())
+        self.assertEnglishRefusal(done, "no suitable Python found", root)
+
+    def test_a_missing_python_is_explained_in_russian_on_request(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        for argv in ASKS_FOR_RUSSIAN:
+            with self.subTest(argv=argv):
+                done = self.russian_run(root, argv, self.without_python())
+                self.assertRussianRefusal(done, "подходящий Python не найден")
+                self.assertIn(
+                    "Установите его и повторите: winget install Python.Python.3.11",
+                    done.stdout + done.stderr,
+                )
+
+    def test_a_missing_shared_layer_is_explained_in_english_by_default(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        shutil.rmtree(root / "bridge" / "sessionchat")
+        done = self.powershell(root, [], self.stub_env())
+        self.assertEnglishRefusal(
+            done, "the shared installer layer was not found", root
+        )
+
+    def test_a_missing_shared_layer_is_explained_in_russian_on_request(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        shutil.rmtree(root / "bridge" / "sessionchat")
+        for argv in ASKS_FOR_RUSSIAN:
+            with self.subTest(argv=argv):
+                done = self.russian_run(root, argv, self.stub_env())
+                self.assertRussianRefusal(done, "общий слой установщика не найден")
+
+    def test_a_failed_start_is_explained_in_english_by_default(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        done = self.powershell(root, [], self.nowhere_environment(root))
+        self.assertEnglishRefusal(done, "could not start", root)
+
+    def test_a_failed_start_is_explained_in_russian_on_request(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        done = self.russian_run(root, ["--lang", "ru"], self.nowhere_environment(root))
+        self.assertRussianRefusal(done, "не удалось запустить")
+
+    def test_an_unrecognised_language_request_keeps_the_messages_english(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        for argv in STAYS_ENGLISH:
+            with self.subTest(argv=argv):
+                done = self.powershell(root, argv, self.without_python())
+                self.assertEnglishRefusal(done, "no suitable Python found", root)
+
+    def test_the_language_request_reaches_the_shared_layer_unchanged(self):
+        root = self.windows_repo()
+        self.copy("install.ps1", root)
+        for wanted in FORWARDED:
+            with self.subTest(wanted=wanted):
+                done = self.powershell(root, wanted, self.stub_env())
+                self.assertEqual(done.returncode, DONE, done.stderr)
+                self.assertEqual(
+                    self.arguments_of(done), [f"[{value}]" for value in wanted]
+                )
+
     def test_a_missing_shared_layer_is_reported_before_python(self):
         root = self.windows_repo()
         self.copy("install.ps1", root)
@@ -572,6 +699,61 @@ class PosixEntryPointTests(EntryPointCase):
         self.copy("install.sh", root)
         done = self.sh(root, [], self.posix_without_python())
         self.assertIn("sudo apt install python3", done.stdout + done.stderr)
+
+    def test_a_missing_python_is_explained_in_english_by_default(self):
+        root = self.posix_repo()
+        self.copy("install.sh", root)
+        done = self.sh(root, [], self.posix_without_python())
+        self.assertEnglishRefusal(done, "no suitable Python found", root)
+
+    def test_a_missing_python_is_explained_in_russian_on_request(self):
+        root = self.posix_repo()
+        self.copy("install.sh", root)
+        for argv in ASKS_FOR_RUSSIAN:
+            with self.subTest(argv=argv):
+                done = self.sh(root, argv, self.posix_without_python())
+                self.assertRussianRefusal(done, "подходящий Python не найден")
+                self.assertIn(
+                    "Установите его и повторите: sudo apt install python3",
+                    done.stdout + done.stderr,
+                )
+
+    def test_a_missing_shared_layer_is_explained_in_english_by_default(self):
+        root = self.posix_repo()
+        self.copy("install.sh", root)
+        shutil.rmtree(root / "bridge" / "sessionchat")
+        done = self.sh(root, [], self.sh_env())
+        self.assertEnglishRefusal(
+            done, "the shared installer layer was not found", root
+        )
+
+    def test_a_missing_shared_layer_is_explained_in_russian_on_request(self):
+        root = self.posix_repo()
+        self.copy("install.sh", root)
+        shutil.rmtree(root / "bridge" / "sessionchat")
+        for argv in ASKS_FOR_RUSSIAN:
+            with self.subTest(argv=argv):
+                done = self.sh(root, argv, self.sh_env())
+                self.assertRussianRefusal(done, "общий слой установщика не найден")
+
+    def test_an_unrecognised_language_request_keeps_the_messages_english(self):
+        root = self.posix_repo()
+        self.copy("install.sh", root)
+        for argv in STAYS_ENGLISH:
+            with self.subTest(argv=argv):
+                done = self.sh(root, argv, self.posix_without_python())
+                self.assertEnglishRefusal(done, "no suitable Python found", root)
+
+    def test_the_language_request_reaches_the_shared_layer_unchanged(self):
+        root = self.posix_repo()
+        self.copy("install.sh", root)
+        for wanted in FORWARDED:
+            with self.subTest(wanted=wanted):
+                done = self.sh_with_arguments(root, wanted, self.sh_env())
+                self.assertEqual(done.returncode, DONE, done.stderr)
+                self.assertEqual(
+                    self.arguments_of(done), [f"[{value}]" for value in wanted]
+                )
 
     def test_a_missing_shared_layer_is_reported_before_python(self):
         root = self.posix_repo()

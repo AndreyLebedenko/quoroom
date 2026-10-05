@@ -8,7 +8,6 @@ from tests.installer_fakes import FileMarker, InstallerTestCase, Marker, role
 from sessionchat.installer.main import DONE, FAILED, HUMAN, main
 from sessionchat.installer.ownership import Entry, Ownership, PurgeTarget
 from sessionchat.installer.steps import (
-    RESUME,
     HumanStep,
     NeedsHuman,
     Outcome,
@@ -16,6 +15,8 @@ from sessionchat.installer.steps import (
     State,
     execute,
 )
+
+RESUME = "Повторите ту же команду: она продолжит с места, где остановилась."
 
 
 @dataclass

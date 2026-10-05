@@ -27,6 +27,7 @@ from tests.installer_fakes import (
     make_run,
 )
 from sessionchat.installer.boundaries import Probe
+from sessionchat.installer.catalogue import step_label
 from sessionchat.installer.main import DONE, FAILED, HUMAN, main
 from sessionchat.installer.options import parse
 from sessionchat.installer.ownership import Ownership, PurgeTarget
@@ -1992,7 +1993,7 @@ class StopStandTests(RemovalCase):
         self.assertIn("network not found", self.stderr(given))
 
     def test_the_stand_is_stopped_before_the_venv_is_touched(self):
-        names = [step.name for step in server_role().remove]
+        names = [step_label("ru", step.name) for step in server_role().remove]
         self.assertEqual(names, ["Остановить брокер и стенд", "Убрать bridge/.venv"])
 
     def test_the_containers_gone_flag_is_set_when_there_were_none(self):
@@ -2158,7 +2159,7 @@ class BrokerStateTests(RemovalCase):
         self.assertNotIn("notes.txt", self.stdout(given) + self.stderr(given))
 
     def test_the_state_step_runs_before_the_toml_is_forgotten(self):
-        names = [step.name for step in server_role().purge]
+        names = [step_label("ru", step.name) for step in server_role().purge]
         self.assertLess(
             names.index("Удалить состояние брокера"),
             names.index("Убрать конфигурацию стенда"),
@@ -2192,7 +2193,9 @@ class VolumeTests(RemovalCase):
         self.assertIn(("volume", "docker_caddy-data"), self.recorded())
 
     def test_the_volume_step_is_the_last_one(self):
-        self.assertEqual(server_role().purge[-1].name, "Удалить тома стенда")
+        self.assertEqual(
+            step_label("ru", server_role().purge[-1].name), "Удалить тома стенда"
+        )
 
     def test_the_daemon_down_fails_naming_the_volumes_and_the_repeat(self):
         self.installed()
@@ -2455,7 +2458,7 @@ class ConsequenceTests(RemovalCase):
 
     def test_a_server_purge_with_volumes_says_the_room_is_destroyed(self):
         text = server_consequence(
-            self.targets(("server", "volume", "docker_caddy-data"))
+            self.targets(("server", "volume", "docker_caddy-data")), "ru"
         )
         self.assertIn("переписка будет удалена безвозвратно", text)
 
@@ -2464,14 +2467,16 @@ class ConsequenceTests(RemovalCase):
             self.targets(
                 ("server", "file", str(self.path("bridge/config.yaml"))),
                 ("server", "cert", str(self.path("docker/caddy/certs/a.pem"))),
-            )
+            ),
+            "ru",
         )
         self.assertNotIn("переписка будет удалена", text)
         self.assertIn("переписка в комнате на сервере останется на месте", text)
 
     def test_the_participant_alone_says_the_room_stays(self):
         text = participant_consequence(
-            self.targets(("participant", "session", str(self.home / ".agentschat/x")))
+            self.targets(("participant", "session", str(self.home / ".agentschat/x"))),
+            "ru",
         )
         self.assertIn("только новым входом", text)
         self.assertIn("Переписка в комнате на сервере останется на месте", text)
@@ -2481,7 +2486,8 @@ class ConsequenceTests(RemovalCase):
             self.targets(
                 ("participant", "session", str(self.home / ".agentschat/x")),
                 ("server", "volume", "docker_caddy-data"),
-            )
+            ),
+            "ru",
         )
         self.assertIn("только новым входом", text)
         self.assertNotIn("останется на месте", text)
@@ -2491,7 +2497,7 @@ class ConsequenceTests(RemovalCase):
             ("participant", "session", str(self.home / ".agentschat/x")),
             ("server", "volume", "docker_caddy-data"),
         )
-        text = consequence_of(built_in_roles(), targets)
+        text = consequence_of(built_in_roles(), targets, "ru")
         self.assertIn("переписка будет удалена безвозвратно", text)
         self.assertNotIn("останется на месте", text)
 
@@ -2500,7 +2506,7 @@ class ConsequenceTests(RemovalCase):
             ("participant", "session", str(self.home / ".agentschat/x")),
             ("server", "file", str(self.path("bridge/config.yaml"))),
         )
-        text = consequence_of(built_in_roles(), targets)
+        text = consequence_of(built_in_roles(), targets, "ru")
         self.assertIn("останется на месте", text)
         self.assertNotIn("переписка будет удалена", text)
 
@@ -2526,20 +2532,20 @@ class ConsequenceTests(RemovalCase):
 
     def test_both_roles_with_only_server_targets_say_nothing_of_sessions(self):
         targets = self.targets(("server", "volume", "docker_caddy-data"))
-        text = consequence_of(built_in_roles(), targets)
+        text = consequence_of(built_in_roles(), targets, "ru")
         self.assertNotIn("файлы сессий", text)
 
     def test_both_roles_with_only_participant_targets_say_nothing_of_the_server(self):
         targets = self.targets(
             ("participant", "session", str(self.home / ".agentschat/x"))
         )
-        text = consequence_of(built_in_roles(), targets)
+        text = consequence_of(built_in_roles(), targets, "ru")
         self.assertNotIn("сертификаты", text)
         self.assertEqual(text.count("останется на месте"), 1)
 
     def test_a_server_purge_of_the_venv_alone_names_only_the_venv(self):
         text = server_consequence(
-            self.targets(("server", "venv", str(self.path("bridge/.venv"))))
+            self.targets(("server", "venv", str(self.path("bridge/.venv")))), "ru"
         )
         self.assertIn("bridge/.venv", text)
         self.assertNotIn("сертификаты", text)

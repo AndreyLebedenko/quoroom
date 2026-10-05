@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .. import kit
 from .boundaries import Boundaries, WINDOWS
+from .catalogue import text
 from .errors import UsageError
 from .ownership import PurgeTarget, prune_record_home
 from .report import Left, left_lines
@@ -31,13 +32,7 @@ CLAUDE_DEST = "participant_claude"
 OPENCODE_DEST = "participant_opencode"
 PATHEXT = ".COM;.EXE;.BAT;.CMD"
 SERVER_ROLE = "server"
-SESSION_TEXT = (
-    "файлы сессий исчезнут вместе с их токенами: вернуться в комнату получится "
-    "только новым входом через agentschat login."
-)
-ROOM_SAFE = " Переписка в комнате на сервере останется на месте."
-CONFLICT = "установка отменена"
-BOTH = "оба"
+CONFLICT = str(kit.KitConflict([])).partition(",")[0]
 INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
 
 
@@ -80,18 +75,17 @@ class PythonStep:
 
     def apply(self, run: Run) -> None:
         raise NeedsHuman(
-            "Здесь Python "
-            + ".".join(str(part) for part in self.running)
-            + ", а пакет требует "
-            + f"{REQUIRED_PYTHON[0]}.{REQUIRED_PYTHON[1]}"
-            + " или новее (bridge/pyproject.toml, requires-python). "
-            "Поставьте подходящий Python и повторите запуск."
+            run.t(
+                "participant.python_too_old",
+                running=".".join(str(part) for part in self.running),
+                required=f"{REQUIRED_PYTHON[0]}.{REQUIRED_PYTHON[1]}",
+            )
         )
 
 
 @dataclass(frozen=True)
 class ToolStep:
-    name: str = "Найти uv или pipx"
+    name: str = "find_uv_or_pipx"
 
     def check(self, run: Run) -> State:
         return State.DONE if tool_of(run) is not None else State.TODO
@@ -102,14 +96,16 @@ class ToolStep:
 
 @dataclass(frozen=True)
 class PackageStep:
-    name: str = "Поставить пакет quoroom"
+    name: str = "install_package"
 
     def check(self, run: Run) -> State:
         tool = owning_tool(run)
         if tool is None:
             return State.TODO
         if owned_tool(run) != tool.name:
-            run.warn_once(f"present:{tool.name}", found_message(tool, owned_tool(run)))
+            run.warn_once(
+                f"present:{tool.name}", found_message(run, tool, owned_tool(run))
+            )
         return State.DONE
 
     def apply(self, run: Run) -> None:
@@ -118,13 +114,13 @@ class PackageStep:
             raise NeedsHuman(tool_instruction(run))
         result = run.boundaries.run([tool.name, *tool.install, str(package_dir(run))])
         if result.returncode != 0:
-            raise RuntimeError(tool_failure(tool, result))
+            raise RuntimeError(tool_failure(run, tool, result))
         run.record(ROLE, PACKAGE_KIND, tool.name)
 
 
 @dataclass
 class KitInstallStep:
-    name: str = "Обновить набор по CLI агентов"
+    name: str = "install_kit"
     handled: bool = False
     clis: tuple[str, ...] = ()
     written: bool = False
@@ -150,7 +146,7 @@ class KitInstallStep:
                 [str(agentchat(run)), "install", *cli_flags(clis)]
             )
             if result.returncode != 0:
-                raise RuntimeError(kit_failure(result))
+                raise RuntimeError(kit_failure(run, result))
             spoken = result.stdout or ""
             self.written = any(action.value in spoken for action in kit.WRITES)
             _spoken(run, result)
@@ -166,7 +162,7 @@ class Removal:
 
 @dataclass
 class KitRemoveStep:
-    name: str = "Убрать набор по CLI агентов"
+    name: str = "remove_kit"
     handled: bool = False
     removal: Removal = field(default_factory=Removal, kw_only=True)
 
@@ -179,16 +175,13 @@ class KitRemoveStep:
         path = agentchat(run)
         self.removal.asked = removal_clis(run)
         if not path.exists():
-            run.warn(
-                f"agentschat не установлен: файлы набора и {KIT_MANIFEST} "
-                "оставлены, уберите их вручную."
-            )
+            run.warn(run.t("participant.agentschat_missing", manifest=KIT_MANIFEST))
         else:
             result = run.boundaries.run(
                 [str(path), "uninstall", *cli_flags(self.removal.asked)]
             )
             if result.returncode != 0:
-                raise RuntimeError(kit_failure(result))
+                raise RuntimeError(kit_failure(run, result))
             self.removal.uninstalled = True
             _spoken(run, result)
         self.handled = True
@@ -196,7 +189,7 @@ class KitRemoveStep:
 
 @dataclass
 class PackageRemoveStep:
-    name: str = "Убрать пакет quoroom"
+    name: str = "remove_package"
     removal: Removal = field(default_factory=Removal, kw_only=True)
 
     def check(self, run: Run) -> State:
@@ -205,17 +198,12 @@ class PackageRemoveStep:
             if owning_tool(run) is not None:
                 run.warn_once(
                     "unrecorded-package",
-                    f"пакет {PACKAGE} не записан за установщиком: "
-                    "оставляю его в системе.",
+                    run.t("participant.package_unrecorded", package=PACKAGE),
                 )
             return State.DONE
         using = clis_using_package(manifest_clis(run), self.removal)
         if using:
-            run.warn_once(
-                "package-in-use",
-                f"пакет {PACKAGE} оставлен: им пользуется набор для "
-                + ", ".join(sorted(using)),
-            )
+            run.warn_once("package-in-use", package_in_use(run, using))
             return State.DONE
         return State.TODO
 
@@ -225,20 +213,17 @@ class PackageRemoveStep:
         if tool is not None and tool_reports_package(run, tool):
             result = run.boundaries.run([tool.name, *tool.uninstall, PACKAGE])
             if result.returncode != 0:
-                raise RuntimeError(tool_failure(tool, result))
+                raise RuntimeError(tool_failure(run, tool, result))
             self.removal.package_gone = True
         elif tool is not None:
-            run.warn(
-                f"запись говорила, что пакет ставил {tool.name}, а его в системе "
-                "нет: убираю запись, ничего не удаляя."
-            )
+            run.warn(run.t("participant.package_stale_record", tool=tool.name))
         run.forget(ROLE, PACKAGE_KIND, tool_name)
         prune_record_home(record_path(run.boundaries))
 
 
 @dataclass(frozen=True)
 class BrokerStep:
-    name: str = "Проверить брокера"
+    name: str = "check_broker"
 
     def check(self, run: Run) -> State:
         return State.DONE if answered(run) else State.TODO
@@ -248,10 +233,11 @@ class BrokerStep:
         raise RuntimeError(broker_refusal(run, error))
 
 
-def participant_consequence(targets: Sequence[PurgeTarget]) -> str:
+def participant_consequence(targets: Sequence[PurgeTarget], lang: str) -> str:
+    sessions = text(lang, "participant.consequence_sessions")
     if any(target.role == SERVER_ROLE for target in targets):
-        return SESSION_TEXT
-    return SESSION_TEXT + ROOM_SAFE
+        return sessions
+    return f"{sessions} {text(lang, 'participant.consequence_room_safe')}"
 
 
 def participant_role(version: tuple[int, int] | None = None) -> Role:
@@ -261,7 +247,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
         name=ROLE,
         record_path=record_path,
         install=(
-            PythonStep("Проверить Python", version or sys.version_info[:2]),
+            PythonStep("check_python", version or sys.version_info[:2]),
             ToolStep(),
             PackageStep(),
             kit,
@@ -282,10 +268,14 @@ def add_options(options: RoleOptions) -> None:
     options.add(
         "--broker-url",
         default=DEFAULT_BROKER,
-        help=f"адрес брокера (по умолчанию {DEFAULT_BROKER})",
+        help=options.t("participant.help_broker_url", default=DEFAULT_BROKER),
     )
-    options.add("--claude", action="store_true", help="набор только для Claude Code")
-    options.add("--opencode", action="store_true", help="набор только для OpenCode")
+    options.add(
+        "--claude", action="store_true", help=options.t("participant.help_claude")
+    )
+    options.add(
+        "--opencode", action="store_true", help=options.t("participant.help_opencode")
+    )
 
 
 def record_path(boundaries: Boundaries) -> Path:
@@ -306,7 +296,7 @@ def package_dir(run: Run) -> Path:
 
 def session_step() -> FoundStep:
     return FoundStep(
-        "Удалить файлы сессий",
+        "remove_session_files",
         ROLE,
         SESSION_KIND,
         found=lambda run: broker_tokens(store(run)),
@@ -389,20 +379,22 @@ def resolved_tool(run: Run) -> Tool:
     return owning_tool(run) or tool_of(run) or UV
 
 
-def found_message(tool: Tool, recorded: str | None) -> str:
-    text = (
-        f"пакет {PACKAGE} уже установлен через {tool.name}: возможно, он "
-        f"указывает на другую копию репозитория или поставлен не как editable. "
-        "Переустанавливать не буду, запись установщика не создаю."
-    )
+def found_message(run: Run, tool: Tool, recorded: str | None) -> str:
+    said = run.t("participant.package_found", package=PACKAGE, tool=tool.name)
     if recorded:
-        text += f" Запись установщика называет {recorded}: она остаётся как есть."
-    return text
+        said += " " + run.t("participant.package_found_record", recorded=recorded)
+    return said
 
 
-def tool_failure(tool: Tool, result) -> str:
+def package_in_use(run: Run, using: set[str]) -> str:
+    return run.t(
+        "participant.package_in_use", package=PACKAGE, clis=", ".join(sorted(using))
+    )
+
+
+def tool_failure(run: Run, tool: Tool, result) -> str:
     detail = (result.stderr or result.stdout or "").strip()
-    return f"{tool.name} не выполнил установку пакета: {detail}"
+    return run.t("participant.package_install_failed", tool=tool.name, detail=detail)
 
 
 def owned_tool(run: Run) -> str | None:
@@ -479,7 +471,9 @@ def read_manifest(run: Run) -> dict[Path, kit.Entry]:
     except (OSError, ValueError):
         return {}
     except (KeyError, TypeError) as broken:
-        raise RuntimeError(f"{KIT_MANIFEST} не читается: {path}") from broken
+        raise RuntimeError(
+            run.t("participant.manifest_unreadable", manifest=KIT_MANIFEST, path=path)
+        ) from broken
 
 
 def clis_using_package(remaining: set[str], removal: Removal) -> set[str]:
@@ -513,32 +507,31 @@ def removal_clis(run: Run) -> tuple[str, ...]:
 
 
 def asked_clis(run: Run) -> tuple[str, ...]:
-    choices = (*kit.CLIS, BOTH)
+    both = run.t("participant.choice_both")
+    choices = (*kit.CLIS, both)
     listing = "\n".join(
         f"    {number + 1}. {name}" for number, name in enumerate(choices)
     )
-    run.say(f"Какие CLI получают набор?\n{listing}")
+    run.say(run.t("participant.ask_clis", listing=listing))
     answer = run.boundaries.stdin.readline().strip()
     if answer.isdigit() and 1 <= int(answer) <= len(choices):
         answer = choices[int(answer) - 1]
-    if answer in (BOTH, "both"):
+    if answer in (both, "both"):
         return kit.CLIS
     if answer in kit.CLIS:
         return (answer,)
-    raise UsageError(
-        f"не понял выбор CLI: {answer!r}. Повторите запуск с --claude или --opencode."
-    )
+    raise UsageError(run.t("participant.cli_choice_unclear", answer=answer))
 
 
 def cli_flags(clis: Sequence[str]) -> list[str]:
     return [f"--{cli}" for cli in clis]
 
 
-def kit_failure(result) -> str:
+def kit_failure(run: Run, result) -> str:
     detail = (result.stderr or result.stdout or "").strip()
     if CONFLICT in detail:
-        return f"конфликт набора Quoroom: {detail}"
-    return f"agentschat не отработал: {detail}"
+        return run.t("participant.kit_conflict", detail=detail)
+    return run.t("participant.kit_failed", detail=detail)
 
 
 def broker_url(run: Run) -> str:
@@ -555,16 +548,13 @@ def env_lines(run: Run) -> list[str]:
     else:
         line = f"export AGENTSCHAT_URL={shlex.quote(url)}"
         command = f"printf '%s\\n' {shlex.quote(line)} >> ~/.profile"
-    return [f"Задайте адрес постоянно, иначе новая сессия его не увидит: {command}"]
+    return [run.t("participant.set_url_permanently", command=command)]
 
 
 def path_lines(run: Run) -> list[str]:
     if found_on_path(run) is not None:
         return []
-    return [
-        f"agentschat не нашёлся в PATH: выполните «{resolved_tool(run).path_command}», "
-        "откройте новый терминал и перезапустите сессии."
-    ]
+    return [run.t("participant.path_missing", command=resolved_tool(run).path_command)]
 
 
 def answered(run: Run) -> bool:
@@ -573,26 +563,18 @@ def answered(run: Run) -> bool:
 
 def broker_refusal(run: Run, error: str | None) -> str:
     lines = [
-        f"брокер не отвечает на {broker_url(run)}: {error}",
+        run.t("participant.broker_silent", url=broker_url(run), error=error),
         *env_lines(run),
         *path_lines(run),
-        "Повторите ту же команду после запуска сервера: проверка дойдёт до конца, "
-        "установленное останется на месте.",
+        run.t("participant.broker_retry"),
     ]
     return " ".join(lines)
 
 
 def tool_instruction(run: Run) -> str:
     if run.boundaries.platform == WINDOWS:
-        return (
-            "Не найден ни uv, ни pipx: без одного из них не поставить пакет "
-            "quoroom. Выполните winget install Python.Python.3.11 astral-sh.uv "
-            "FiloSottile.mkcert и повторите запуск."
-        )
-    return (
-        "Не найден ни uv, ни pipx: без одного из них не поставить пакет quoroom. "
-        "Выполните apt install pipx и повторите запуск."
-    )
+        return run.t("participant.tool_missing_windows")
+    return run.t("participant.tool_missing_linux")
 
 
 def report(run: Run, removal: Removal, kit: KitInstallStep) -> None:
@@ -608,27 +590,26 @@ def report(run: Run, removal: Removal, kit: KitInstallStep) -> None:
 
 def _reported_installed(run: Run, kit: KitInstallStep) -> None:
     for cli, files in sorted(stale_files(run).items()):
-        run.say(
-            f"Набор для {cli}: файлы, изменённые вручную, оставлены как есть: "
-            + ", ".join(files)
-            + ". Следующий agentschat install перезапишет их - так он и работает."
-        )
+        run.say(run.t("participant.kit_edited_kept", cli=cli, files=", ".join(files)))
     for line in env_lines(run):
         run.say(line)
     for line in path_lines(run):
         run.say(line)
-    run.say(f"Брокер отвечает на {broker_url(run)}.")
+    run.say(run.t("participant.broker_answers", url=broker_url(run)))
     run.say(
-        restart_instruction(kit.written, kit.clis)
-        + " В сессии агента выполните /chatlogin и назовите имя сессии."
+        f"{restart_instruction(run, kit.written, kit.clis)} "
+        f"{run.t('participant.chatlogin_next')}"
     )
 
 
-def restart_instruction(written: bool, clis: Sequence[str]) -> str:
+def restart_instruction(run: Run, written: bool, clis: Sequence[str]) -> str:
     if not written:
-        return "Набор на месте и не менялся, перезапускать сессии не нужно."
-    names = " и ".join(kit.CLI_NAMES[cli] for cli in kit.CLIS if cli in clis)
-    return f"Перезапустите открытые сессии {names}: запущенные нового набора не видят."
+        return run.t("participant.restart_unchanged")
+    names = [kit.CLI_NAMES[cli] for cli in kit.CLIS if cli in clis]
+    if len(names) == 1:
+        return run.t("participant.restart_one", name=names[0])
+    first, second = names
+    return run.t("participant.restart_two", first=first, second=second)
 
 
 def removal_lines(run: Run, removal: Removal) -> list[str]:
@@ -639,55 +620,48 @@ def removal_lines(run: Run, removal: Removal) -> list[str]:
     if tool is not None:
         left.append(
             Left(
-                f"пакет {PACKAGE} оставлен: им пользуется набор для "
-                + ", ".join(sorted(using))
+                package_in_use(run, using)
                 if using
-                else f"пакет {PACKAGE} ({tool.name})"
+                else run.t("participant.package_left", package=PACKAGE, tool=tool.name)
             )
         )
     lines = (
-        ["Убрано не всё, осталось в системе:", *left_lines(left)]
+        [run.t("participant.left_heading"), *left_lines(left)]
         if left
-        else ["Набор и пакет убраны."]
+        else [run.t("participant.all_removed")]
     )
-    lines += _missing_binary_lines(left, removal)
+    lines += _missing_binary_lines(run, left, removal)
     if not run.plan.purge:
         lines.append(_session_files_line(run))
     entry = INSTALL_ENTRY.get(run.boundaries.platform, "install.sh")
-    lines.append(f"Поставить обратно: {entry} --role participant")
+    lines.append(run.t("participant.reinstall_hint", entry=entry))
     return lines
 
 
 def _session_files_line(run: Run) -> str:
-    tail = (
-        "после повторной установки сессия вернётся в комнату через /chatlogin."
+    key = (
+        "participant.session_files_kept_reinstall"
         if owning_tool(run) is None
-        else "вернуться в комнату можно новым входом."
+        else "participant.session_files_kept_relogin"
     )
-    return f"Файлы сессий в {STORE} оставлены: {tail}"
+    return run.t(key, store=STORE)
 
 
 def kit_left(run: Run, remaining: set[str], removal: Removal) -> list[Left]:
     if not remaining:
         return []
     if not removal.uninstalled:
-        return [
-            Left(
-                "набор не снят: agentschat не найден, поэтому его файлы и записи "
-                "остались",
-                manifest_files(run),
-            )
-        ]
+        return [Left(run.t("participant.left_kit_not_removed"), manifest_files(run))]
     asked = set(removal.asked)
     edited = stale_files(run)
     return [
         *(
-            Left(f"набор для {cli} не снимался: его не называл ключ запуска")
+            Left(run.t("participant.left_kit_not_asked", cli=cli))
             for cli in sorted(remaining - asked)
         ),
         *(
             Left(
-                f"файлы набора для {cli}, изменённые вручную, uninstall оставил",
+                run.t("participant.left_kit_edited", cli=cli),
                 tuple(edited.get(cli, [])),
             )
             for cli in sorted(remaining & asked)
@@ -695,23 +669,22 @@ def kit_left(run: Run, remaining: set[str], removal: Removal) -> list[Left]:
     ]
 
 
-def _missing_binary_lines(left: Sequence[Left], removal: Removal) -> list[str]:
+def _missing_binary_lines(
+    run: Run, left: Sequence[Left], removal: Removal
+) -> list[str]:
     if not removal.package_gone or not any(item.files for item in left):
         return []
-    return [
-        "Файлы набора вызывают agentschat, которого больше нет: удалите их или "
-        "поставьте участника снова."
-    ]
+    return [run.t("participant.kit_files_orphaned")]
 
 
 def purge_lines(run: Run) -> list[str]:
     directory = store(run)
-    lines = [f"Файлы сессий удалены из {directory}."]
+    lines = [run.t("participant.sessions_deleted", directory=directory)]
     lines += _manifest_kept_lines(run)
     kept = kept_files(directory)
     lines += [
-        *(f"оставлено, это не файл сессии: {path}" for path in kept),
-        *([] if kept else ["Других файлов в каталоге нет."]),
+        *(run.t("participant.kept_not_session", path=path) for path in kept),
+        *([] if kept else [run.t("participant.no_other_files")]),
     ]
     return lines
 
@@ -720,13 +693,13 @@ def _manifest_kept_lines(run: Run) -> list[str]:
     if not manifest_path(run).is_file():
         return []
     if not manifest_clis(run):
-        return [f"{KIT_MANIFEST} остался, но записей в нём нет: уберите его вручную."]
-    tail = (
-        "удалите его вместе с этими файлами."
+        return [run.t("participant.manifest_empty", manifest=KIT_MANIFEST)]
+    key = (
+        "participant.manifest_kept_manual"
         if owning_tool(run) is None
-        else "когда записей не останется, agentschat uninstall удалит его сам."
+        else "participant.manifest_kept_auto"
     )
-    return [f"{KIT_MANIFEST} оставлен по причинам выше: {tail}"]
+    return [run.t(key, manifest=KIT_MANIFEST)]
 
 
 def _spoken(run: Run, result) -> None:

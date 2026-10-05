@@ -6,13 +6,14 @@ from collections.abc import Sequence
 from typing import IO
 
 from .boundaries import Boundaries
+from .catalogue import DEFAULT_LANGUAGE, LANGUAGES, text
 from .errors import HelpRequested, UsageError
 from .roles import Role, RoleOptions, order
 from .steps import Plan
 
 CORE_FLAGS = ("role", "remove", "purge")
 BOTH = "both"
-NO_ROLES = "в этой сборке нет ни одной роли: установщик без ролей делать нечего."
+LANGUAGE_FLAG = "--lang"
 
 
 class Parser(ArgumentParser):
@@ -39,20 +40,29 @@ class Parser(ArgumentParser):
 def parser_for(
     roles: Sequence[Role], boundaries: Boundaries
 ) -> tuple[Parser, dict[str, list[str]]]:
+    lang = boundaries.lang
     parser = Parser(
         prog="install",
-        description="Установка и удаление Quoroom на одной машине",
+        description=text(lang, "options.description"),
         stdout=boundaries.stdout,
         stderr=boundaries.stderr,
     )
-    parser.add_argument("--role", help="роль установки")
+    parser.add_argument("--role", help=text(lang, "options.help_role"))
     parser.add_argument(
-        "--remove", action="store_true", help="удалить вместо установки"
+        "--remove", action="store_true", help=text(lang, "options.help_remove")
     )
-    parser.add_argument("--purge", action="store_true", help="удалить и данные роли")
+    parser.add_argument(
+        "--purge", action="store_true", help=text(lang, "options.help_purge")
+    )
+    parser.add_argument(
+        LANGUAGE_FLAG,
+        choices=LANGUAGES,
+        default=lang,
+        help=text(lang, "options.help_lang"),
+    )
     grouped: dict[str, list[str]] = {}
     for role in roles:
-        options = RoleOptions(parser, role.name)
+        options = RoleOptions(parser, role.name, lang)
         role.add_options(options)
         grouped[role.name] = options.dests
     return parser, grouped
@@ -62,13 +72,38 @@ def names_of(roles: Sequence[Role]) -> list[str]:
     return [role.name for role in roles]
 
 
+def language_of(argv: Sequence[str], default: str) -> str:
+    chosen = default
+    for index, argument in enumerate(argv):
+        if argument == LANGUAGE_FLAG and index + 1 < len(argv):
+            chosen = argv[index + 1]
+        elif argument.startswith(f"{LANGUAGE_FLAG}="):
+            chosen = argument.partition("=")[2]
+    return chosen
+
+
+def chosen_language(argv: Sequence[str], default: str) -> str:
+    chosen = language_of(argv, default)
+    if chosen not in LANGUAGES:
+        raise UsageError(
+            text(
+                DEFAULT_LANGUAGE,
+                "options.unknown_language",
+                value=chosen,
+                available=", ".join(LANGUAGES),
+            )
+        )
+    return chosen
+
+
 def parse(argv: Sequence[str], boundaries: Boundaries, roles: Sequence[Role]) -> Plan:
     parser, grouped = parser_for(roles, boundaries)
     args = parser.parse_args(list(argv))
+    lang = boundaries.lang
     if not roles:
-        raise UsageError(NO_ROLES)
+        raise UsageError(text(lang, "options.no_roles"))
     if args.purge and not args.remove:
-        raise UsageError("--purge имеет смысл только вместе с --remove")
+        raise UsageError(text(lang, "options.purge_needs_remove"))
     values = vars(args)
     answers = {
         name: {dest: values[dest] for dest in dests} for name, dests in grouped.items()
@@ -89,14 +124,17 @@ def _selected(
     if given:
         if given not in names_of(roles):
             raise UsageError(
-                f"роль {given} неизвестна, доступны: {', '.join([BOTH, *names_of(roles)])}"
+                text(
+                    boundaries.lang,
+                    "options.unknown_role",
+                    role=given,
+                    available=", ".join([BOTH, *names_of(roles)]),
+                )
             )
         return [given]
     if boundaries.stdin.isatty():
         return _asked(boundaries, names_of(roles))
-    raise UsageError(
-        "не указан --role, а интерактивного ввода нет: передайте --role явно."
-    )
+    raise UsageError(text(boundaries.lang, "options.role_missing"))
 
 
 def _asked(boundaries: Boundaries, names: Sequence[str]) -> list[str]:
@@ -104,7 +142,8 @@ def _asked(boundaries: Boundaries, names: Sequence[str]) -> list[str]:
     listing = "\n".join(
         f"    {index + 1}. {name}" for index, name in enumerate(choices)
     )
-    boundaries.stdout.write(f"Что ставим или удаляем?\n{listing}\n")
+    asking = text(boundaries.lang, "options.ask_role", listing=listing)
+    boundaries.stdout.write(f"{asking}\n")
     answer = boundaries.stdin.readline().strip()
     number = int(answer) if answer.isdigit() else 0
     picked = choices[number - 1] if 1 <= number <= len(choices) else answer
@@ -112,4 +151,4 @@ def _asked(boundaries: Boundaries, names: Sequence[str]) -> list[str]:
         return list(names)
     if picked in names:
         return [picked]
-    raise UsageError(f"не понял выбор: {answer!r}. Повторите запуск с --role.")
+    raise UsageError(text(boundaries.lang, "options.bad_choice", answer=answer))

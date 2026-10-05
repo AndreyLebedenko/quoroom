@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .boundaries import Boundaries, WINDOWS
+from .catalogue import text
 from .ownership import PurgeTarget, prune_record_home
 from .report import Left, left_lines
 from .roles import Role, RoleOptions
@@ -68,11 +69,11 @@ CERT_NAME = "agentschat.local"
 CERT_KEY = "agentschat.local-key"
 BROKER_LOG = "broker.log"
 KIND_WORDS = {
-    FILE_KIND: "файлы конфигурации сервера",
-    CERT_KIND: "сертификаты",
-    PASSWORDS_KIND: "сохранённые пароли ботов",
-    STATE_KIND: "состояние брокера",
-    VENV_KIND: "окружение bridge/.venv",
+    FILE_KIND: "server.kind_files",
+    CERT_KIND: "server.kind_certs",
+    PASSWORDS_KIND: "server.kind_passwords",
+    STATE_KIND: "server.kind_state",
+    VENV_KIND: "server.kind_venv",
 }
 INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
 ISSUED = re.compile(r"using the registration token ([A-Za-z0-9]+)")
@@ -219,11 +220,8 @@ def install_logs(run: Run) -> list[Left]:
     if not files:
         return []
     return [
-        Left(
-            "логи установщика остались: карточка снятия не относит их к очистке",
-            files,
-        ),
-        Left(f"удалить их: {removal_command(run, files)}"),
+        Left(run.t("server.logs_kept"), files),
+        Left(run.t("server.logs_remove", command=removal_command(run, files))),
     ]
 
 
@@ -263,8 +261,8 @@ def ours(run: Run, kind: str, path: Path) -> bool:
 
 
 class HostRefused(RuntimeError):
-    def __init__(self, command: str, answer: dict) -> None:
-        super().__init__(host_failure(command, answer))
+    def __init__(self, message: str, answer: dict) -> None:
+        super().__init__(message)
         self.answer = answer
 
 
@@ -275,7 +273,7 @@ def host_call(run: Run, command: str, payload: dict) -> dict:
     )
     answer = _json(done.stdout)
     if done.returncode != 0 or answer.get("error"):
-        raise HostRefused(command, answer)
+        raise HostRefused(host_failure(run, command, answer), answer)
     return answer
 
 
@@ -287,13 +285,16 @@ def _json(text: str | None) -> dict:
     return answer if isinstance(answer, dict) else {}
 
 
-def host_failure(command: str, answer: dict) -> str:
-    parts = [f"bridge/.venv не справилась с {command}"]
-    for key, label in (("errcode", "код"), ("status", "HTTP"), ("file", "файл")):
+def host_failure(run: Run, command: str, answer: dict) -> str:
+    parts = [run.t("server.host_failed", command=command)]
+    for key, message in (
+        ("errcode", "server.host_code"),
+        ("status", "server.host_http"),
+        ("file", "server.host_file"),
+        ("line", "server.host_line"),
+    ):
         if answer.get(key):
-            parts.append(f"{label}={answer[key]}")
-    if answer.get("line"):
-        parts.append(f"строка={answer['line']}")
+            parts.append(run.t(message, value=answer[key]))
     return ": ".join(parts) + "."
 
 
@@ -350,9 +351,7 @@ def ca_bundle(run: Run) -> str:
     root = text_of(run, ["mkcert", "-CAROOT"]).strip()
     bundle = Path(root) / "rootCA.pem" if root else Path("rootCA.pem")
     if not bundle.is_file():
-        raise RuntimeError(
-            f"нет корня mkcert: {bundle}. Он появляется при первом выпуске сертификата."
-        )
+        raise RuntimeError(run.t("server.ca_root_missing", bundle=bundle))
     return str(bundle)
 
 
@@ -389,8 +388,8 @@ def write_toml(run: Run, lines: Sequence[str]) -> None:
 class ToolStep:
     name: str
     argv: tuple[str, ...]
-    windows: str
-    linux: str
+    windows_instruction: str
+    linux_instruction: str
 
     def check(self, run: Run) -> State:
         try:
@@ -400,14 +399,17 @@ class ToolStep:
         return State.DONE if done.returncode == 0 else State.TODO
 
     def apply(self, run: Run) -> None:
-        raise NeedsHuman(
-            self.windows if run.boundaries.platform == WINDOWS else self.linux
+        key = (
+            self.windows_instruction
+            if run.boundaries.platform == WINDOWS
+            else self.linux_instruction
         )
+        raise NeedsHuman(run.t(key))
 
 
 @dataclass(frozen=True)
 class ServerNameStep:
-    name: str = "Проверить имя сервера"
+    name: str = "check_server_name"
 
     def check(self, run: Run) -> State:
         found = run.boundaries.resolve(SERVER_NAME)
@@ -425,20 +427,17 @@ def loopback(address: str) -> bool:
 
 
 def hosts_instruction(run: Run) -> str:
-    where = (
-        r"C:\Windows\System32\drivers\etc\hosts (от имени администратора)"
+    key = (
+        "server.hosts_instruction_windows"
         if run.boundaries.platform == WINDOWS
-        else "/etc/hosts (от root)"
+        else "server.hosts_instruction_linux"
     )
-    return (
-        f"Добавьте строку «127.0.0.1 {SERVER_NAME}» в {where}: имя {SERVER_NAME} "
-        "должно резолвиться в адрес петли, иначе стенд на хосте ответит вместо стека."
-    )
+    return run.t(key, server=SERVER_NAME)
 
 
 @dataclass
 class VenvStep:
-    name: str = "Создать bridge/.venv"
+    name: str = "create_venv"
     python: str = sys.executable
 
     def check(self, run: Run) -> State:
@@ -454,7 +453,7 @@ class VenvStep:
         fresh = not venv_python(run).is_file()
         created = run.boundaries.run([self.python, "-m", "venv", str(venv_dir(run))])
         if created.returncode != 0:
-            raise RuntimeError(venv_failure(created))
+            raise RuntimeError(venv_failure(run, created))
         if fresh:
             run.record(ROLE, VENV_KIND, str(venv_dir(run)))
         pip = run.boundaries.run(
@@ -468,22 +467,24 @@ class VenvStep:
             ]
         )
         if pip.returncode != 0:
-            raise RuntimeError(venv_failure(pip))
+            raise RuntimeError(venv_failure(run, pip))
         host_call(run, "imports", {})
 
 
-def venv_failure(result) -> str:
+def venv_failure(run: Run, result) -> str:
     tail = [
         line
         for line in (result.stderr or result.stdout or "").splitlines()
         if line.strip()
     ]
-    return f"bridge/.venv не собралась: {tail[-1] if tail else 'без вывода'}"
+    return run.t(
+        "server.venv_failed", detail=tail[-1] if tail else run.t("server.no_output")
+    )
 
 
 @dataclass(frozen=True)
 class CertificateStep:
-    name: str = "Выпустить сертификат"
+    name: str = "issue_certificate"
 
     def check(self, run: Run) -> State:
         return (
@@ -505,19 +506,19 @@ class CertificateStep:
             ]
         )
         if done.returncode != 0 or not cert_path(run).is_file():
-            raise RuntimeError(mkcert_failure(done))
+            raise RuntimeError(mkcert_failure(run, done))
         for path in (cert_path(run), cert_key_path(run)):
             run.record(ROLE, CERT_KIND, str(path))
 
 
-def mkcert_failure(result) -> str:
+def mkcert_failure(run: Run, result) -> str:
     detail = (result.stderr or result.stdout or "").strip()
-    return f"mkcert не выпустил сертификат: {detail}"
+    return run.t("server.mkcert_failed", detail=detail)
 
 
 @dataclass(frozen=True)
 class EnvFileStep:
-    name: str = f"Создать docker/{ENV_FILE}"
+    name: str = "create_env_file"
 
     def check(self, run: Run) -> State:
         problem = env_problem(run)
@@ -527,7 +528,7 @@ class EnvFileStep:
 
     def apply(self, run: Run) -> None:
         if env_path(run).is_file():
-            raise RuntimeError(f"{env_path(run)} уже есть.")
+            raise RuntimeError(run.t("server.file_exists", path=env_path(run)))
         env_path(run).write_text(
             env_path(run).with_name(ENV_EXAMPLE).read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -543,18 +544,20 @@ def env_problem(run: Run) -> str:
         if line.strip().startswith("SERVER_NAME="):
             given = line.split("=", 1)[1].strip()
             if given != SERVER_NAME:
-                return (
-                    f"{path}: строка {number} задаёт SERVER_NAME={given}, а стек "
-                    f"настроен на {SERVER_NAME}. Правьте вручную: имя homeserver "
-                    "зашито в Caddyfile и в конфиг Element."
+                return run.t(
+                    "server.env_server_name_differs",
+                    path=path,
+                    number=number,
+                    given=given,
+                    server=SERVER_NAME,
                 )
             return ""
-    return f"{path}: нет строки SERVER_NAME, добавьте её вручную."
+    return run.t("server.env_server_name_missing", path=path)
 
 
 @dataclass(frozen=True)
 class TomlFileStep:
-    name: str = f"Создать docker/continuwuity/{TOML_NAME}"
+    name: str = "create_toml_file"
 
     def check(self, run: Run) -> State:
         problem = toml_problem(run)
@@ -564,7 +567,7 @@ class TomlFileStep:
 
     def apply(self, run: Run) -> None:
         if toml_path(run).is_file():
-            raise RuntimeError(f"{toml_path(run)} уже есть.")
+            raise RuntimeError(run.t("server.file_exists", path=toml_path(run)))
         token = run.secrets.register(secrets.token_urlsafe(32))
         rendered = toml_place(
             toml_example(run).read_text(encoding="utf-8").splitlines(),
@@ -583,18 +586,17 @@ def toml_problem(run: Run) -> str:
     for key in ("allow_registration", "registration_token"):
         value, number = toml_value(lines, key)
         if not number:
-            return f"{path}: нет строки {key}, добавьте её вручную."
+            return run.t("server.toml_line_missing", path=path, setting=key)
         if not value:
-            return f"{path}: строка {number} ({key}) пустая, заполните вручную."
+            return run.t(
+                "server.toml_line_empty", path=path, number=number, setting=key
+            )
     given, _ = toml_value(lines, "registration_token")
     sample, _ = toml_value(
         toml_example(run).read_text(encoding="utf-8").splitlines(), "registration_token"
     )
     if given == sample:
-        return (
-            f"{path}: registration_token всё ещё пример из {TOML_EXAMPLE}, "
-            "замените его своим."
-        )
+        return run.t("server.toml_token_is_example", path=path, example=TOML_EXAMPLE)
     return ""
 
 
@@ -604,7 +606,7 @@ def served_status(status: int | None) -> bool:
 
 @dataclass
 class InfrastructureStep:
-    name: str = "Поднять инфраструктуру"
+    name: str = "start_infrastructure"
     sleep: Callable[[float], None] = time.sleep
 
     def check(self, run: Run) -> State:
@@ -618,7 +620,7 @@ class InfrastructureStep:
         up = run.boundaries.run(compose_argv(run, "up", "-d"))
         try:
             if up.returncode != 0:
-                raise RuntimeError(compose_failure("docker compose up -d", up))
+                raise RuntimeError(compose_failure(run, "docker compose up -d", up))
             self.wait_for_server(run)
         finally:
             self.record_new(run, before)
@@ -630,9 +632,13 @@ class InfrastructureStep:
             self.sleep(READY_DELAY)
         probe = run.boundaries.probe(f"{server_url()}/_matrix/client/versions")
         raise RuntimeError(
-            f"{SERVER_NAME} не ответил за {READY_TRIES * READY_DELAY:.0f}с: "
-            f"{probe.error or probe.status}. Смотрите "
-            f'docker compose -f "{compose_file(run)}" logs continuwuity.'
+            run.t(
+                "server.server_silent",
+                server=SERVER_NAME,
+                seconds=f"{READY_TRIES * READY_DELAY:.0f}",
+                reason=probe.error or probe.status,
+                compose=compose_file(run),
+            )
         )
 
     def project(self, run: Run) -> str:
@@ -650,7 +656,7 @@ class InfrastructureStep:
 
 @dataclass(frozen=True)
 class TrustStep:
-    name: str = "Проверить доверие к сертификату"
+    name: str = "check_certificate_trust"
 
     def check(self, run: Run) -> State:
         probe = run.boundaries.probe(f"{server_url()}/_matrix/client/versions")
@@ -665,12 +671,12 @@ def trust_instruction(run: Run, reason: str) -> str:
     if run.boundaries.platform == WINDOWS:
         command = "mkcert -install"
     else:
-        command = f'CAROOT="{caroot(run)}" mkcert -install (от root)'
-    tail = f" Сервер ответил: {reason}." if reason else ""
-    return (
-        f"Браузер и брокер должны доверять сертификату {SERVER_NAME}. Выполните "
-        f"от администратора: {command}.{tail} После этого повторите ту же команду."
-    )
+        command = run.t("server.trust_command_linux", caroot=caroot(run))
+    sentences = [run.t("server.trust_instruction", server=SERVER_NAME, command=command)]
+    if reason:
+        sentences.append(run.t("server.trust_server_said", reason=reason))
+    sentences.append(run.t("server.trust_retry"))
+    return " ".join(sentences)
 
 
 def caroot(run: Run) -> str:
@@ -679,7 +685,7 @@ def caroot(run: Run) -> str:
 
 @dataclass(frozen=True)
 class ConfigStep:
-    name: str = f"Создать bridge/{CONFIG_NAME}"
+    name: str = "create_config"
 
     def check(self, run: Run) -> State:
         if not config_path(run).is_file():
@@ -698,7 +704,7 @@ class ConfigStep:
 
 @dataclass
 class HumanAccountStep:
-    name: str = "Завести аккаунт человека"
+    name: str = "create_human_account"
     username: str = ""
     became_admin: bool = False
 
@@ -713,11 +719,7 @@ class HumanAccountStep:
     def apply(self, run: Run) -> None:
         username = self.asked(run)
         if not username:
-            raise NeedsHuman(
-                "Нужен локальный аккаунт человека: под ним он входит в Element, и "
-                "первый аккаунт на сервере становится администратором. Повторите с "
-                "--admin-user <имя>."
-            )
+            raise NeedsHuman(run.t("server.admin_user_needed"))
         if not available(run, username):
             return
         if not ours(run, FILE_KIND, toml_path(run)):
@@ -757,7 +759,7 @@ def asked_admin_user(run: Run) -> str:
         return given
     if not run.boundaries.stdin.isatty():
         return ""
-    run.say("Имя локального аккаунта человека, под которым он войдёт в Element: ")
+    run.say(run.t("server.ask_admin_user"))
     return run.boundaries.stdin.readline().strip()
 
 
@@ -767,19 +769,19 @@ def admin_password(run: Run) -> str:
         return run.secrets.register(from_env)
     if not run.boundaries.stdin.isatty():
         raise NeedsHuman(
-            f"Нужен пароль аккаунта человека. Задайте переменную "
-            f"{PASSWORD_VARIABLE} или запустите установщик в терминале, где он "
-            "спросит пароль без эха."
+            run.t("server.admin_password_needed", variable=PASSWORD_VARIABLE)
         )
-    return run.secrets.register(run.boundaries.secret("Пароль аккаунта человека: "))
+    return run.secrets.register(
+        run.boundaries.secret(run.t("server.ask_admin_password"))
+    )
 
 
 def manual_account(run: Run, username: str) -> str:
-    return (
-        f"Аккаунта {username} на сервере нет, а {TOML_NAME} создан не этим "
-        "установщиком, поэтому регистрировать здесь установщик не будет. "
-        f"Создайте его через {run.boundaries.repo / 'bridge' / 'register_account.py'} "
-        "и повторите, либо отдайте установщику свой файл."
+    return run.t(
+        "server.account_manual",
+        username=username,
+        toml=TOML_NAME,
+        script=run.boundaries.repo / "bridge" / "register_account.py",
     )
 
 
@@ -815,10 +817,10 @@ def register(run: Run, username: str, password: str, token: str) -> None:
 
 def registration_reason(run: Run, refused: HostRefused) -> str:
     if int(refused.answer.get("status") or 0) == 403:
-        return (
-            "Сервер не принимает регистрации (HTTP 403): регистрация закрыта. "
-            f"Поставьте allow_registration = true в {toml_path(run)} и выполните "
-            f'docker compose -f "{compose_file(run)}" restart continuwuity.'
+        return run.t(
+            "server.registration_closed",
+            toml=toml_path(run),
+            compose=compose_file(run),
         )
     return str(refused)
 
@@ -831,16 +833,14 @@ def issued_token(run: Run) -> str:
     found = ISSUED.findall(text)
     if not found:
         raise NeedsHuman(
-            "Сервер не напечатал свой токен регистрации. Возьмите его сами командой "
-            f'docker compose -f "{compose_file(run)}" logs continuwuity и '
-            "зарегистрируйте аккаунт через register_account.py."
+            run.t("server.issued_token_missing", compose=compose_file(run))
         )
     return found[-1]
 
 
 @dataclass
 class BotAccountStep:
-    name: str = "Завести аккаунты ботов"
+    name: str = "create_bot_accounts"
 
     def check(self, run: Run) -> State:
         return State.DONE if not self.pending(run) else State.TODO
@@ -874,11 +874,7 @@ class BotAccountStep:
             if available(run, agent):
                 password = self.remember(run, agent)
             else:
-                raise NeedsHuman(
-                    f"Аккаунт бота {agent} на сервере уже есть, а пароль от него "
-                    "установщику неизвестен: сбросьте его через Element или удалите "
-                    "аккаунт, затем повторите."
-                )
+                raise NeedsHuman(run.t("server.bot_password_unknown", agent=agent))
         self.write(run, agent, self.enter(run, agent, password))
 
     def enter(self, run: Run, agent: str, password: str) -> dict:
@@ -898,9 +894,7 @@ class BotAccountStep:
                 answer = host_call(run, "login", base)
             except HostRefused as refused:
                 raise NeedsHuman(
-                    f"Сохранённый пароль для {agent} не подошёл к аккаунту на "
-                    f"сервере: {refused}. Сбросьте пароль через Element или "
-                    "удалите аккаунт, затем повторите."
+                    run.t("server.bot_password_refused", agent=agent, refused=refused)
                 ) from None
         return {
             key: run.secrets.register(str(answer.get(key) or ""))
@@ -945,16 +939,12 @@ class BotAccountStep:
 
 
 def manual_bots(run: Run) -> str:
-    return (
-        f"{TOML_NAME} создан не этим установщиком, поэтому заводить ботов здесь он "
-        f"не будет. Впишите user_id, access_token и device_id каждого бота в "
-        f"{config_path(run)} сами - значения показывает register_account.py."
-    )
+    return run.t("server.bots_manual", toml=TOML_NAME, config=config_path(run))
 
 
 @dataclass(frozen=True)
 class BrokerAddressStep:
-    name: str = "Проверить адрес брокера"
+    name: str = "check_broker_address"
 
     def check(self, run: Run) -> State:
         problem = broker_problem(run)
@@ -963,30 +953,35 @@ class BrokerAddressStep:
         return State.DONE
 
     def apply(self, run: Run) -> None:
-        raise RuntimeError(broker_problem(run) or f"{config_path(run)} в порядке.")
+        raise RuntimeError(
+            broker_problem(run) or run.t("server.config_fine", path=config_path(run))
+        )
 
 
 def broker_problem(run: Run) -> str:
     stored = host_call(run, "read-yaml", {"path": str(config_path(run))})
     port = int(stored.get("sessionchat_port", BROKER_PORT))
     if port != BROKER_PORT:
-        return (
-            f"{config_path(run)} задаёт sessionchat_port={port}, а start.sh и "
-            f"start.ps1 поднимают брокера на {BROKER_PORT}, и скрипты менять нельзя. "
-            f"Поставьте в конфигурации sessionchat_port: {BROKER_PORT}."
+        return run.t(
+            "server.broker_port_wrong",
+            path=config_path(run),
+            port=port,
+            expected=BROKER_PORT,
         )
     url = str(stored.get("homeserver_url") or "")
     if url and SERVER_NAME not in url:
-        return (
-            f"{config_path(run)} задаёт homeserver_url={url}, а стек поднят на "
-            f"{server_url()}. Поставьте homeserver_url: {server_url()}."
+        return run.t(
+            "server.homeserver_url_wrong",
+            path=config_path(run),
+            url=url,
+            address=server_url(),
         )
     return ""
 
 
 @dataclass
 class CloseRegistrationStep:
-    name: str = "Закрыть регистрацию"
+    name: str = "close_registration"
     sleep: Callable[[float], None] = time.sleep
 
     def check(self, run: Run) -> State:
@@ -1012,36 +1007,27 @@ class CloseRegistrationStep:
 
 
 def closure_unconfirmed(run: Run) -> str:
-    return (
-        "Регистрация закрыта в файле, но сервер этого не подтвердил: пробная "
-        "регистрация с заведомо неверным токеном не получила отказ 403. "
-        "Проверьте, что контейнер перезапустился с новым файлом, командой "
-        f'docker compose -f "{compose_file(run)}" restart continuwuity.'
-    )
+    return run.t("server.closure_unconfirmed", compose=compose_file(run))
 
 
 def manual_close(run: Run) -> str:
-    closed = toml_value(toml_lines(run), "allow_registration")[0] == "false"
-    head = (
-        f"в {toml_path(run)} уже стоит allow_registration = false, но сервер "
-        "регистрацию не закрывает"
-        if closed
-        else f"{TOML_NAME} создан не этим установщиком, поэтому закрывать "
-        "регистрацию здесь он не будет"
+    if toml_value(toml_lines(run), "allow_registration")[0] == "false":
+        return run.t(
+            "server.close_manual_restart",
+            toml=toml_path(run),
+            compose=compose_file(run),
+        )
+    return run.t(
+        "server.close_manual_edit",
+        name=TOML_NAME,
+        toml=toml_path(run),
+        compose=compose_file(run),
     )
-    todo = (
-        f"перезапустите его командой docker compose -f "
-        f'"{compose_file(run)}" restart continuwuity.'
-        if closed
-        else f"Поставьте allow_registration = false в {toml_path(run)} и выполните "
-        f'docker compose -f "{compose_file(run)}" restart continuwuity.'
-    )
-    return f"{head}: {todo}"
 
 
 @dataclass(frozen=True)
 class RoomStep:
-    name: str = "Записать комнату"
+    name: str = "write_room"
 
     def check(self, run: Run) -> State:
         asked = str(run.plan.answers.get(ROLE, {}).get(ROOM_DEST) or "")
@@ -1049,10 +1035,13 @@ class RoomStep:
         if asked and stored and asked != stored and not room_problem(run, stored):
             run.warn_once(
                 f"room:{stored}",
-                f"В {CONFIG_NAME} уже стоит комната {stored}, а в этом запуске "
-                f"передана {asked}. Оставлена первая: записанное значение "
-                f"установщик сам не затирает. Поменяйте room_id в "
-                f"{config_path(run)} и повторите.",
+                run.t(
+                    "server.room_differs",
+                    config=CONFIG_NAME,
+                    stored=stored,
+                    asked=asked,
+                    path=config_path(run),
+                ),
             )
         return State.DONE if stored and not room_problem(run, stored) else State.TODO
 
@@ -1084,10 +1073,11 @@ def write_config(run: Run, values: dict) -> None:
     conflicts = [str(name) for name in answer.get("conflicts", [])]
     if conflicts:
         raise RuntimeError(
-            f"{config_path(run)}: записать {', '.join(conflicts)} не вышло. Либо "
-            "там уже другое значение, либо файл написан в форме, которую "
-            "установщик не правит (строка в фигурных скобках, ключ в кавычках). "
-            "Впишите значения сами и повторите."
+            run.t(
+                "server.config_conflicts",
+                path=config_path(run),
+                names=", ".join(conflicts),
+            )
         )
 
 
@@ -1098,26 +1088,22 @@ def room_id(run: Run) -> str:
 
 def room_problem(run: Run, room: str) -> str:
     if not room:
-        return "Не указан идентификатор комнаты."
+        return run.t("server.room_missing")
     if not room.startswith(("!", "#")):
-        return f"Идентификатор комнаты должен начинаться с ! или #, а не с {room!r}."
+        return run.t("server.room_bad_start", room=room)
     if any(part.isspace() for part in room):
-        return f"В идентификаторе комнаты не должно быть пробела: {room!r}."
+        return run.t("server.room_has_space", room=room)
     localpart, _, domain = room[1:].partition(":")
     if not localpart:
-        return f"В идентификаторе комнаты {room!r} нет имени после ! или #."
+        return run.t("server.room_no_name", room=room)
     if room.startswith("#") and not domain:
-        return (
-            f"Псевдоним комнаты {room!r} должен называть сервер: "
-            f"псевдоним всегда пишут как #имя:{SERVER_NAME}."
-        )
+        return run.t("server.room_alias_without_server", room=room, server=SERVER_NAME)
     if domain and domain != SERVER_NAME:
-        return (
-            f"Идентификатор комнаты {room!r} указывает на сервер {domain!r}, "
-            f"а стенд работает на {SERVER_NAME}."
+        return run.t(
+            "server.room_other_server", room=room, domain=domain, server=SERVER_NAME
         )
     if localpart == example_room(run):
-        return f"Идентификатор комнаты всё ещё пример из {CONFIG_EXAMPLE}: {room!r}."
+        return run.t("server.room_is_example", room=room, example=CONFIG_EXAMPLE)
     return ""
 
 
@@ -1132,18 +1118,12 @@ def example_room(run: Run) -> str:
 def room_instruction(run: Run) -> str:
     stored = host_call(run, "read-yaml", {"path": str(config_path(run))})
     who = ", ".join(f"@{agent}:{SERVER_NAME}" for agent in stored.get("agents", []))
-    return (
-        "Создайте комнату в Element под своим аккаунтом и пригласите в неё "
-        f"{who}. Приглашение брокер примет сам. Затем Room settings -> Advanced -> "
-        "Internal room ID, и передайте значение установщику через --room-id как "
-        "есть: оно начинается с !, а домен, если он есть, должен быть "
-        f"{SERVER_NAME}."
-    )
+    return run.t("server.room_instruction", who=who, server=SERVER_NAME)
 
 
 @dataclass
 class StartStep:
-    name: str = "Запустить стенд"
+    name: str = "start_stand"
     sleep: Callable[[float], None] = time.sleep
     started: bool = False
 
@@ -1152,10 +1132,7 @@ class StartStep:
         if probe.status is None:
             return State.TODO
         if not self.started and BotAccountStep.name in run.completed:
-            run.warn(
-                "Брокер уже отвечает, а токены ботов записал этот запуск: "
-                "перезапустите стенд вручную (stop и start), чтобы он взял новые."
-            )
+            run.warn(run.t("server.broker_restart"))
         return State.DONE
 
     def apply(self, run: Run) -> None:
@@ -1183,24 +1160,30 @@ class StartStep:
                 return
             self.sleep(1)
         raise RuntimeError(
-            f"Брокер не ответил на {BROKER_URL}/status за {START_TRIES}с. Смотрите "
-            "bridge/broker.log и перезапустите стенд."
+            run.t("server.broker_not_started", url=BROKER_URL, tries=START_TRIES)
         )
 
 
 def start_failure(run: Run, done) -> str:
-    return (
-        f"{compose_failure('стартовый скрипт', done)}. Полный вывод: {logs_path(run)}"
+    return run.t(
+        "server.failure_with_log",
+        failure=compose_failure(run, run.t("server.what_start_script"), done),
+        log=logs_path(run),
     )
 
 
-def compose_failure(what: str, done) -> str:
+def compose_failure(run: Run, what: str, done) -> str:
     lines = [
         line.strip()
         for line in f"{done.stdout or ''}\n{done.stderr or ''}".splitlines()
         if line.strip()
     ]
-    return f"{what} закончился с кодом {done.returncode}: {lines[-1] if lines else 'без вывода'}"
+    return run.t(
+        "server.command_failed",
+        what=what,
+        code=done.returncode,
+        detail=lines[-1] if lines else run.t("server.no_output"),
+    )
 
 
 @dataclass
@@ -1210,7 +1193,7 @@ class Stand:
 
 @dataclass
 class StopStandStep:
-    name: str = "Остановить брокер и стенд"
+    name: str = "stop_stand"
     sleep: Callable[[float], None] = time.sleep
     stand: Stand = field(default_factory=Stand)
     tried: bool = False
@@ -1221,11 +1204,7 @@ class StopStandStep:
         if not docker_answers(run):
             if self.tried:
                 return State.DONE
-            run.warn_once(
-                "stand-unseen",
-                "Docker-демон не отвечает, контейнеры стенда не проверены: "
-                "снять их и убедиться нечем, а брокер уже молчит.",
-            )
+            run.warn_once("stand-unseen", run.t("server.stand_unseen"))
             return State.TODO
         if containers(run):
             return State.TODO
@@ -1255,8 +1234,13 @@ class StopStandStep:
         done = run.boundaries.run(self.argv(run), output=stop_log_path(run))
         if done.returncode != 0:
             raise RuntimeError(
-                f"{compose_failure('стоп-скрипт', done)}. "
-                f"Полный вывод: {stop_log_path(run)}"
+                run.t(
+                    "server.failure_with_log",
+                    failure=compose_failure(
+                        run, run.t("server.what_stop_script"), done
+                    ),
+                    log=stop_log_path(run),
+                )
             )
 
     def wait_for_silence(self, run: Run) -> None:
@@ -1266,31 +1250,32 @@ class StopStandStep:
             self.sleep(1)
         script = "stop.ps1" if run.boundaries.platform == WINDOWS else "stop.sh"
         raise RuntimeError(
-            f"Брокер не перестал отвечать на {BROKER_URL}/status за "
-            f"{SILENCE_TRIES}с: остановите его сам {script} и повторите."
+            run.t(
+                "server.broker_not_stopped",
+                url=BROKER_URL,
+                tries=SILENCE_TRIES,
+                script=script,
+            )
         )
 
     def down(self, run: Run) -> None:
         try:
             done = run.boundaries.run(compose_argv(run, "down"))
         except OSError as error:
-            run.warn_once("stack-down", f"docker недоступен, стенд не опущен: {error}")
+            run.warn_once("stack-down", run.t("server.docker_unavailable", error=error))
             return
         if done.returncode == 0:
             self.stand.containers_gone = True
             return
         if not docker_answers(run):
-            run.warn_once(
-                "stand-left-up",
-                "Docker-демон не отвечает, контейнеры стенда остались поднятыми.",
-            )
+            run.warn_once("stand-left-up", run.t("server.stand_left_up"))
             return
-        raise RuntimeError(compose_failure("docker compose down", done))
+        raise RuntimeError(compose_failure(run, "docker compose down", done))
 
 
 @dataclass(frozen=True)
 class VenvRemoveStep:
-    name: str = "Убрать bridge/.venv"
+    name: str = "remove_venv"
     python: str = sys.executable
 
     def targets(self, run: Run) -> list[PurgeTarget]:
@@ -1315,11 +1300,7 @@ class VenvRemoveStep:
         if not path.exists():
             return
         if self.holding(venv_dir(run)):
-            raise NeedsHuman(
-                f"bridge/.venv убрать нельзя: установщик запущен её же "
-                f"интерпретатором {self.python}. Выйдите из этого окружения и "
-                "повторите ту же команду."
-            )
+            raise NeedsHuman(run.t("server.venv_in_use", python=self.python))
         shutil.rmtree(path)
 
     def holding(self, directory: Path) -> bool:
@@ -1361,8 +1342,11 @@ class MountedStep:
             if self.still_mounted(run, target):
                 run.warn_once(
                     f"mounted:{self.name}:{target.id}",
-                    f"{self.name}: {target.id} оставлен: контейнеры стенда подняты, "
-                    "а этот файл им нужен: он смонтирован внутрь или задаёт проект compose.",
+                    run.t(
+                        "server.mounted_kept",
+                        step=run.label(self.name),
+                        target=target.id,
+                    ),
                 )
         report_kept(run, self.name, unapproved(run, targets))
         return State.TODO if approved(run, targets) else State.DONE
@@ -1375,7 +1359,7 @@ class MountedStep:
 
 @dataclass(frozen=True)
 class VolumeRemoveStep:
-    name: str = "Удалить тома стенда"
+    name: str = "remove_stand_volumes"
 
     def targets(self, run: Run) -> list[PurgeTarget]:
         return [
@@ -1391,32 +1375,27 @@ class VolumeRemoveStep:
     def apply(self, run: Run) -> None:
         targets = approved(run, self.targets(run))
         if targets and not docker_answers(run):
-            raise RuntimeError(kept_volumes(targets))
+            raise RuntimeError(kept_volumes(run, targets))
         for target in targets:
             if not volume_exists(run, target.id):
                 run.forget(ROLE, VOLUME_KIND, target.id)
                 continue
             done = run.boundaries.run(["docker", "volume", "rm", target.id])
             if done.returncode != 0:
-                raise RuntimeError(volume_failure(target.id, done))
+                raise RuntimeError(volume_failure(run, target.id, done))
             run.forget(ROLE, VOLUME_KIND, target.id)
             prune_record_home(run.ownership_of(ROLE).path)
 
 
-def volume_failure(name: str, done) -> str:
-    return (
-        f"{compose_failure('docker volume rm ' + name, done)}. Том остался в системе."
+def volume_failure(run: Run, name: str, done) -> str:
+    return run.t(
+        "server.volume_left",
+        failure=compose_failure(run, "docker volume rm " + name, done),
     )
 
 
-def kept_volumes(targets: Sequence[PurgeTarget]) -> str:
-    return (
-        "тома стенда не удалены ("
-        + ", ".join(target.id for target in targets)
-        + "): Docker-демон не отвечает, и контейнеры остались поднятыми, поэтому "
-        "файлы, смонтированные в них, тоже оставлены. Запустите Docker и повторите "
-        "ту же команду: очистка доделает остальное."
-    )
+def kept_volumes(run: Run, targets: Sequence[PurgeTarget]) -> str:
+    return run.t("server.volumes_kept", ids=", ".join(target.id for target in targets))
 
 
 def found_broker_state(run: Run) -> list[str]:
@@ -1424,7 +1403,7 @@ def found_broker_state(run: Run) -> list[str]:
 
 
 def broker_state_step() -> FoundStep:
-    return FoundStep("Удалить состояние брокера", ROLE, STATE_KIND, found_broker_state)
+    return FoundStep("remove_broker_state", ROLE, STATE_KIND, found_broker_state)
 
 
 def remove_steps(
@@ -1439,9 +1418,9 @@ def remove_steps(
 def purge_steps(stand: Stand) -> tuple:
     return (
         broker_state_step(),
-        MountedStep("Убрать конфигурацию стенда", FILE_KIND, stand),
-        MountedStep("Убрать сертификаты", CERT_KIND, stand),
-        OwnedStep("Убрать сохранённые пароли", ROLE, PASSWORDS_KIND),
+        MountedStep("remove_stand_config", FILE_KIND, stand),
+        MountedStep("remove_certificates", CERT_KIND, stand),
+        OwnedStep("remove_saved_passwords", ROLE, PASSWORDS_KIND),
         VolumeRemoveStep(),
     )
 
@@ -1463,17 +1442,18 @@ def server_role(
     )
 
 
-def server_consequence(targets: Sequence[PurgeTarget]) -> str:
+def server_consequence(targets: Sequence[PurgeTarget], lang: str) -> str:
     kinds = {target.kind for target in targets if target.role == ROLE}
-    named = [words for kind, words in KIND_WORDS.items() if kind in kinds]
-    parts = [", ".join(named) + " исчезнут"] if named else []
+    named = [text(lang, key) for kind, key in KIND_WORDS.items() if kind in kinds]
+    parts = (
+        [text(lang, "server.consequence_vanish", things=", ".join(named))]
+        if named
+        else []
+    )
     if VOLUME_KIND in kinds:
-        parts.append(
-            "тома compose с данными комнаты исчезнут: переписка будет удалена "
-            "безвозвратно"
-        )
+        parts.append(text(lang, "server.consequence_volumes"))
     else:
-        parts.append("переписка в комнате на сервере останется на месте")
+        parts.append(text(lang, "server.consequence_room_stays"))
     return "; ".join(parts) + "."
 
 
@@ -1484,31 +1464,28 @@ def steps(
 ) -> tuple:
     return (
         ToolStep(
-            "Найти Docker",
+            "find_docker",
             ("docker", "--version"),
-            "Установите Docker Desktop: winget install Docker.DockerDesktop, "
-            "запустите его и повторите.",
-            "Установите Docker: apt install docker.io, запустите dockerd и повторите.",
+            "server.docker_missing_windows",
+            "server.docker_missing_linux",
         ),
         ToolStep(
-            "Проверить Docker-демон",
+            "check_docker_daemon",
             ("docker", "info"),
-            "Запустите Docker Desktop и повторите.",
-            "Запустите dockerd. Если вы не в группе docker, выполните "
-            "usermod -aG docker $USER, перезайдите и повторите.",
+            "server.daemon_stopped_windows",
+            "server.daemon_stopped_linux",
         ),
         ToolStep(
-            "Проверить Compose v2",
+            "check_compose",
             ("docker", "compose", "version"),
-            "Docker Desktop несёт compose v2; обновите Docker Desktop.",
-            "Установите плагин: apt install docker-compose-v2.",
+            "server.compose_missing_windows",
+            "server.compose_missing_linux",
         ),
         ToolStep(
-            "Найти mkcert",
+            "find_mkcert",
             ("mkcert", "-version"),
-            "Установите mkcert: winget install FiloSottile.mkcert.",
-            "Установите mkcert: apt install mkcert libnss3-tools "
-            "(проект: github.com/FiloSottile/mkcert).",
+            "server.mkcert_missing_windows",
+            "server.mkcert_missing_linux",
         ),
         ServerNameStep(),
         VenvStep(python=python),
@@ -1528,10 +1505,8 @@ def steps(
 
 
 def add_options(options: RoleOptions) -> None:
-    options.add("--admin-user", help="локальный аккаунт человека в Element")
-    options.add(
-        "--room-id", help="идентификатор комнаты, например !AbCdEf:agentschat.local"
-    )
+    options.add("--admin-user", help=options.t("server.help_admin_user"))
+    options.add("--room-id", help=options.t("server.help_room_id", server=SERVER_NAME))
 
 
 def report(run: Run, people: HumanAccountStep, stand: Stand) -> None:
@@ -1540,17 +1515,16 @@ def report(run: Run, people: HumanAccountStep, stand: Stand) -> None:
         for line in removal_lines(run, stand):
             run.say(line)
         return
-    run.say(f"Брокер для участников: {BROKER_URL}")
-    run.say(f"Сервер Matrix и Element Web: {server_url()}")
+    run.say(run.t("server.report_broker", url=BROKER_URL))
+    run.say(run.t("server.report_matrix", url=server_url()))
     if people.became_admin:
-        run.say(
-            "Первый аккаунт стал администратором сервера и получил приглашение "
-            "в административную комнату."
-        )
+        run.say(run.t("server.report_became_admin"))
     run.say(certificate_note(run))
     run.say(
-        "Дальше в каждой сессии CLI вызвать /chatlogin. Остановить всё: "
-        + ("stop.ps1" if run.boundaries.platform == WINDOWS else "stop.sh")
+        run.t(
+            "server.report_next",
+            script="stop.ps1" if run.boundaries.platform == WINDOWS else "stop.sh",
+        )
     )
 
 
@@ -1558,17 +1532,18 @@ def removal_lines(run: Run, stand: Stand) -> list[str]:
     kept = kept_items(run)
     return [
         *(
-            ["Убрано не всё, осталось в системе:", *left_lines(kept)]
+            [run.t("server.left_heading"), *left_lines(kept)]
             if kept
-            else ["Стенд остановлен, установка сервера снята."]
+            else [run.t("server.removed")]
         ),
-        *stand_lines(stand),
+        *stand_lines(run, stand),
         *trust_lines(run),
         hosts_line(run),
         *image_lines(run),
-        "Поставить обратно: "
-        + INSTALL_ENTRY.get(run.boundaries.platform, "install.sh")
-        + f" --role {ROLE}",
+        run.t(
+            "server.reinstall_hint",
+            entry=INSTALL_ENTRY.get(run.boundaries.platform, "install.sh"),
+        ),
     ]
 
 
@@ -1578,10 +1553,7 @@ def hosts_line(run: Run) -> str:
         if run.boundaries.platform == WINDOWS
         else "/etc/hosts"
     )
-    return (
-        f"Строка «127.0.0.1 {SERVER_NAME}» в {where} осталась: уберите её, "
-        "если имя больше не нужно машине."
-    )
+    return run.t("server.hosts_line_kept", server=SERVER_NAME, where=where)
 
 
 def kept_items(run: Run) -> list[Left]:
@@ -1604,14 +1576,12 @@ def _recorded_left(run: Run) -> Left | None:
     )
     if not files:
         return None
-    return Left("остались записи установщика: их удалит --purge", files)
+    return Left(run.t("server.left_records"), files)
 
 
 def _volumes_left(run: Run) -> list[Left]:
     if not docker_answers(run):
-        return [
-            Left("тома стенда остались: Docker-демон не отвечает, прочитать их нечем.")
-        ]
+        return [Left(run.t("server.left_volumes_unreadable"))]
     names = project_volumes(run)
     if not names:
         return []
@@ -1621,8 +1591,8 @@ def _volumes_left(run: Run) -> list[Left]:
     return [
         item
         for item in (
-            Left("тома compose с данными сервера оставлены: их удалит --purge", mine),
-            Left("тома стенда не записаны за установщиком, поэтому оставлены", theirs),
+            Left(run.t("server.left_volumes_mine"), mine),
+            Left(run.t("server.left_volumes_theirs"), theirs),
         )
         if item.files
     ]
@@ -1632,27 +1602,20 @@ def _foreign_left(run: Run) -> Left | None:
     files = foreign_files(run)
     if not files:
         return None
-    return Left("остались: стенд собран вручную, установщик их не записывал", files)
+    return Left(run.t("server.left_foreign"), files)
 
 
 def _state_left(run: Run) -> Left | None:
     files = tuple(broker_state(run))
     if not files:
         return None
-    return Left(
-        "состояние брокера осталось: эти файлы создаёт брокер, установщик их не "
-        "записывает и удаляет только рядом с записанным continuwuity.toml",
-        files,
-    )
+    return Left(run.t("server.left_state"), files)
 
 
-def stand_lines(stand: Stand) -> list[str]:
+def stand_lines(run: Run, stand: Stand) -> list[str]:
     if stand.containers_gone:
-        return [
-            "Контейнеры стенда и его сеть сняты, хотя они и не записывались: "
-            "это не данные, их создаёт и поднимает start."
-        ]
-    return ["Контейнеры стенда остались: Docker-демон не отвечал, снять их было нечем."]
+        return [run.t("server.stand_removed")]
+    return [run.t("server.stand_remains")]
 
 
 def trust_lines(run: Run) -> list[str]:
@@ -1662,13 +1625,11 @@ def trust_lines(run: Run) -> list[str]:
     command = (
         "mkcert -uninstall"
         if run.boundaries.platform == WINDOWS
-        else f'CAROOT="{root}" mkcert -uninstall (от root)'
+        else run.t("server.untrust_command_linux", caroot=root)
     )
     return [
-        f"Корень mkcert остался: {root}. Он общий для всех проектов машины, "
-        "поэтому установщик его не трогает.",
-        f"Убрать его вручную ({command}) можно, но это сломает все прочие "
-        f"сертификаты mkcert и оставит файлы в {root}.",
+        run.t("server.mkcert_root_kept", root=root),
+        run.t("server.mkcert_root_manual", command=command, root=root),
     ]
 
 
@@ -1677,21 +1638,29 @@ def image_lines(run: Run) -> list[str]:
     if not images:
         return []
     return [
-        "Образы стенда остались: "
-        + ", ".join(images)
-        + ". Они общие для других проектов, поэтому установщик их не удаляет.",
-        "Убрать их: " + ", ".join(f"docker image rm {image}" for image in images),
+        run.t("server.images_kept", images=", ".join(images)),
+        run.t(
+            "server.images_remove",
+            commands=", ".join(f"docker image rm {image}" for image in images),
+        ),
     ]
 
 
 def certificate_note(run: Run) -> str:
     expires = not_after(cert_path(run))
-    when = f"Сертификат истекает {expires}. " if expires else ""
-    return (
-        f"{when}Обновить его: mkcert -cert-file {cert_path(run)} -key-file "
-        f"{cert_key_path(run)} {SERVER_NAME}, затем docker compose -f "
-        f'"{compose_file(run)}" restart caddy.'
+    sentences = (
+        [run.t("server.certificate_expires", expires=expires)] if expires else []
     )
+    sentences.append(
+        run.t(
+            "server.certificate_renew",
+            cert_file=cert_path(run),
+            key_file=cert_key_path(run),
+            server=SERVER_NAME,
+            compose=compose_file(run),
+        )
+    )
+    return " ".join(sentences)
 
 
 def not_after(path: Path) -> str:

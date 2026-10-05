@@ -140,6 +140,9 @@ the mkcert root, the human's account, the room) it stops with exit code `3` and
 prints the exact command; in a terminal such steps are simply asked. Running
 the same command again continues from where it stopped.
 
+The installer speaks English by default. Add `--lang ru` (or `--lang=ru`) for
+Russian; the flag also switches the messages the two scripts print themselves.
+
 To remove, run `.\install.ps1 --role both --remove`; it asks nothing. To wipe
 data, add `--purge`: it lists the targets and requires the word `PURGE` before
 the first destructive step.

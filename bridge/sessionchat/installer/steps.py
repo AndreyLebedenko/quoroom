@@ -7,23 +7,22 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from .boundaries import Boundaries
+from .catalogue import step_label, text
 from .confirmation import Confirmation
 from .ownership import Ownership, PurgeTarget
 from .secrets import Secrets
 
-RESUME = "Повторите ту же команду: она продолжит с места, где остановилась."
-
 
 class State(Enum):
-    DONE = "сделано"
-    TODO = "не сделано"
+    DONE = "done"
+    TODO = "todo"
 
 
 class Outcome(Enum):
-    DONE = "выполнено"
-    HUMAN = "нужен человек"
-    FAILED = "сбой"
-    CANCELLED = "отменено"
+    DONE = "done"
+    HUMAN = "human"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class Cancelled(Exception):
@@ -120,8 +119,11 @@ class FoundStep:
         if records:
             run.warn_once(
                 f"records:{self.name}",
-                f"{self.name}: оставлено как запись установщика: "
-                + ", ".join(target.id for target in records),
+                run.t(
+                    "steps.kept_as_record",
+                    step=run.label(self.name),
+                    ids=", ".join(target.id for target in records),
+                ),
             )
         targets = self.targets(run)
         report_kept(run, self.name, unapproved(run, targets))
@@ -170,17 +172,23 @@ class Run:
         ownership.forget(kind, id)
         ownership.save()
 
-    def say(self, text: str) -> None:
-        self.boundaries.stdout.write(self.secrets.scrub(text) + "\n")
+    def t(self, key: str, **params: object) -> str:
+        return text(self.boundaries.lang, key, **params)
 
-    def warn(self, text: str) -> None:
-        self.boundaries.stderr.write(self.secrets.scrub(text) + "\n")
+    def label(self, name: str) -> str:
+        return step_label(self.boundaries.lang, name)
 
-    def warn_once(self, key: str, text: str) -> None:
+    def say(self, line: str) -> None:
+        self.boundaries.stdout.write(self.secrets.scrub(line) + "\n")
+
+    def warn(self, line: str) -> None:
+        self.boundaries.stderr.write(self.secrets.scrub(line) + "\n")
+
+    def warn_once(self, key: str, line: str) -> None:
         if key in self.warned:
             return
         self.warned.add(key)
-        self.warn(text)
+        self.warn(line)
 
 
 @dataclass(frozen=True)
@@ -189,22 +197,26 @@ class Failure:
     completed: tuple[str, ...]
     error: str = ""
 
-    def render(self, secrets: Secrets) -> str:
-        lines = [f"Сбой на шаге «{self.step}»."]
+    def render(self, secrets: Secrets, lang: str) -> str:
+        lines = [text(lang, "steps.failure_step", step=step_label(lang, self.step))]
         if self.error:
-            lines.append(f"Причина: {secrets.scrub(self.error)}")
+            lines.append(text(lang, "steps.failure_reason", error=self.error))
         if self.completed:
-            lines.append("Изменения этого запуска сохранены:")
-            lines += [f"    {name}" for name in self.completed]
-        lines.append(RESUME)
-        return "\n".join(lines)
+            lines.append(text(lang, "steps.failure_saved"))
+            lines += [f"    {step_label(lang, name)}" for name in self.completed]
+        lines.append(text(lang, "steps.resume"))
+        return secrets.scrub("\n".join(lines))
 
 
 def report_kept(run: Run, name: str, targets: Sequence[PurgeTarget]) -> None:
     if targets:
         run.warn_once(
             f"kept:{name}",
-            f"{name}: не подтверждено и оставлено: " + ", ".join(t.id for t in targets),
+            run.t(
+                "steps.kept_unconfirmed",
+                step=run.label(name),
+                ids=", ".join(t.id for t in targets),
+            ),
         )
 
 
@@ -219,29 +231,33 @@ def execute(steps: Sequence[Step], run: Run) -> Outcome:
 def _one(step: Step, run: Run) -> Outcome:
     try:
         if step.check(run) is State.DONE:
-            run.say(f"{step.name}: уже сделано.")
+            run.say(run.t("steps.already_done", step=run.label(step.name)))
             return Outcome.DONE
         step.apply(run)
         state = step.check(run)
     except NeedsHuman as need:
         run.say(str(need))
         run.warn(
-            f"Остановлено на шаге «{step.name}»: это должен сделать человек. {RESUME}"
+            run.t(
+                "steps.stopped_for_human",
+                step=run.label(step.name),
+                resume=run.t("steps.resume"),
+            )
         )
         return Outcome.HUMAN
     except Cancelled:
-        run.warn("Отменено человеком, ничего не изменено.")
+        run.warn(run.t("steps.cancelled"))
         return Outcome.CANCELLED
     except Exception as error:
         return refuse(step, run, error)
     if state is State.TODO:
         return refuse(step, run, None)
-    run.say(f"{step.name}: готово.")
+    run.say(run.t("steps.done", step=run.label(step.name)))
     run.completed.append(step.name)
     return Outcome.DONE
 
 
 def refuse(step: Step, run: Run, error: Exception | None) -> Outcome:
     failure = Failure(step.name, tuple(run.completed), str(error or ""))
-    run.warn(failure.render(run.secrets))
+    run.warn(failure.render(run.secrets, run.boundaries.lang))
     return Outcome.FAILED
