@@ -35,7 +35,6 @@
   "kit.uninstall_done": "AGENTSCHAT: удаление набора Quoroom закончено.",
   "kit.uninstall_kept": "Файлы, изменённые вручную, оставлены. Удалить и их: agentschat uninstall --force",
   "kit.uninstall_nothing": "AGENTSCHAT: установленного набора Quoroom нет, удалять нечего.",
-  "kit.variant_missing": "AGENTSCHAT: набора Quoroom на языке {language} пока нет, поэтому положен {fallback}. Повторите agentschat install --lang {language}, когда он появится.",
   "login_broker_unreachable": "брокер недоступен на {url}: {error}",
   "login_connected": "AGENTSCHAT: сессия {agent} подключена к комнате {room}.",
   "login_help": "подключить эту сессию к чату",

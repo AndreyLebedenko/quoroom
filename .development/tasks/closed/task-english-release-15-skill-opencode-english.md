@@ -1,6 +1,6 @@
 # Task english-release-15: The OpenCode skill and command in English
 
-**Status:** Planned.
+**Status:** Implemented, awaiting owner review of the text.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** task english-release-14 (same method and tests).
 **Estimate:** 3 hours.

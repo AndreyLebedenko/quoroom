@@ -8,6 +8,8 @@ from sessionchat import kit
 EXPECTED_KIT_FILES = {
     "common/opencode/plugins/agentschat.js",
     "en/claude/skills/chatlogin/SKILL.md",
+    "en/opencode/command/chatlogin.md",
+    "en/opencode/skills/chatlogin/SKILL.md",
     "ru/claude/skills/chatlogin/SKILL.md",
     "ru/opencode/command/chatlogin.md",
     "ru/opencode/skills/chatlogin/SKILL.md",
@@ -98,22 +100,6 @@ class KitContentsTests(unittest.TestCase):
             ["common/opencode/plugins/agentschat.js"],
         )
 
-    def test_every_variant_directory_holds_the_same_relative_paths_for_both_clis(self):
-        for variant in sorted(variants()):
-            with self.subTest(variant=variant):
-                self.assertEqual(
-                    {
-                        relative.split("/", 1)[1]
-                        for relative in EXPECTED_KIT_FILES
-                        if relative.startswith(f"{variant}/")
-                    },
-                    {
-                        "claude/skills/chatlogin/SKILL.md",
-                        "opencode/command/chatlogin.md",
-                        "opencode/skills/chatlogin/SKILL.md",
-                    },
-                )
-
 
 class KitNamesNoQuoroomRepositoryPathTests(unittest.TestCase):
     def test_no_kit_file_mentions_a_path_inside_the_quoroom_repository(self):
@@ -155,6 +141,15 @@ class SkillAgreementTests(unittest.TestCase):
             for lang in variants()
             for cli in kit.CLIS
         }
+
+    def test_every_language_and_cli_pair_has_a_skill_to_compare(self):
+        for lang in variants():
+            for cli in kit.CLIS:
+                resource = kit_root().joinpath(
+                    lang, cli, "skills", "chatlogin", "SKILL.md"
+                )
+                with self.subTest(lang=lang, cli=cli):
+                    self.assertTrue(resource.is_file(), resource)
 
     def test_the_languages_of_one_cli_name_the_same_commands_and_flags(self):
         skills = self.skills()
@@ -209,26 +204,35 @@ class SkillAgreementTests(unittest.TestCase):
                 self.assertNotEqual(self.mentions(drifted), self.mentions(text))
 
 
-class TemporaryRussianOnlyVariantTests(unittest.TestCase):
-    def test_only_the_russian_variant_ships(self):
-        self.assertEqual(variants(), [kit.FALLBACK_VARIANT])
+class KitCompletenessTests(unittest.TestCase):
+    """Задача 15: язык без файла - падающий тест, а не откат во время работы."""
 
-    def test_the_language_that_has_a_variant_is_its_own(self):
-        for cli in kit.CLIS:
-            with self.subTest(cli=cli):
+    FILES_OF_A_LANGUAGE = {
+        "claude/skills/chatlogin/SKILL.md",
+        "opencode/command/chatlogin.md",
+        "opencode/skills/chatlogin/SKILL.md",
+    }
+
+    def paths_of(self, lang: str) -> set[str]:
+        found = files_under(kit_root().joinpath(lang))
+        return {relative for relative in found}
+
+    def test_every_language_ships_every_kit_file(self):
+        for lang in variants():
+            with self.subTest(lang=lang):
+                self.assertEqual(self.paths_of(lang), self.FILES_OF_A_LANGUAGE)
+
+    def test_every_language_ships_a_skill_for_both_clis(self):
+        for lang in variants():
+            with self.subTest(lang=lang):
                 self.assertEqual(
-                    kit.variant_of(kit.FALLBACK_VARIANT, cli)[1], kit.CODE_NONE
+                    {relative.split("/", 1)[0] for relative in self.paths_of(lang)},
+                    set(kit.CLIS),
                 )
 
-    def test_a_language_without_a_variant_falls_back_and_says_so(self):
-        for cli in kit.CLIS:
-            with self.subTest(cli=cli):
-                root, code = kit.variant_of("en", cli)
-                self.assertEqual(code, kit.VARIANT_MISSING)
-                self.assertEqual(root.name, kit.FALLBACK_VARIANT)
-
-    def test_a_substituted_variant_is_not_a_refusal(self):
-        self.assertNotIn(kit.VARIANT_MISSING, kit.REFUSALS)
+    def test_a_language_without_a_file_is_reported_as_missing(self):
+        broken = self.paths_of("en") - {"opencode/command/chatlogin.md"}
+        self.assertNotEqual(broken, self.FILES_OF_A_LANGUAGE)
 
 
 if __name__ == "__main__":

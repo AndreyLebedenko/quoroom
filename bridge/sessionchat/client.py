@@ -516,7 +516,6 @@ def do_install(args: argparse.Namespace) -> None:
         kit_report = kit.install(STORE / "kit.json", roots, force=args.force, lang=lang)
     except kit.KitConflict as refusal:
         refuse(args, refusal)
-    notice_substituted_variant(kit_report, lang)
     reported(args, kit_report, lang, kit.install_summary(kit_report.steps, lang))
 
 
@@ -541,14 +540,6 @@ def refuse(args: argparse.Namespace, conflict: kit.KitConflict) -> None:
         ).as_json()
     )
     raise SystemExit(REFUSED)
-
-
-def notice_substituted_variant(kit_report: kit.Report, lang: str) -> None:
-    if kit_report.code == kit.VARIANT_MISSING:
-        print(
-            speak("kit.variant_missing", language=lang, fallback=kit.FALLBACK_VARIANT),
-            file=sys.stderr,
-        )
 
 
 def reported(

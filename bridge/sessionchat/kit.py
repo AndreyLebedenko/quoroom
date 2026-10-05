@@ -42,10 +42,7 @@ COMMAND_UNINSTALL = "uninstall"
 CODE_NONE = "none"
 CODE_CONFLICT = "conflict"
 COMMON = "common"
-FALLBACK_VARIANT = "ru"
-VARIANT_MISSING = "kit_variant_missing"
-REFUSALS = frozenset({CODE_CONFLICT})
-KNOWN_CODES = frozenset({CODE_NONE, CODE_CONFLICT, VARIANT_MISSING})
+KNOWN_CODES = frozenset({CODE_NONE, CODE_CONFLICT})
 
 
 def action_key(action: Action) -> str:
@@ -89,7 +86,7 @@ class Report:
 
     @property
     def ok(self) -> bool:
-        return self.code not in REFUSALS
+        return self.code == CODE_NONE
 
     @property
     def wrote(self) -> bool:
@@ -130,9 +127,9 @@ class Report:
                 return None
             if code not in KNOWN_CODES:
                 return None
-            if stored["ok"] is not (code not in REFUSALS):
+            if stored["ok"] is not (code == CODE_NONE):
                 return None
-            if code in REFUSALS and not steps:
+            if code == CODE_CONFLICT and not steps:
                 return None
         except (ValueError, KeyError, TypeError):
             return None
@@ -173,32 +170,22 @@ def target_roots(
     return {cli: Path(given[cli]) if given[cli] else DEFAULT_ROOTS[cli] for cli in clis}
 
 
-def variant_of(
-    lang: str, cli: str, source: Traversable = KIT
-) -> tuple[Traversable, str]:
-    if (source / lang / cli).is_dir():
-        return source / lang, CODE_NONE
-    return source / FALLBACK_VARIANT, VARIANT_MISSING
-
-
-def variants_of(
-    lang: str, clis: Iterable[str], source: Traversable = KIT
-) -> tuple[dict[str, Traversable], str]:
-    chosen = {cli: variant_of(lang, cli, source) for cli in clis}
-    missing = any(code == VARIANT_MISSING for _, code in chosen.values())
-    variants = {cli: variant for cli, (variant, _) in chosen.items()}
-    return variants, VARIANT_MISSING if missing else CODE_NONE
-
-
-def kit_files(
-    cli: str, variant: Traversable, source: Traversable = KIT
-) -> list[KitFile]:
+def kit_files(cli: str, lang: str, source: Traversable = KIT) -> list[KitFile]:
+    variant = source / lang / cli
+    if not variant.is_dir():
+        raise FileNotFoundError(
+            f"the kit has no {cli} files in {lang}: {variant}",
+        )
     found = [
         KitFile(cli, relative, node.read_bytes())
-        for root in (source / COMMON, variant)
-        if (root / cli).is_dir()
-        for relative, node in walk(root / cli, PurePosixPath())
+        for relative, node in walk(variant, PurePosixPath())
     ]
+    shared = source / COMMON / cli
+    if shared.is_dir():
+        found += [
+            KitFile(cli, relative, node.read_bytes())
+            for relative, node in walk(shared, PurePosixPath())
+        ]
     return sorted(found, key=lambda item: item.relative)
 
 
@@ -251,13 +238,13 @@ def install_action(content: bytes, target: Path, listed: bool, force: bool) -> A
 def plan_install(
     roots: dict[str, Path],
     manifest: dict[Path, Entry],
-    variants: dict[str, Traversable],
+    lang: str,
     force: bool = False,
     source: Traversable = KIT,
 ) -> list[Step]:
     steps = []
     for cli, root in roots.items():
-        for item in kit_files(cli, variants[cli], source):
+        for item in kit_files(cli, lang, source):
             target = root.resolve().joinpath(*item.relative.parts)
             action = install_action(item.content, target, target in manifest, force)
             steps.append(Step(action, target, cli, item.content))
@@ -288,10 +275,9 @@ def install(
     lang: str,
 ) -> Report:
     manifest = load_manifest(manifest_path)
-    variants, code = variants_of(lang, roots, source)
-    steps = plan_install(roots, manifest, variants, force, source)
+    steps = plan_install(roots, manifest, lang, force, source)
     save_manifest(manifest_path, apply_install(steps, manifest, lang))
-    return Report(COMMAND_INSTALL, code, tuple(steps))
+    return Report(COMMAND_INSTALL, CODE_NONE, tuple(steps))
 
 
 def uninstall_action(target: Path, entry: Entry, force: bool) -> Action:
