@@ -22,11 +22,12 @@ Kept by the orchestrator (claude-code) for the owner's final review. Branch
 - Owner decision 2026-10-06: `demo/battleship` and `tools/linux-container` are
   translated (task 21). Two lab scripts keep a Cyrillic path and file name as
   fixtures on purpose; the scan allowlists exactly those two files.
-- OPEN, owner: on a participant machine of a Russian room the client speaks
-  English until the first broker answer, because `agentschat install` does not
-  write `~/.agentschat/language`. Recorded as an observation in step R1 of the
-  handoff and as a fact in the CHANGELOG upgrade notes. Either accept it or open
-  a card so that `install --lang ru` remembers the language.
+- Owner decision 2026-10-06: on a participant machine of a Russian room the client
+  spoke English until the first broker answer. Resolved by task 22: after the
+  broker check the participant installer runs `agentschat status` once, so the
+  client learns the room language from the broker (chosen over making `install
+  --lang` write the file, and over a `/chatlogin --lang` flag, which would be a
+  per-participant language against decision 1).
 - The tasks 20 and 21 reviews found: a handoff step that would have purged a live
   stand if run in a second profile (task 20), a reversed sentence about the CA
   and an unneeded Cyrillic marker (task 21). All fixed.
