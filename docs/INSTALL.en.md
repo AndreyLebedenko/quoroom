@@ -92,6 +92,16 @@ down it has not yet asked the broker. So a participant installed with
 installer's language, not the room's. The fix is to run
 `agentschat install --lang <room language>`.
 
+The client's own language is not the installer's. Right after it has confirmed
+that the broker answers, the participant installer runs `agentschat status` once;
+the client learns the language of the room from that answer and writes it to
+`~/.agentschat/language`. On a machine where the participant installer has run,
+`agentschat --help` and the first refusal are therefore already in the room
+language. If that step cannot learn the language - the client did not run, or the
+broker did not answer it - the install still succeeds, the final report says that
+the room language was not learned, and the client falls back to English until the
+broker answers one of its commands.
+
 To change the language of the room later, edit `language` in
 `bridge/config.yaml`, restart the stand (the broker reads the key when it
 starts), and run `agentschat install --lang <new language>` again on each
@@ -359,6 +369,11 @@ printed before the question - read it.
 - the installer's logs `bridge/logs/start.log`, `bridge/logs/stop.log` and
   `bridge/broker.log`: the removal task card does not count them as part of the
   purge, and the report names the files and gives the command to delete them;
+- the client's own files in `~/.agentschat`: `language` (the room language, which
+  the installer asked the broker for) and `opencode-plugin.log`. Only the session
+  files with their tokens are deleted; these are named in the report as left in
+  place. Delete `~/.agentschat/language` by hand to make the client forget the room
+  language until it gets an answer from the broker again;
 - the repository. Neither removal nor purge touches it.
 
 The report after removal prints everything that was left, with the reason, and

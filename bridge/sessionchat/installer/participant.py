@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
+from .. import client_language
+from .. import client_result
 from .. import kit
 from .boundaries import Boundaries, WINDOWS
 from .catalogue import text
@@ -34,6 +37,8 @@ PATHEXT = ".COM;.EXE;.BAT;.CMD"
 SERVER_ROLE = "server"
 JSON_FLAG = "--json"
 LANGUAGE_FLAG = "--lang"
+URL_VARIABLE = "AGENTSCHAT_URL"
+STATUS_COMMAND = "status"
 INSTALL_ENTRY = {"windows": "install.ps1", "linux": "install.sh"}
 
 
@@ -246,6 +251,50 @@ class BrokerStep:
         raise RuntimeError(broker_refusal(run, error))
 
 
+@dataclass
+class LanguageStep:
+    name: str = "learn_room_language"
+    handled: bool = False
+    learned: bool = False
+
+    def check(self, run: Run) -> State:
+        if self.handled or remembered_language(run) is not None:
+            return State.DONE
+        return State.TODO
+
+    def apply(self, run: Run) -> None:
+        self.handled = True
+        if self.answer_of(run) is not None:
+            self.learned = True
+            return
+        run.warn(run.t("participant.language_not_learned", url=broker_url(run)))
+
+    def answer_of(self, run: Run) -> str | None:
+        try:
+            result = run.boundaries.run(
+                [str(agentchat(run)), STATUS_COMMAND],
+                env={URL_VARIABLE: broker_url(run)},
+            )
+        except (OSError, ValueError):
+            return None
+        return learned_language(result)
+
+
+def learned_language(result: subprocess.CompletedProcess[str]) -> str | None:
+    if result.returncode != 0:
+        return None
+    answer = client_result.read(result.stdout or "")
+    if answer is None or answer.get("command") != STATUS_COMMAND:
+        return None
+    if answer.get("ok") is not True:
+        return None
+    return client_language.valid(answer.get("language"))
+
+
+def remembered_language(run: Run) -> str | None:
+    return client_language.remembered(store(run))
+
+
 def participant_consequence(targets: Sequence[PurgeTarget], lang: str) -> str:
     sessions = text(lang, "participant.consequence_sessions")
     if any(target.role == SERVER_ROLE for target in targets):
@@ -256,6 +305,7 @@ def participant_consequence(targets: Sequence[PurgeTarget], lang: str) -> str:
 def participant_role(version: tuple[int, int] | None = None) -> Role:
     removal = Removal()
     kit = KitInstallStep()
+    language = LanguageStep()
     return Role(
         name=ROLE,
         record_path=record_path,
@@ -265,6 +315,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
             PackageStep(),
             kit,
             BrokerStep(),
+            language,
         ),
         remove=(
             KitRemoveStep(removal=removal),
@@ -272,7 +323,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
         ),
         purge=(session_step(),),
         purge_consequence=participant_consequence,
-        report=partial(report, removal=removal, kit=kit),
+        report=partial(report, removal=removal, kit=kit, language=language),
         add_options=add_options,
     )
 
@@ -613,9 +664,11 @@ def tool_instruction(run: Run) -> str:
     return run.t("participant.tool_missing_linux")
 
 
-def report(run: Run, removal: Removal, kit: KitInstallStep) -> None:
+def report(
+    run: Run, removal: Removal, kit: KitInstallStep, language: LanguageStep
+) -> None:
     if not run.plan.remove:
-        _reported_installed(run, kit)
+        _reported_installed(run, kit, language)
         return
     lines = removal_lines(run, removal)
     if run.plan.purge:
@@ -624,7 +677,7 @@ def report(run: Run, removal: Removal, kit: KitInstallStep) -> None:
         run.say(line)
 
 
-def _reported_installed(run: Run, kit: KitInstallStep) -> None:
+def _reported_installed(run: Run, kit: KitInstallStep, language: LanguageStep) -> None:
     for cli, files in sorted(stale_files(run).items()):
         run.say(run.t("participant.kit_edited_kept", cli=cli, files=", ".join(files)))
     for line in env_lines(run):
@@ -632,6 +685,8 @@ def _reported_installed(run: Run, kit: KitInstallStep) -> None:
     for line in path_lines(run):
         run.say(line)
     run.say(run.t("participant.broker_answers", url=broker_url(run)))
+    if language.handled and not language.learned:
+        run.say(run.t("participant.language_not_learned", url=broker_url(run)))
     run.say(
         f"{restart_instruction(run, kit.written, kit.clis)} "
         f"{run.t('participant.chatlogin_next')}"

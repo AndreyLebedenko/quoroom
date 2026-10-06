@@ -2,9 +2,7 @@
 
 import json
 
-from sessionchat.client_result import PREFIX
-
-MARK = f"{PREFIX} "
+from sessionchat.client_result import MARK
 
 
 def result_lines(text: str) -> list[str]:

@@ -55,10 +55,10 @@ class SharedMachine(ServerMachine):
         super().__init__(home, repo)
         self.participant_machine = participant_machine
 
-    def __call__(self, argv, stdin=None, output=None):
+    def __call__(self, argv, stdin=None, output=None, **kwargs):
         if Path(str(argv[0])).name.startswith(PARTICIPANT_TOOLS):
-            return self.participant_machine(argv)
-        return super().__call__(argv, stdin, output)
+            return self.participant_machine(argv, **kwargs)
+        return super().__call__(argv, stdin, output, **kwargs)
 
 
 class BothRolesCase(ServerLanguageCase):
