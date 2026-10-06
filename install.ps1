@@ -1,8 +1,8 @@
 ﻿#Requires -Version 5.1
 <#
-  Quoroom - установка и удаление одной машиной одной командой:
+  Quoroom - install and remove one machine with one command:
 
-    .\install.ps1                                # спросит роль
+    .\install.ps1                                # asks for the role
     .\install.ps1 --role both
     .\install.ps1 --role participant --remove
     .\install.ps1 --role server --remove --purge

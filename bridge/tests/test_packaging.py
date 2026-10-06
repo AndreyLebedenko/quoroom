@@ -8,6 +8,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from sessionchat import kit
+
 BRIDGE = Path(__file__).resolve().parent.parent
 BROKER_ONLY_MODULES = ("nio", "yaml", "aiohttp")
 
@@ -150,6 +152,82 @@ class InstallerNeedsNothingInstalledTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--role", completed.stdout)
+
+
+class MessageCatalogueFilesAreShippedTests(unittest.TestCase):
+    PACKAGE = BRIDGE / "sessionchat"
+
+    def shipped_files(self) -> set[Path]:
+        with open(BRIDGE / "pyproject.toml", "rb") as source:
+            patterns = tomllib.load(source)["tool"]["setuptools"]["package-data"][
+                "sessionchat"
+            ]
+        return {path for pattern in patterns for path in self.PACKAGE.glob(pattern)}
+
+    def catalogue_files(self) -> set[Path]:
+        return {
+            path
+            for language in ("en", "ru")
+            for path in self.PACKAGE.rglob(f"{language}.json")
+        }
+
+    def test_the_installer_catalogue_is_found_by_the_scan(self):
+        found = {
+            path.relative_to(self.PACKAGE).as_posix() for path in self.catalogue_files()
+        }
+        self.assertLessEqual(
+            {"installer/messages/en.json", "installer/messages/ru.json"}, found
+        )
+
+    def test_every_language_file_of_every_catalogue_matches_a_package_data_entry(self):
+        unshipped = self.catalogue_files() - self.shipped_files()
+        self.assertEqual(
+            sorted(path.relative_to(self.PACKAGE).as_posix() for path in unshipped), []
+        )
+
+
+class KitFilesAreShippedTests(unittest.TestCase):
+    PACKAGE = BRIDGE / "sessionchat"
+
+    def shipped_files(self) -> set[Path]:
+        with open(BRIDGE / "pyproject.toml", "rb") as source:
+            patterns = tomllib.load(source)["tool"]["setuptools"]["package-data"][
+                "sessionchat"
+            ]
+        return {path for pattern in patterns for path in self.PACKAGE.glob(pattern)}
+
+    def kit_files(self) -> set[Path]:
+        return {path for path in (self.PACKAGE / "kit").rglob("*") if path.is_file()}
+
+    def test_every_kit_file_of_every_variant_is_shipped(self):
+        unshipped = self.kit_files() - self.shipped_files()
+        self.assertEqual(
+            sorted(path.relative_to(self.PACKAGE).as_posix() for path in unshipped), []
+        )
+
+    def test_the_scan_sees_the_shared_file_and_every_variant(self):
+        found = {path.relative_to(self.PACKAGE).as_posix() for path in self.kit_files()}
+        variants = sorted(
+            child.name
+            for child in (self.PACKAGE / "kit").iterdir()
+            if child.is_dir() and child.name != kit.COMMON
+        )
+        self.assertTrue(variants)
+        self.assertLessEqual(
+            {
+                f"kit/{kit.COMMON}/opencode/plugins/agentschat.js",
+                *(
+                    f"kit/{variant}/{relative}"
+                    for variant in variants
+                    for relative in (
+                        "claude/skills/chatlogin/SKILL.md",
+                        "opencode/command/chatlogin.md",
+                        "opencode/skills/chatlogin/SKILL.md",
+                    )
+                ),
+            },
+            found,
+        )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 # Task client-bilingual: English by default in the agentschat client
 
-**Status:** Planned.
+**Status:** Rejected. Superseded by story-english-release.md: the work is split
+into tasks english-release-07 to 11 and 13, and the card's open questions are
+settled there (one language per room, set in `config.yaml`; machine-readable
+contracts between components).
 **Depends on:** task installer-bilingual (the catalogue mechanism and the
 `--lang` convention are reused, not redesigned).
 

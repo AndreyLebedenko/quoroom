@@ -1,7 +1,7 @@
 #!/bin/sh
-# Тот же вход, что и agentschat.cmd, для macOS и Linux.
-# Пути ищем от расположения скрипта, а не от текущего каталога: агент может
-# вызвать его откуда угодно внутри проекта.
+# The same entry point as agentschat.cmd, for macOS and Linux.
+# Paths are resolved from the location of this script, not from the current
+# directory: an agent can call it from anywhere inside the project.
 here=$(cd "$(dirname "$0")" && pwd)
 if [ -x "$here/.venv/bin/python" ]; then
   python="$here/.venv/bin/python"

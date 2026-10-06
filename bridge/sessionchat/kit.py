@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from importlib.resources import files
@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from importlib.resources.abc import Traversable
 
+from .i18n import Catalogue
+
 CLIS = ("claude", "opencode")
 CLI_NAMES = {"claude": "Claude Code", "opencode": "OpenCode"}
 DEFAULT_ROOTS = {
@@ -19,20 +21,32 @@ DEFAULT_ROOTS = {
     "opencode": Path.home() / ".config" / "opencode",
 }
 KIT = files(__package__) / "kit"
+CATALOGUE = Catalogue("sessionchat", "client_messages")
 
 
 class Action(Enum):
-    INSTALL = "установлен"
-    UPDATE = "обновлён"
-    OVERWRITE = "перезаписан"
-    UNCHANGED = "без изменений"
-    CONFLICT = "занят чужим файлом"
-    REMOVE = "удалён"
-    KEEP = "оставлен (изменён вручную)"
-    GONE = "уже нет"
+    INSTALL = "installed"
+    UPDATE = "updated"
+    OVERWRITE = "overwritten"
+    UNCHANGED = "unchanged"
+    CONFLICT = "conflict"
+    REMOVE = "removed"
+    KEEP = "kept"
+    GONE = "gone"
 
 
 WRITES = frozenset({Action.INSTALL, Action.UPDATE, Action.OVERWRITE})
+
+COMMAND_INSTALL = "install"
+COMMAND_UNINSTALL = "uninstall"
+CODE_NONE = "none"
+CODE_CONFLICT = "conflict"
+COMMON = "common"
+KNOWN_CODES = frozenset({CODE_NONE, CODE_CONFLICT})
+
+
+def action_key(action: Action) -> str:
+    return f"kit.action.{action.value}"
 
 
 @dataclass(frozen=True)
@@ -55,20 +69,87 @@ class Step:
     cli: str
     content: bytes = b""
 
-    def line(self) -> str:
-        return f"{self.action.value}  {self.target}"
+    def line(self, lang: str) -> str:
+        return CATALOGUE.text(
+            lang,
+            "kit.step_line",
+            action=CATALOGUE.text(lang, action_key(self.action)),
+            target=self.target,
+        )
+
+
+@dataclass(frozen=True)
+class Report:
+    command: str
+    code: str
+    steps: tuple[Step, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return self.code == CODE_NONE
+
+    @property
+    def wrote(self) -> bool:
+        return any(step.action in WRITES for step in self.steps)
+
+    @property
+    def refused(self) -> tuple[Step, ...]:
+        return tuple(conflicts(self.steps))
+
+    def as_json(self) -> str:
+        return json.dumps(
+            {
+                "command": self.command,
+                "ok": self.ok,
+                "code": self.code,
+                "steps": [
+                    {
+                        "action": step.action.value,
+                        "cli": step.cli,
+                        "target": str(step.target),
+                    }
+                    for step in self.steps
+                ],
+            },
+            ensure_ascii=True,
+        )
+
+    @classmethod
+    def read(cls, raw: str, command: str) -> "Report | None":
+        try:
+            stored = json.loads(raw)
+            steps = tuple(
+                Step(Action(step["action"]), Path(step["target"]), str(step["cli"]))
+                for step in stored["steps"]
+            )
+            code = str(stored["code"])
+            if str(stored["command"]) != command:
+                return None
+            if code not in KNOWN_CODES:
+                return None
+            if stored["ok"] is not (code == CODE_NONE):
+                return None
+            if code == CODE_CONFLICT and not steps:
+                return None
+        except (ValueError, KeyError, TypeError):
+            return None
+        return cls(command, code, steps)
+
+
+def conflicts(steps: Iterable[Step]) -> list[Step]:
+    return [step for step in steps if step.action is Action.CONFLICT]
 
 
 class KitConflict(Exception):
-    def __init__(self, targets: list[Path]):
-        self.targets = targets
-        listed = "\n".join(f"    {target}" for target in targets)
-        super().__init__(
-            "установка отменена, ничего не записано. Эти файлы уже существуют, "
-            "отличаются от набора Quoroom и установлены не им:\n"
-            f"{listed}\n"
-            "Чтобы перезаписать их, повторите с --force: agentschat install --force"
-        )
+    def __init__(self, steps: list[Step], lang: str):
+        self.steps = steps
+        self.lang = lang
+        listed = "\n".join(f"    {step.target}" for step in steps)
+        super().__init__(CATALOGUE.text(lang, "kit.conflict", files=listed))
+
+    @property
+    def targets(self) -> list[Path]:
+        return [step.target for step in self.steps]
 
 
 def digest(content: bytes) -> str:
@@ -89,11 +170,23 @@ def target_roots(
     return {cli: Path(given[cli]) if given[cli] else DEFAULT_ROOTS[cli] for cli in clis}
 
 
-def kit_files(cli: str, source: Traversable = KIT) -> list[KitFile]:
-    return [
+def kit_files(cli: str, lang: str, source: Traversable = KIT) -> list[KitFile]:
+    variant = source / lang / cli
+    if not variant.is_dir():
+        raise FileNotFoundError(
+            f"the kit has no {cli} files in {lang}: {variant}",
+        )
+    found = [
         KitFile(cli, relative, node.read_bytes())
-        for relative, node in walk(source / cli, PurePosixPath())
+        for relative, node in walk(variant, PurePosixPath())
     ]
+    shared = source / COMMON / cli
+    if shared.is_dir():
+        found += [
+            KitFile(cli, relative, node.read_bytes())
+            for relative, node in walk(shared, PurePosixPath())
+        ]
+    return sorted(found, key=lambda item: item.relative)
 
 
 def walk(
@@ -145,22 +238,25 @@ def install_action(content: bytes, target: Path, listed: bool, force: bool) -> A
 def plan_install(
     roots: dict[str, Path],
     manifest: dict[Path, Entry],
+    lang: str,
     force: bool = False,
     source: Traversable = KIT,
 ) -> list[Step]:
     steps = []
     for cli, root in roots.items():
-        for item in kit_files(cli, source):
+        for item in kit_files(cli, lang, source):
             target = root.resolve().joinpath(*item.relative.parts)
             action = install_action(item.content, target, target in manifest, force)
             steps.append(Step(action, target, cli, item.content))
     return steps
 
 
-def apply_install(steps: list[Step], manifest: dict[Path, Entry]) -> dict[Path, Entry]:
-    conflicts = [step.target for step in steps if step.action is Action.CONFLICT]
-    if conflicts:
-        raise KitConflict(conflicts)
+def apply_install(
+    steps: list[Step], manifest: dict[Path, Entry], lang: str
+) -> dict[Path, Entry]:
+    refused = conflicts(steps)
+    if refused:
+        raise KitConflict(refused, lang)
     updated = dict(manifest)
     for step in steps:
         if step.action in WRITES:
@@ -175,11 +271,13 @@ def install(
     roots: dict[str, Path],
     force: bool = False,
     source: Traversable = KIT,
-) -> list[Step]:
+    *,
+    lang: str,
+) -> Report:
     manifest = load_manifest(manifest_path)
-    steps = plan_install(roots, manifest, force, source)
-    save_manifest(manifest_path, apply_install(steps, manifest))
-    return steps
+    steps = plan_install(roots, manifest, lang, force, source)
+    save_manifest(manifest_path, apply_install(steps, manifest, lang))
+    return Report(COMMAND_INSTALL, CODE_NONE, tuple(steps))
 
 
 def uninstall_action(target: Path, entry: Entry, force: bool) -> Action:
@@ -225,36 +323,41 @@ def uninstall(
     roots: dict[str, Path],
     clis: tuple[str, ...] = CLIS,
     force: bool = False,
-) -> list[Step]:
+) -> Report:
     manifest = load_manifest(manifest_path)
     steps = plan_uninstall(manifest, clis, force)
     save_manifest(manifest_path, apply_uninstall(steps, manifest, roots))
-    return steps
+    return Report(COMMAND_UNINSTALL, CODE_NONE, tuple(steps))
 
 
-def restart_hint(changed: list[Step]) -> str:
+def cli_names(touched: set[str], lang: str) -> str:
+    names = [CLI_NAMES[cli] for cli in CLIS if cli in touched]
+    if len(names) == 1:
+        return names[0]
+    return CATALOGUE.text(lang, "kit.cli_names", first=names[0], second=names[1])
+
+
+def restart_hint(changed: list[Step], lang: str) -> str:
     touched = {step.cli for step in changed}
-    names = " и ".join(CLI_NAMES[cli] for cli in CLIS if cli in touched)
-    return f"Перезапустите открытые сессии {names}: запущенные изменений не увидят."
+    return CATALOGUE.text(lang, "kit.restart_hint", names=cli_names(touched, lang))
 
 
-def install_summary(steps: list[Step]) -> str:
+def install_summary(steps: list[Step], lang: str) -> str:
     changed = [step for step in steps if step.action in WRITES]
     if not changed:
-        return "AGENTSCHAT: набор Quoroom уже на месте, менять нечего."
-    return f"AGENTSCHAT: набор Quoroom установлен.\n{restart_hint(changed)}"
+        return CATALOGUE.text(lang, "kit.install_unchanged")
+    return "\n".join(
+        [CATALOGUE.text(lang, "kit.install_done"), restart_hint(changed, lang)]
+    )
 
 
-def uninstall_summary(steps: list[Step]) -> str:
+def uninstall_summary(steps: list[Step], lang: str) -> str:
     if not steps:
-        return "AGENTSCHAT: установленного набора Quoroom нет, удалять нечего."
-    lines = ["AGENTSCHAT: удаление набора Quoroom закончено."]
+        return CATALOGUE.text(lang, "kit.uninstall_nothing")
+    lines = [CATALOGUE.text(lang, "kit.uninstall_done")]
     removed = [step for step in steps if step.action is Action.REMOVE]
     if removed:
-        lines.append(restart_hint(removed))
+        lines.append(restart_hint(removed, lang))
     if any(step.action is Action.KEEP for step in steps):
-        lines.append(
-            "Файлы, изменённые вручную, оставлены. Удалить и их: "
-            "agentschat uninstall --force"
-        )
+        lines.append(CATALOGUE.text(lang, "kit.uninstall_kept"))
     return "\n".join(lines)

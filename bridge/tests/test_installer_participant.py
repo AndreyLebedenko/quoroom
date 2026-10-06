@@ -1,4 +1,7 @@
-"""Карточка local-installers-05: роль участника."""
+"""Карточка local-installers-05: роль участника.
+
+Ответ клиента приходит отчётом: карточка task-english-release-10.
+"""
 
 import json
 import os
@@ -8,6 +11,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from tests.installer_fakes import (
     SH,
@@ -17,7 +21,7 @@ from tests.installer_fakes import (
     make_run,
     posix_path,
 )
-from sessionchat import kit
+from sessionchat import client, client_language, client_result, kit
 from sessionchat.installer import participant
 from sessionchat.installer.boundaries import Probe
 from sessionchat.installer.main import CANCELLED, DONE, FAILED, HUMAN, main
@@ -28,9 +32,13 @@ from sessionchat.installer.roles import built_in_roles
 
 ROLE = "participant"
 STATUS = "/status"
+STATUS_COMMAND = "status"
 STORE = participant.STORE
 MANIFEST = participant.KIT_MANIFEST
 RESTART = "Перезапустите открытые сессии"
+NOISE = "погода в Казани дождливая, ничего не значит"
+WRAP_BEFORE = "отчёт клиента ниже, прочитайте сами:\n"
+WRAP_AFTER = "\nэто был отчёт."
 
 
 class Machine:
@@ -43,22 +51,37 @@ class Machine:
         present: dict[str, bool] | None = None,
         kit_conflict: bool = False,
         fails: str = "",
+        kit_conflict_code: int = client.REFUSED,
+        kit_answers: str = "document",
+        kit_claims_no_writes: bool = False,
+        kit_code: str = kit.CODE_NONE,
+        room_language: str = "en",
+        status_mode: str = "ok",
     ) -> None:
         self.home = home
         self.platform = platform
         self.present = {"uv": False, "pipx": True} | (present or {})
         self.kit_conflict = kit_conflict
+        self.kit_conflict_code = kit_conflict_code
+        self.kit_answers = kit_answers
+        self.kit_claims_no_writes = kit_claims_no_writes
+        self.kit_code = kit_code
         self.fails = fails
         self.log: list[str] = []
         self.installed_by: set[str] = set()
+        self.status_env: dict[str, str] = {}
+        self.room_language = room_language
+        self.status_mode = status_mode
 
-    def __call__(self, argv):
+    def __call__(self, argv, env=None):
         argv = [str(part) for part in argv]
         name = Path(argv[0]).name
         if name in ("uv", "pipx"):
+            if env is not None:
+                raise TypeError(f"{name} must not be given an environment")
             return self.tool(name, argv)
         if name.startswith("agentschat"):
-            return self.agentschat(argv)
+            return self.agentschat(argv, env)
         raise AssertionError(f"непредусмотренный вызов: {' '.join(argv)}")
 
     def tool(self, name: str, argv: list[str]):
@@ -96,20 +119,60 @@ class Machine:
             return f"{participant.PACKAGE} v1.0.0rc1\n- {participant.PACKAGE}\n"
         return f"{participant.PACKAGE} 1.0.0rc1\n"
 
-    def agentschat(self, argv: list[str]):
+    def agentschat(self, argv: list[str], env=None):
         self.log.append(" ".join(argv))
+        if STATUS_COMMAND in argv[1:]:
+            return self.status(env)
         if self.fails == "kit install":
             return completed("", "agentschat: сбой установки", 1)
         if self.fails == "kit uninstall":
             return completed("", "agentschat: сбой удаления", 1)
         if "install" in argv[1:]:
             if self.kit_conflict:
-                return completed("", "установка отменена, ничего не записано.", 1)
-            return completed(self.install_kit(argv[2:]))
-        return completed(self.uninstall_kit(argv[2:]))
+                return completed(self.conflict_kit(), NOISE, self.kit_conflict_code)
+            if self.kit_answers == "words":
+                return completed(self.refusal_words(), NOISE, 1)
+            if self.kit_answers == "nothing":
+                return completed("", "", 0)
+            document = self.install_kit(argv[2:])
+            if self.kit_answers == "wrapped":
+                return completed(f"{WRAP_BEFORE}{document}{WRAP_AFTER}", NOISE, 0)
+            return completed(document, NOISE)
+        return completed(self.uninstall_kit(argv[2:]), NOISE)
+
+    def status(self, env) -> CompletedProcess:
+        self.status_env = dict(env or {})
+        if self.status_mode == "missing":
+            raise FileNotFoundError("agentschat")
+        if self.status_mode == "undecodable":
+            raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid start byte")
+        if self.status_mode == "refuses":
+            return completed(
+                client_result.line("status", False, code="broker_unreachable"),
+                "брокер недоступен",
+                1,
+            )
+        if self.status_mode == "not-ok":
+            return completed(
+                f"{NOISE}\n{client_result.line('status', False, code='unexpected_answer')}"
+            )
+        if self.status_mode == "words":
+            return completed("Язык комнаты: ru\n")
+        if self.status_mode == "another-command":
+            return completed(
+                client_result.line("login", True, language=self.room_language)
+            )
+        client_language.remember(self.store(), self.room_language)
+        answer = client_result.line(
+            "status", True, language=self.room_language, sessions=[]
+        )
+        if self.status_mode == "quiet":
+            return completed(answer)
+        return completed(f"{answer}\n{NOISE}")
 
     def clis_for(self, flags: list[str]) -> list[str]:
-        return [flag[2:] for flag in flags] if flags else ["claude", "opencode"]
+        picked = [flag[2:] for flag in flags if flag[2:] in kit.CLIS]
+        return picked or list(kit.CLIS)
 
     def target_for(self, cli: str) -> Path:
         root = ".claude" if cli == "claude" else ".config/opencode"
@@ -120,51 +183,57 @@ class Machine:
     def kit_content(self) -> bytes:
         return b"chatlogin skill\n"
 
+    def report(self, command: str, code: str, steps: list[kit.Step]) -> str:
+        return kit.Report(command, code, tuple(steps)).as_json()
+
+    def refusal_words(self) -> str:
+        return str(
+            kit.KitConflict(
+                [kit.Step(kit.Action.CONFLICT, self.target_for("claude"), "claude")],
+                "ru",
+            )
+        )
+
+    def foreign_kit(self) -> kit.Step:
+        target = self.target_for("claude")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("// чужой навык\n", encoding="utf-8")
+        return kit.Step(kit.Action.CONFLICT, target, "claude")
+
+    def conflict_kit(self) -> str:
+        return self.report(kit.COMMAND_INSTALL, kit.CODE_CONFLICT, [self.foreign_kit()])
+
     def install_kit(self, flags: list[str]) -> str:
-        lines = []
-        changed = False
+        steps = []
         for cli in self.clis_for(flags):
             target = self.target_for(cli)
             if target.is_file() and target.read_bytes() == self.kit_content():
-                lines.append(f"без изменений  {target}")
+                steps.append(kit.Step(kit.Action.UNCHANGED, target, cli))
                 continue
-            action = "обновлён" if target.is_file() else "установлен"
+            action = kit.Action.UPDATE if target.is_file() else kit.Action.INSTALL
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(self.kit_content())
-            changed = True
-            lines.append(f"{action}  {target}")
+            steps.append(kit.Step(action, target, cli))
         self.write_manifest()
-        if not changed:
-            return "\n".join(
-                [*lines, "AGENTSCHAT: набор Quoroom уже на месте, менять нечего."]
-            )
-        return "\n".join(
-            [
-                *lines,
-                "AGENTSCHAT: набор Quoroom установлен.",
-                "Перезапустите открытые сессии Claude Code и OpenCode: "
-                "запущенные изменений не увидят.",
+        if self.kit_claims_no_writes:
+            steps = [
+                kit.Step(kit.Action.UNCHANGED, step.target, step.cli) for step in steps
             ]
-        )
+        return self.report(kit.COMMAND_INSTALL, self.kit_code, steps)
 
     def uninstall_kit(self, flags: list[str]) -> str:
-        lines = []
-        kept = False
+        steps = []
         for cli in self.clis_for(flags):
             target = self.target_for(cli)
             if not target.is_file():
                 continue
             if kit.digest(target.read_bytes()) != kit.digest(self.kit_content()):
-                lines.append(f"оставлен (изменён вручную)  {target}")
-                kept = True
+                steps.append(kit.Step(kit.Action.KEEP, target, cli))
                 continue
             target.unlink()
-            lines.append(f"удалён  {target}")
+            steps.append(kit.Step(kit.Action.REMOVE, target, cli))
         self.write_manifest()
-        summary = "AGENTSCHAT: удаление набора закончено."
-        if kept:
-            summary += "\nФайлы, изменённые вручную, оставлены."
-        return "\n".join([*lines, summary])
+        return self.report(kit.COMMAND_UNINSTALL, kit.CODE_NONE, steps)
 
     def write_manifest(self) -> None:
         files = [
@@ -480,7 +549,10 @@ class PackageInstallTests(ParticipantCase):
         self.machine.installed_by.update({"uv", "pipx"})
         code, _ = self.install()
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
         self.assertNotIn(f"{self.uv_bin} install", self.machine.log)
 
     def test_the_recording_tool_wins_over_a_uv_on_the_machine_for_the_path_hint(self):
@@ -497,8 +569,14 @@ class PackageInstallTests(ParticipantCase):
         self.machine.installed_by.add("pipx")
         code, _ = self.install()
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
-        self.assertNotIn(f"{self.uv_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
+        self.assertNotIn(
+            f"{self.uv_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_the_path_hint_names_the_tool_that_reports_the_package(self):
         self.machine.present = {"uv": True, "pipx": True}
@@ -539,7 +617,10 @@ class KitInstallTests(ParticipantCase):
     def test_agentschat_is_called_by_the_absolute_path_of_the_installed_tool(self):
         code, _ = self.install()
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_the_tool_is_asked_where_it_keeps_the_executable(self):
         code, _ = self.install()
@@ -576,7 +657,10 @@ class KitInstallTests(ParticipantCase):
         self.machine.installed_by.add("uv")
         code, _ = self.install()
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.uv_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.uv_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_an_install_after_a_partial_run_does_not_reinstall_the_package(self):
         self.record([(participant.PACKAGE_KIND, "pipx")])
@@ -588,23 +672,35 @@ class KitInstallTests(ParticipantCase):
     def test_only_claude_is_chosen_by_flag(self):
         code, _ = self.install("--claude")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_only_opencode_is_chosen_by_flag(self):
         code, _ = self.install("--opencode")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_an_interactive_run_without_flags_asks_which_clis(self):
         code, given = self.install(stdin="1\n", interactive=True)
         self.assertEqual(code, DONE)
         self.assertIn("Какие CLI получают набор?", given.stdout.getvalue())
-        self.assertIn(f"{self.pipx_bin} install --claude", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_an_interactive_run_can_be_answered_with_both_clis(self):
         code, _ = self.install(stdin="3\n", interactive=True)
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_an_interactive_repeat_run_is_not_asked_again(self):
         self.install("--claude", "--opencode")
@@ -629,12 +725,44 @@ class KitInstallTests(ParticipantCase):
         self.install()
         self.assertFalse(any("--force" in line for line in self.machine.log))
 
+    def test_the_client_is_asked_for_its_report_by_a_flag(self):
+        code, _ = self.install()
+        self.assertEqual(code, DONE)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
+
+    def test_the_clients_own_words_are_not_echoed_into_the_installers_report(self):
+        code, given = self.install()
+        self.assertEqual(code, DONE)
+        self.assertNotIn(NOISE, given.stdout.getvalue())
+        self.assertEqual(
+            [
+                line
+                for line in given.stdout.getvalue().splitlines()
+                if line.startswith("{")
+            ],
+            [],
+        )
+
+    def test_the_clients_own_words_do_not_reach_a_removal_report_either(self):
+        self.install()
+        self.machine.log.clear()
+        code, given = self.remove()
+        self.assertEqual(code, DONE)
+        self.assertNotIn(NOISE, given.stdout.getvalue())
+        self.assertNotIn(NOISE, given.stderr.getvalue())
+
     def test_the_kit_is_refreshed_on_every_run(self):
         self.install()
         self.machine.log.clear()
         code, _ = self.install()
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_the_path_comes_from_the_reporting_tool_when_the_record_names_another(self):
         self.record([(participant.PACKAGE_KIND, "uv")])
@@ -642,22 +770,34 @@ class KitInstallTests(ParticipantCase):
         self.machine.installed_by.add("pipx")
         code, _ = self.install()
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
-        self.assertNotIn(f"{self.uv_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
+        self.assertNotIn(
+            f"{self.uv_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_a_refresh_covers_the_new_cli_and_the_one_the_manifest_holds(self):
         self.machine.installed_by.add("pipx")
         self.machine.seed_kit(["claude"])
         code, _ = self.install("--opencode")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_a_refresh_covers_the_clis_the_manifest_already_holds(self):
         self.machine.installed_by.add("pipx")
         self.machine.seed_kit(["claude"])
         code, _ = self.install()
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --claude", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_an_edited_listed_file_survives_a_rerun(self):
         self.install()
@@ -693,28 +833,123 @@ class KitInstallTests(ParticipantCase):
         self.install()
         self.machine.log.clear()
         self.install()
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_a_missing_listed_file_is_treated_as_refreshable(self):
         self.install()
         self.machine.target_for("claude").unlink()
         self.machine.log.clear()
         self.install()
-        self.assertIn(f"{self.pipx_bin} install --claude --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_a_new_cli_is_installed_while_another_one_is_edited(self):
         self.install("--claude")
         self.machine.edit_kit("claude")
         code, _ = self.install("--opencode")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} install --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} install --lang ru --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
         self.assertIn("моя правка", self.machine.kit_text("claude"))
 
     def test_the_windows_binary_is_named_with_its_extension(self):
         code, _ = self.install(platform="windows")
         self.assertEqual(code, DONE)
         self.assertIn(
-            f"{self.home / 'pipx' / 'bin' / 'agentschat.exe'} install --claude --opencode",
+            f"{self.home / 'pipx' / 'bin' / 'agentschat.exe'} install --lang ru --claude --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
+
+
+class KitReportTests(ParticipantCase):
+    """Ответ клиента читается как отчёт, а не как его предложения."""
+
+    def test_a_conflict_is_recognised_from_the_code_the_client_reports(self):
+        self.machine.kit_conflict = True
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: конфликт набора Quoroom", given.stderr.getvalue())
+
+    def test_a_conflict_names_the_file_the_report_blames(self):
+        foreign = self.machine.target_for("claude")
+        self.machine.kit_conflict = True
+        _, given = self.install()
+        self.assertIn(str(foreign), given.stderr.getvalue())
+
+    def test_a_conflict_is_a_conflict_whatever_code_the_client_exits_with(self):
+        self.machine.kit_conflict = True
+        self.machine.kit_conflict_code = 1
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: конфликт набора Quoroom", given.stderr.getvalue())
+
+    def test_a_refusal_spelled_out_by_the_client_is_not_read_as_a_conflict(self):
+        self.machine.kit_answers = "words"
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: agentschat не отработал", given.stderr.getvalue())
+        self.assertNotIn("конфликт набора Quoroom", given.stderr.getvalue())
+
+    def test_a_client_that_answers_with_nothing_is_not_believed_to_have_written(self):
+        self.machine.kit_answers = "nothing"
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: agentschat не отработал", given.stderr.getvalue())
+
+    def test_unrelated_words_around_the_report_make_it_no_report_at_all(self):
+        self.machine.kit_answers = "wrapped"
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: agentschat не отработал", given.stderr.getvalue())
+
+    def test_unrelated_words_of_the_client_change_nothing_in_a_finished_install(self):
+        code, given = self.install()
+        self.assertEqual(code, DONE)
+        self.assertIn(RESTART, given.stdout.getvalue())
+
+    def test_a_conflict_the_client_exits_zero_with_is_still_a_conflict(self):
+        self.machine.kit_conflict = True
+        self.machine.kit_conflict_code = 0
+        code, given = self.install()
+        self.assertEqual(code, FAILED)
+        self.assertIn("Причина: конфликт набора Quoroom", given.stderr.getvalue())
+
+    def test_a_conflict_says_that_nothing_was_written_and_how_to_force_it(self):
+        self.machine.kit_conflict = True
+        _, given = self.install()
+        said = given.stderr.getvalue()
+        self.assertIn("ничего не записано", said)
+        self.assertIn("отличаются от набора Quoroom", said)
+        self.assertIn("повторите с --force", said)
+
+    def test_a_refusal_that_blames_no_file_does_not_leave_the_reason_empty(self):
+        blank = kit.Report(kit.COMMAND_INSTALL, kit.CODE_CONFLICT).as_json()
+        said = participant.kit_failure(
+            self.plan_run(), completed(blank, "", 1), kit.COMMAND_INSTALL
+        )
+        self.assertIn(blank, said)
+
+    def test_the_restart_hint_follows_the_report_rather_than_the_files_on_disk(self):
+        self.machine.kit_claims_no_writes = True
+        code, given = self.install()
+        self.assertEqual(code, DONE)
+        self.assertNotIn(RESTART, given.stdout.getvalue())
+        self.assertIn("Набор на месте и не менялся", given.stdout.getvalue())
+
+    def test_the_report_of_the_removal_is_asked_for_by_a_flag(self):
+        self.install()
+        self.machine.log.clear()
+        code, _ = self.remove()
+        self.assertEqual(code, DONE)
+        self.assertIn(
+            f"{self.pipx_bin} uninstall --lang ru --claude --opencode {participant.JSON_FLAG}",
             self.machine.log,
         )
 
@@ -926,7 +1161,7 @@ class ReportTests(ParticipantCase):
         self.install()
         _, given = self.install()
         self.assertNotIn(RESTART, given.stdout.getvalue())
-        self.assertIn("менять нечего", given.stdout.getvalue())
+        self.assertIn("Набор на месте и не менялся", given.stdout.getvalue())
 
     def test_the_path_hint_names_the_reporting_tool_when_the_record_names_another(self):
         self.record([(participant.PACKAGE_KIND, "uv")])
@@ -1003,7 +1238,9 @@ class RemovalTests(ParticipantCase):
         self.installed()
         code, _ = self.remove()
         self.assertEqual(code, DONE)
-        kit = self.machine.log.index(f"{self.pipx_bin} uninstall --claude --opencode")
+        kit = self.machine.log.index(
+            f"{self.pipx_bin} uninstall --lang ru --claude --opencode {participant.JSON_FLAG}"
+        )
         package = self.machine.log.index("pipx uninstall quoroom")
         self.assertLess(kit, package)
 
@@ -1011,7 +1248,10 @@ class RemovalTests(ParticipantCase):
         self.installed()
         code, _ = self.remove("--opencode")
         self.assertEqual(code, DONE)
-        self.assertIn(f"{self.pipx_bin} uninstall --opencode", self.machine.log)
+        self.assertIn(
+            f"{self.pipx_bin} uninstall --lang ru --opencode {participant.JSON_FLAG}",
+            self.machine.log,
+        )
 
     def test_a_narrowed_removal_keeps_the_package_the_other_cli_calls(self):
         self.installed()

@@ -1,24 +1,27 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
-from functools import cache
-from importlib.resources import files
-from types import MappingProxyType
 
-LANGUAGES = ("en", "ru")
-DEFAULT_LANGUAGE = "en"
+from ..i18n import DEFAULT_LANGUAGE, LANGUAGES, Catalogue, render
+
+__all__ = (
+    "DEFAULT_LANGUAGE",
+    "INSTALLER_CATALOGUE",
+    "LANGUAGES",
+    "STEP_PREFIX",
+    "catalogue",
+    "has",
+    "step_label",
+    "text",
+)
+
 STEP_PREFIX = "step."
 
+INSTALLER_CATALOGUE = Catalogue(__package__, "messages")
 
-@cache
+
 def catalogue(lang: str) -> Mapping[str, str]:
-    if lang not in LANGUAGES:
-        raise ValueError(
-            f"unknown language {lang!r}, available: {', '.join(LANGUAGES)}"
-        )
-    source = files(__package__) / "messages" / f"{lang}.json"
-    return MappingProxyType(json.loads(source.read_text(encoding="utf-8")))
+    return INSTALLER_CATALOGUE.templates(lang)
 
 
 def has(lang: str, key: str) -> bool:
@@ -26,15 +29,7 @@ def has(lang: str, key: str) -> bool:
 
 
 def text(lang: str, key: str, **params: object) -> str:
-    templates = catalogue(lang)
-    if key not in templates:
-        raise KeyError(f"no message {key!r} in language {lang!r}")
-    try:
-        return templates[key].format(**params)
-    except KeyError as missing:
-        raise KeyError(
-            f"message {key!r} in language {lang!r} needs the parameter {missing}"
-        ) from None
+    return render(catalogue(lang), lang, key, params)
 
 
 def step_label(lang: str, name: str) -> str:

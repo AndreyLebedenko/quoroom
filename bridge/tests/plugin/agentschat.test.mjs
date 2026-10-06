@@ -73,7 +73,7 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r))
 process.env.AGENTSCHAT_URL = `http://127.0.0.1:${server.address().port}`
 
 const { AgentsChat } = await import(
-  "../../sessionchat/kit/opencode/plugins/agentschat.js"
+  "../../sessionchat/kit/common/opencode/plugins/agentschat.js"
 )
 
 /** Состояние плагина живёт в globalThis, поэтому чистим его между проверками. */
@@ -86,14 +86,25 @@ function fresh() {
 
 const quiet = { session: { promptAsync: async () => {} } }
 
+const resultLine = (fields) => `AGENTSCHAT-RESULT ${JSON.stringify(fields)}`
+
+const loginOk = (agent) =>
+  resultLine({ command: "login", ok: true, agent, mode: "plugin", reconnected: false })
+
+const logoutOk = (agent) => resultLine({ command: "logout", ok: true, agent })
+
+async function runCommand(hooks, callID, sessionID, command, output) {
+  await hooks["tool.execute.before"]({ callID, sessionID }, { args: { command } })
+  await hooks["tool.execute.after"]({ callID, sessionID }, { output })
+}
+
 async function login(hooks, callID, sessionID, agent, launcher = "agentschat") {
-  await hooks["tool.execute.before"](
-    { callID, sessionID },
-    { args: { command: `${launcher} login --agent ${agent} --label "тест"` } },
-  )
-  await hooks["tool.execute.after"](
-    { callID, sessionID },
-    { output: `AGENTSCHAT: сессия ${agent} подключена к комнате !x:y.` },
+  await runCommand(
+    hooks,
+    callID,
+    sessionID,
+    `${launcher} login --agent ${agent} --label "тест"`,
+    `AGENTSCHAT: сессия ${agent} подключена к комнате !x:y.\n${loginOk(agent)}\n`,
   )
 }
 
@@ -130,7 +141,7 @@ test("две сессии под разными именами получают 
   )
   await one["tool.execute.after"](
     { callID: "c3", sessionID: "ses-terra" },
-    { output: "AGENTSCHAT: сессия terra отключена." },
+    { output: `AGENTSCHAT: сессия terra отключена.\n${logoutOk("terra")}\n` },
   )
   assert.equal(state.bindings.has("terra"), false)
   assert.equal(state.bindings.has("helium"), true)
@@ -191,6 +202,450 @@ test("старый вызов по пути bridge\\agentschat.cmd тоже пр
   assert.equal(globalThis.__agentschat.bindings.get("terra")?.sessionID, "ses-terra")
 
   await hooks.dispose()
+})
+
+const logFile = path.join(store, "opencode-plugin.log")
+const readLog = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "")
+const bindings = () => globalThis.__agentschat.bindings
+const CYRILLIC = /[Ѐ-ӿ]/
+
+async function withPlugin(body) {
+  fresh()
+  fs.rmSync(logFile, { force: true })
+  const hooks = await AgentsChat({ client: quiet })
+  try {
+    await body(hooks)
+  } finally {
+    await hooks.dispose()
+  }
+}
+
+const loginCommand = (agent) => `agentschat login --agent ${agent}`
+const logoutCommand = (agent) => `agentschat logout --agent ${agent}`
+
+test("an English login result line binds the session of the call to the agent", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      `AGENTSCHAT: session terra is connected to room !x:y.\n${loginOk("terra")}\n`,
+    )
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("the old Russian sentences alone no longer bind a session", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      "AGENTSCHAT: сессия terra подключена к комнате !x:y.\n",
+    )
+    assert.equal(bindings().has("terra"), false)
+    assert.match(readLog(), /login: no result line in the command output/)
+  })
+})
+
+test("the old Russian logout sentence alone no longer unbinds a session", async () => {
+  await withPlugin(async (hooks) => {
+    await login(hooks, "c1", "ses-terra", "terra")
+    await runCommand(
+      hooks,
+      "c2",
+      "ses-terra",
+      logoutCommand("terra"),
+      "AGENTSCHAT: сессия terra отключена.\n",
+    )
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("a refused login changes nothing", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      `AGENTSCHAT: slot taken.\n${resultLine({ command: "login", ok: false, agent: "terra", code: "slot_taken" })}\n`,
+    )
+    assert.equal(bindings().has("terra"), false)
+    assert.match(readLog(), /login refused for session ses-terra, code slot_taken/)
+  })
+})
+
+test("a refused login does not disturb an existing binding of the same agent", async () => {
+  await withPlugin(async (hooks) => {
+    await login(hooks, "c1", "ses-terra", "terra")
+    await runCommand(
+      hooks,
+      "c2",
+      "ses-other",
+      loginCommand("terra"),
+      `${resultLine({ command: "login", ok: false, agent: "terra", code: "slot_taken" })}\n`,
+    )
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("a logout result line unbinds the agent", async () => {
+  await withPlugin(async (hooks) => {
+    await login(hooks, "c1", "ses-terra", "terra")
+    await login(hooks, "c2", "ses-helium", "helium")
+    await runCommand(
+      hooks,
+      "c3",
+      "ses-terra",
+      logoutCommand("terra"),
+      `AGENTSCHAT: session terra is disconnected.\n${logoutOk("terra")}\n`,
+    )
+    assert.equal(bindings().has("terra"), false)
+    assert.equal(bindings().has("helium"), true)
+  })
+})
+
+test("a refused logout leaves the binding in place", async () => {
+  await withPlugin(async (hooks) => {
+    await login(hooks, "c1", "ses-terra", "terra")
+    await runCommand(
+      hooks,
+      "c2",
+      "ses-terra",
+      logoutCommand("terra"),
+      `${resultLine({ command: "logout", ok: false, agent: "terra", code: "not_logged_in" })}\n`,
+    )
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("a result line among unrelated lines is found, CRLF line ends included", async () => {
+  await withPlugin(async (hooks) => {
+    const output = [
+      "some banner",
+      "{\"command\":\"login\",\"ok\":false}",
+      "AGENTSCHAT: session terra is connected.",
+      loginOk("terra"),
+      "",
+    ].join("\r\n")
+    await runCommand(hooks, "c1", "ses-terra", loginCommand("terra"), output)
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("a result line has to start its line to count", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      `echo: ${loginOk("terra")}\n`,
+    )
+    assert.equal(bindings().has("terra"), false)
+  })
+})
+
+test("a forged ok line above the real refusal does not bind", async () => {
+  await withPlugin(async (hooks) => {
+    const output = [
+      `AGENTSCHAT: slot taken by label ${loginOk("helium")}`,
+      loginOk("helium"),
+      resultLine({ command: "login", ok: false, agent: "terra", code: "slot_taken" }),
+    ].join("\n")
+    await runCommand(hooks, "c1", "ses-terra", loginCommand("terra"), output)
+    assert.equal(bindings().size, 0)
+  })
+})
+
+test("a forged refusal above the real success does not stop the binding", async () => {
+  await withPlugin(async (hooks) => {
+    const output = [
+      resultLine({ command: "login", ok: false, agent: "terra", code: "slot_taken" }),
+      loginOk("terra"),
+    ].join("\n")
+    await runCommand(hooks, "c1", "ses-terra", loginCommand("terra"), output)
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("a malformed last result line is ignored, logged and never thrown", async () => {
+  await withPlugin(async (hooks) => {
+    const output = `${loginOk("terra")}\nAGENTSCHAT-RESULT {"command":"login","ok":tru\n`
+    await runCommand(hooks, "c1", "ses-terra", loginCommand("terra"), output)
+    assert.equal(bindings().has("terra"), false)
+    assert.match(readLog(), /login: result line is not valid JSON/)
+  })
+})
+
+test("a result line that is not a JSON object is ignored", async () => {
+  await withPlugin(async (hooks) => {
+    for (const [index, body] of ["null", "[1]", "\"text\"", "7"].entries()) {
+      await runCommand(
+        hooks,
+        `c${index}`,
+        "ses-terra",
+        loginCommand("terra"),
+        `AGENTSCHAT-RESULT ${body}\n`,
+      )
+    }
+    assert.equal(bindings().size, 0)
+  })
+})
+
+test("an ok line for another command does not bind or unbind", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      `${resultLine({ command: "status", ok: true, language: "en", sessions: [] })}\n`,
+    )
+    assert.equal(bindings().has("terra"), false)
+
+    await login(hooks, "c2", "ses-terra", "terra")
+    await runCommand(
+      hooks,
+      "c3",
+      "ses-terra",
+      logoutCommand("terra"),
+      `${loginOk("terra")}\n`,
+    )
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("a line without a usable ok changes nothing", async () => {
+  await withPlugin(async (hooks) => {
+    for (const [index, fields] of [
+      { command: "login", agent: "terra" },
+      { command: "login", ok: "true", agent: "terra" },
+      { command: "login", ok: 1, agent: "terra" },
+    ].entries()) {
+      await runCommand(
+        hooks,
+        `c${index}`,
+        "ses-terra",
+        loginCommand("terra"),
+        `${resultLine(fields)}\n`,
+      )
+    }
+    assert.equal(bindings().size, 0)
+  })
+})
+
+test("an agent that is empty, not a string or not a valid name is not bound", async () => {
+  await withPlugin(async (hooks) => {
+    const agents = ["", " ", 7, null, ["terra"], "-terra", "../terra", "ter ra", "tërra"]
+    for (const [index, agent] of agents.entries()) {
+      await runCommand(
+        hooks,
+        `c${index}`,
+        "ses-terra",
+        loginCommand("terra"),
+        `${loginOk(agent)}\n`,
+      )
+    }
+    await runCommand(
+      hooks,
+      "c-missing",
+      "ses-terra",
+      loginCommand("terra"),
+      `${resultLine({ command: "login", ok: true })}\n`,
+    )
+    assert.equal(bindings().size, 0)
+    assert.match(readLog(), /login: result line names no valid agent/)
+  })
+})
+
+test("an invalid agent in a logout line does not unbind anyone", async () => {
+  await withPlugin(async (hooks) => {
+    await login(hooks, "c1", "ses-terra", "terra")
+    await runCommand(
+      hooks,
+      "c2",
+      "ses-terra",
+      logoutCommand("terra"),
+      `${logoutOk("")}\n`,
+    )
+    assert.equal(bindings().get("terra")?.sessionID, "ses-terra")
+  })
+})
+
+test("the agent of the result line decides, as the CLI reported it", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      `${loginOk("terra-2")}\n`,
+    )
+    assert.equal(bindings().has("terra"), false)
+    assert.equal(bindings().get("terra-2")?.sessionID, "ses-terra")
+  })
+})
+
+test("a code in a refusal that is not a plain code is not copied into the log", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      `${resultLine({ command: "login", ok: false, code: "bad code\nwith lines" })}\n`,
+    )
+    assert.match(readLog(), /login refused for session ses-terra, code unknown/)
+  })
+})
+
+test("a call that is not a chat command is not read at all", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(hooks, "c1", "ses-terra", "ls -la", `${loginOk("terra")}\n`)
+    assert.equal(bindings().size, 0)
+  })
+})
+
+test("delivery still reaches a session bound by a result line", async () => {
+  fresh()
+  const delivered = []
+  const client = {
+    session: {
+      promptAsync: async ({ path: p, body }) =>
+        delivered.push(`${p.id} <- ${body.parts[0].text}`),
+    },
+  }
+  const hooks = await AgentsChat({ client })
+  await runCommand(hooks, "c1", "ses-terra", loginCommand("terra"), `${loginOk("terra")}\n`)
+  await new Promise((r) => setTimeout(r, 300))
+  assert.deepEqual(delivered, ["ses-terra <- конверт для terra"])
+  await hooks.dispose()
+})
+
+test("the plugin log is English whatever the CLI printed", async () => {
+  await withPlugin(async (hooks) => {
+    await runCommand(
+      hooks,
+      "c1",
+      "ses-terra",
+      loginCommand("terra"),
+      "AGENTSCHAT: сессия terra подключена к комнате !x:y.\n",
+    )
+    await login(hooks, "c2", "ses-terra", "terra")
+    await new Promise((r) => setTimeout(r, 300))
+    await runCommand(
+      hooks,
+      "c3",
+      "ses-terra",
+      logoutCommand("terra"),
+      `${logoutOk("terra")}\n`,
+    )
+    await hooks.event({
+      event: { type: "session.deleted", properties: { info: { id: "ses-terra" } } },
+    })
+    const log = readLog()
+    assert.ok(log.length > 0)
+    assert.doesNotMatch(log, CYRILLIC)
+  })
+})
+
+function withoutComments(source) {
+  let i = 0
+  const quoted = (quote) => {
+    let text = source[i++]
+    while (i < source.length && source[i] !== quote) {
+      if (source[i] === "\\") text += source[i++]
+      text += source[i++]
+    }
+    return text + source[i++]
+  }
+  const regex = () => {
+    let text = source[i++]
+    let inClass = false
+    while (i < source.length && (inClass || source[i] !== "/")) {
+      if (source[i] === "\\") text += source[i++]
+      else if (source[i] === "[") inClass = true
+      else if (source[i] === "]") inClass = false
+      text += source[i++]
+    }
+    return text + source[i++]
+  }
+  const template = () => {
+    let text = source[i++]
+    while (i < source.length && source[i] !== "`") {
+      if (source[i] === "\\") text += source[i++]
+      else if (source[i] === "$" && source[i + 1] === "{") {
+        text += source.slice(i, i + 2)
+        i += 2
+        text += code(true) + "}"
+        continue
+      }
+      text += source[i++]
+    }
+    return text + source[i++]
+  }
+  const code = (insideTemplate) => {
+    let out = ""
+    let depth = 0
+    let previous = ";"
+    while (i < source.length) {
+      const c = source[i]
+      const next = source[i + 1]
+      if (c === "/" && next === "/") {
+        while (i < source.length && source[i] !== "\n") i++
+        continue
+      }
+      if (c === "/" && next === "*") {
+        i = source.indexOf("*/", i + 2) + 2
+        continue
+      }
+      if (insideTemplate && c === "}" && depth === 0) {
+        i++
+        return out
+      }
+      if (c === "{") depth++
+      if (c === "}") depth--
+      if (c === '"' || c === "'") out += quoted(c)
+      else if (c === "`") out += template()
+      else if (c === "/" && "(,=:[!&|?{};".includes(previous)) out += regex()
+      else out += source[i++]
+      if (!/\s/.test(c)) previous = c
+    }
+    return out
+  }
+  return code(false)
+}
+
+test("the comment stripper keeps strings, templates and regular expressions", () => {
+  const kept = withoutComments(
+    [
+      "// comment жжж",
+      "const a = 'http://x' // tail жжж",
+      "/* block жжж */ const b = `t ${ \"ж\" /* inner жжж */ } end`",
+      "const c = /[/']ж/.test(a)",
+    ].join("\n"),
+  )
+  assert.equal(kept.match(/[Ѐ-ӿ]/g).length, 2)
+  assert.ok(kept.includes("http://x"))
+  assert.ok(!kept.includes("comment"))
+  assert.ok(!kept.includes("block"))
+  assert.ok(!kept.includes("inner"))
+  assert.ok(!kept.includes("tail"))
+})
+
+test("the plugin source has no Cyrillic outside comments", () => {
+  const source = fs.readFileSync(
+    new URL("../../sessionchat/kit/common/opencode/plugins/agentschat.js", import.meta.url),
+    "utf8",
+  )
+  const offending = withoutComments(source)
+    .split("\n")
+    .filter((line) => CYRILLIC.test(line))
+  assert.deepEqual(offending, [])
 })
 
 test.after(() => server.close())

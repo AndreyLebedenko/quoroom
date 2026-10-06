@@ -1,0 +1,13 @@
+{
+  "ca_bundle_help": "путь к rootCA.pem из mkcert, например \"$(mkcert -CAROOT)\\rootCA.pem\"",
+  "certificate_failed": "\nОшибка проверки сертификата. requests не читает системное хранилище Windows, куда mkcert -install кладёт свой корень. Добавьте:\n    --ca-bundle \"$(mkcert -CAROOT)\\rootCA.pem\"\nк этой же команде и запустите заново.",
+  "description": "Регистрация аккаунта на Continuwuity",
+  "homeserver_help": "например https://agentschat.local",
+  "lang_help": "язык сообщений (по умолчанию: en)",
+  "no_session": "В ответе сервера нет session: {text}",
+  "no_verify_ssl_help": "полностью отключить проверку сертификата (грубее, чем --ca-bundle)",
+  "paste_heading": "\n--- вставить в bridge/config.yaml ---",
+  "registration_failed": "Регистрация не удалась: {status} {text}",
+  "unexpected_step_one": "Неожиданный ответ на шаге 1: {status} {text}",
+  "username_help": "localpart, например claude-code"
+}

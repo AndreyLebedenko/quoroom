@@ -1,35 +1,38 @@
-# Скопируйте в continuwuity.toml (в этой же папке) и задайте свой токен.
-# continuwuity.toml — секрет (в нём токен регистрации), в git не должен уходить,
-# см. .gitignore. Этот .example-файл — не секрет, можно коммитить.
+# Copy to continuwuity.toml (in this same folder) and set your own token.
+# continuwuity.toml is a secret (it holds the registration token) and must not
+# go into git; see .gitignore. This .example file is not a secret and can be
+# committed.
 #
-# Почему это отдельный файл, а не переменная окружения в docker/.env:
-# у докер-образа Continuwuity allow_registration и registration_token не
-# подключены к CONTINUWUITY_*-переменным (в отличие от server_name,
-# database_path и т.п.) — только к конфиг-файлу. Подробности и объяснение,
-# как до этого докопались, — в docs/INSTALL.md, раздел 5.4.
+# Why this is a separate file and not an environment variable in docker/.env:
+# in the Continuwuity Docker image allow_registration and registration_token
+# are not wired to the CONTINUWUITY_* variables (unlike server_name,
+# database_path and the like), only to the config file. The details, and how
+# this was found out, are in docs/INSTALL.md, section 5.4.
 #
-# ВАЖНО: у Continuwuity все ключи конфига лежат ВНУТРИ секции [global].
-# Без этого заголовка сервер падает с "invalid type: boolean, expected a map".
+# IMPORTANT: in Continuwuity every config key lives INSIDE the [global]
+# section. Without this header the server fails with "invalid type: boolean,
+# expected a map".
 
 [global]
 
-# Разрешить регистрацию новых аккаунтов по токену.
-# После того как зарегистрируете все 3 аккаунта (docs/INSTALL.md, шаг 5.6),
-# поставьте здесь false и перезапустите continuwuity (docker compose restart
-# continuwuity) — тогда регистрация закроется по-настоящему.
+# Allow registering new accounts with a token.
+# After you have registered all 3 accounts (docs/INSTALL.md, step 5.6), set
+# this to false and restart continuwuity (docker compose restart
+# continuwuity) - only then is registration really closed.
 allow_registration = true
 
-# Токен, который нужно будет ввести при регистрации ВТОРОГО и третьего
-# аккаунтов. Первый аккаунт идёт по токену, который печатает сервер, см. ниже.
-# Сгенерируйте случайную строку самостоятельно, например:
+# The token you will have to enter when registering the SECOND and the third
+# accounts. The first account uses the token the server prints, see below.
+# Generate a random string yourself, for example:
 #   PowerShell:  -join ((48..57)+(97..122)|Get-Random -Count 32|%{[char]$_})
 #
-# ВАЖНО, первый аккаунт. На свежей базе этот токен ещё не работает: сервер
-# при каждом старте с открытой регистрацией печатает СВОЙ токен, и только его
-# принимает первый аккаунт:
+# IMPORTANT, the first account. On a fresh database this token does not work
+# yet: at every start with registration open the server prints ITS OWN token,
+# and only that one is accepted by the first account:
 #   docker compose -f docker/docker-compose.yml logs continuwuity
-#   using the registration token <свой-токен>
-# Второй и третий аккаунты создаются уже этим, настроенным токеном.
-# Установщик читает выданный сервером токен из лога сам (docs/INSTALL.md,
-# раздел 1.5); при ручной установке прочитать его нужно здесь (шаг 5.4).
+#   using the registration token <its-own-token>
+# The second and third accounts are then created with this configured token.
+# The installer reads the token the server issued from the log by itself
+# (docs/INSTALL.md, section 1.5); in a manual install you have to read it
+# here (step 5.4).
 registration_token = "change-me-before-first-run"

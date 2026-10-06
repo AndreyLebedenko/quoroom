@@ -197,6 +197,33 @@ class RunCommandTests(unittest.TestCase):
             self.run_within(15, [sys.executable, "-c", script])
             self.assertEqual(seen.read_text(encoding="utf-8"), "''")
 
+    def test_a_child_sees_the_environment_the_caller_added(self):
+        done = run_command(
+            [sys.executable, "-c", "import os; print(os.environ['AGENTSCHAT_URL'])"],
+            env={"AGENTSCHAT_URL": "http://10.0.0.5:8770"},
+        )
+        self.assertEqual(done.returncode, 0)
+        self.assertEqual(done.stdout.strip(), "http://10.0.0.5:8770")
+
+    def test_a_child_keeps_the_environment_of_the_installer_around_the_addition(self):
+        done = run_command(
+            [sys.executable, "-c", "import os; print(os.environ.get('PATH', ''))"],
+            env={"AGENTSCHAT_URL": "http://10.0.0.5:8770"},
+        )
+        self.assertEqual(done.stdout.strip(), os.environ.get("PATH", ""))
+
+    def test_the_environment_of_the_installer_itself_is_not_changed_by_a_child(self):
+        before = dict(os.environ)
+        run_command(
+            [sys.executable, "-c", "pass"], env={"AGENTSCHAT_URL": "http://10.0.0.5"}
+        )
+        self.assertEqual(dict(os.environ), before)
+
+    def test_a_call_without_an_environment_leaves_the_child_to_inherit(self):
+        with patch("subprocess.run", wraps=subprocess.run) as started:
+            run_command([sys.executable, "-c", "pass"])
+        self.assertIsNone(started.call_args.kwargs["env"])
+
     def test_a_child_that_outlives_the_call_does_not_block_it(self):
         with tempfile.TemporaryDirectory() as home:
             marker = Path(home) / "late.txt"

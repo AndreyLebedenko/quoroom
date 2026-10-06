@@ -1,5 +1,10 @@
+import hashlib
 import io
 import json
+import os
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -7,8 +12,14 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from sessionchat import client, kit
+from sessionchat import client, client_language, kit
+from sessionchat.installer import main as installer
+from sessionchat.i18n import LANGUAGES
 from sessionchat.kit import Action
+
+CYRILLIC = re.compile("[\u0400-\u04ff]")
+BRIDGE = Path(__file__).resolve().parents[1]
+RUSSIAN = "ru"
 
 
 def tree(root: Path) -> dict[str, bytes | None]:
@@ -31,9 +42,9 @@ class KitSandbox(unittest.TestCase):
             root.mkdir(parents=True)
         self.manifest_path = self.home / "store" / "kit.json"
 
-    def install(self, clis=kit.CLIS, force=False):
+    def install(self, clis=kit.CLIS, force=False, lang=RUSSIAN):
         roots = {cli: self.roots[cli] for cli in clis}
-        return kit.install(self.manifest_path, roots, force=force)
+        return kit.install(self.manifest_path, roots, force=force, lang=lang)
 
     def uninstall(self, clis=kit.CLIS, force=False):
         return kit.uninstall(self.manifest_path, self.roots, clis, force=force)
@@ -41,7 +52,7 @@ class KitSandbox(unittest.TestCase):
     def expected(self, cli: str) -> dict[Path, bytes]:
         return {
             self.roots[cli].joinpath(*item.relative.parts): item.content
-            for item in kit.kit_files(cli)
+            for item in kit.kit_files(cli, RUSSIAN)
         }
 
     def manifest(self) -> dict[Path, kit.Entry]:
@@ -62,7 +73,7 @@ class KitFilesTests(unittest.TestCase):
         relatives = {
             (item.cli, item.relative.as_posix())
             for cli in kit.CLIS
-            for item in kit.kit_files(cli)
+            for item in kit.kit_files(cli, RUSSIAN)
         }
         self.assertEqual(
             relatives,
@@ -74,16 +85,47 @@ class KitFilesTests(unittest.TestCase):
             },
         )
 
+    def test_every_language_ships_the_same_paths_for_each_cli(self):
+        for lang in LANGUAGES:
+            with self.subTest(lang=lang):
+                self.assertEqual(
+                    {
+                        (item.cli, item.relative.as_posix())
+                        for cli in kit.CLIS
+                        for item in kit.kit_files(cli, lang)
+                    },
+                    {
+                        ("claude", "skills/chatlogin/SKILL.md"),
+                        ("opencode", "skills/chatlogin/SKILL.md"),
+                        ("opencode", "command/chatlogin.md"),
+                        ("opencode", "plugins/agentschat.js"),
+                    },
+                )
+
+    def test_the_files_of_one_language_differ_from_another(self):
+        self.assertNotEqual(
+            kit.kit_files("claude", "en")[0].content,
+            kit.kit_files("claude", RUSSIAN)[0].content,
+        )
+
     def test_kit_files_are_read_from_whatever_kit_source_is_given(self):
         with tempfile.TemporaryDirectory() as scratch:
             source = Path(scratch)
-            (source / "claude" / "deep" / "er").mkdir(parents=True)
-            (source / "claude" / "deep" / "er" / "x.md").write_bytes(b"x\r\n")
-            files = kit.kit_files("claude", source)
+            (source / "ru" / "claude" / "deep" / "er").mkdir(parents=True)
+            (source / "ru" / "claude" / "deep" / "er" / "x.md").write_bytes(b"x\r\n")
+            files = kit.kit_files("claude", RUSSIAN, source)
         self.assertEqual(
             [(item.relative.as_posix(), item.content) for item in files],
             [("deep/er/x.md", b"x\r\n")],
         )
+
+    def test_a_language_without_files_for_a_cli_is_refused_outright(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            source = Path(scratch)
+            (source / "en" / "claude").mkdir(parents=True)
+            (source / "en" / "claude" / "x.md").write_bytes(b"x")
+            with self.assertRaises(FileNotFoundError):
+                kit.kit_files("opencode", "en", source)
 
 
 class ChosenClisTests(unittest.TestCase):
@@ -141,7 +183,7 @@ class InstallTests(KitSandbox):
                     self.assertEqual(target.read_bytes(), content)
 
     def test_install_reports_each_new_file_as_installed(self):
-        steps = self.install()
+        steps = self.install().steps
         expected = {**self.expected("claude"), **self.expected("opencode")}
         self.assertEqual(
             self.actions(steps), {target: Action.INSTALL for target in expected}
@@ -179,7 +221,7 @@ class InstallTests(KitSandbox):
     def test_a_file_listed_in_the_manifest_is_overwritten_as_an_update(self):
         self.install()
         self.plugin().write_text("// старая версия", encoding="utf-8")
-        steps = self.install()
+        steps = self.install().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.UPDATE)
         self.assertEqual(
             self.plugin().read_bytes(), self.expected("opencode")[self.plugin()]
@@ -191,7 +233,7 @@ class InstallTests(KitSandbox):
         content = self.expected("opencode")[self.plugin()]
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_bytes(content)
-        steps = self.install()
+        steps = self.install().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.UNCHANGED)
         self.assertEqual(
             self.manifest()[self.plugin()], kit.Entry("opencode", kit.digest(content))
@@ -219,7 +261,7 @@ class InstallTests(KitSandbox):
     def test_force_overwrites_an_unlisted_different_file_and_adopts_it(self):
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_text("// чужой плагин", encoding="utf-8")
-        steps = self.install(force=True)
+        steps = self.install(force=True).steps
         content = self.expected("opencode")[self.plugin()]
         self.assertEqual(self.actions(steps)[self.plugin()], Action.OVERWRITE)
         self.assertEqual(self.plugin().read_bytes(), content)
@@ -230,7 +272,7 @@ class InstallTests(KitSandbox):
     def test_installing_twice_leaves_the_same_files_and_the_same_manifest(self):
         self.install()
         after_first = tree(self.home)
-        steps = self.install()
+        steps = self.install().steps
         self.assertEqual(tree(self.home), after_first)
         self.assertEqual(
             set(self.actions(steps).values()),
@@ -252,7 +294,7 @@ class InstallTests(KitSandbox):
 class UninstallTests(KitSandbox):
     def test_uninstall_removes_every_file_it_installed_and_reports_it_removed(self):
         self.install()
-        steps = self.uninstall()
+        steps = self.uninstall().steps
         installed = {**self.expected("claude"), **self.expected("opencode")}
         self.assertEqual(
             self.actions(steps), {target: Action.REMOVE for target in installed}
@@ -304,9 +346,9 @@ class UninstallTests(KitSandbox):
         self.install()
         self.plugin().write_text("// моя правка", encoding="utf-8")
         entry = self.manifest()[self.plugin()]
-        steps = self.uninstall()
+        steps = self.uninstall().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.KEEP)
-        self.assertIn(str(self.plugin()), self.step(steps, self.plugin()).line())
+        self.assertIn(str(self.plugin()), self.step(steps, self.plugin()).line(RUSSIAN))
         self.assertEqual(self.plugin().read_text(encoding="utf-8"), "// моя правка")
         self.assertEqual(self.manifest(), {self.plugin(): entry})
 
@@ -321,7 +363,7 @@ class UninstallTests(KitSandbox):
     def test_force_removes_a_user_edited_file_too(self):
         self.install()
         self.plugin().write_text("// моя правка", encoding="utf-8")
-        steps = self.uninstall(force=True)
+        steps = self.uninstall(force=True).steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.REMOVE)
         self.assertFalse(self.plugin().exists())
         self.assertEqual(self.manifest(), {})
@@ -331,7 +373,7 @@ class UninstallTests(KitSandbox):
     ):
         self.install()
         self.plugin().unlink()
-        steps = self.uninstall()
+        steps = self.uninstall().steps
         self.assertEqual(self.actions(steps)[self.plugin()], Action.GONE)
         self.assertEqual(self.manifest(), {})
 
@@ -349,7 +391,7 @@ class UninstallTests(KitSandbox):
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_text("// не наш", encoding="utf-8")
         before = tree(self.home)
-        self.assertEqual(self.uninstall(), [])
+        self.assertEqual(self.uninstall().steps, ())
         self.assertEqual(tree(self.home), before)
 
     def test_a_listed_file_outside_its_root_is_removed_but_no_directory_is(self):
@@ -381,7 +423,8 @@ class ReportTextTests(unittest.TestCase):
         for action, label in labels.items():
             with self.subTest(action=action):
                 self.assertEqual(
-                    kit.Step(action, target, "claude").line(), f"{label}  {target}"
+                    kit.Step(action, target, "claude").line(RUSSIAN),
+                    f"{label}  {target}",
                 )
 
     def test_install_summary_tells_the_human_to_restart_open_sessions_of_each_cli(
@@ -391,7 +434,7 @@ class ReportTextTests(unittest.TestCase):
             kit.Step(Action.INSTALL, Path("a"), "claude"),
             kit.Step(Action.UPDATE, Path("b"), "opencode"),
         ]
-        summary = kit.install_summary(steps)
+        summary = kit.install_summary(steps, RUSSIAN)
         self.assertIn("Перезапустите открытые сессии Claude Code и OpenCode", summary)
 
     def test_install_summary_names_only_the_clis_whose_files_changed(self):
@@ -399,34 +442,38 @@ class ReportTextTests(unittest.TestCase):
             kit.Step(Action.OVERWRITE, Path("a"), "opencode"),
             kit.Step(Action.UNCHANGED, Path("b"), "claude"),
         ]
-        summary = kit.install_summary(steps)
+        summary = kit.install_summary(steps, RUSSIAN)
         self.assertIn("Перезапустите открытые сессии OpenCode:", summary)
         self.assertNotIn("Claude Code", summary)
 
     def test_install_summary_without_changes_asks_for_no_restart(self):
         steps = [kit.Step(Action.UNCHANGED, Path("a"), "claude")]
-        self.assertNotIn("Перезапустите", kit.install_summary(steps))
+        self.assertNotIn("Перезапустите", kit.install_summary(steps, RUSSIAN))
 
     def test_uninstall_summary_tells_the_human_to_restart_after_a_removal(self):
         steps = [kit.Step(Action.REMOVE, Path("a"), "opencode")]
         self.assertIn(
-            "Перезапустите открытые сессии OpenCode", kit.uninstall_summary(steps)
+            "Перезапустите открытые сессии OpenCode",
+            kit.uninstall_summary(steps, RUSSIAN),
         )
 
     def test_uninstall_summary_points_to_force_when_an_edited_file_was_kept(self):
         steps = [kit.Step(Action.KEEP, Path("a"), "claude")]
-        self.assertIn("agentschat uninstall --force", kit.uninstall_summary(steps))
+        self.assertIn(
+            "agentschat uninstall --force", kit.uninstall_summary(steps, RUSSIAN)
+        )
 
     def test_uninstall_summary_with_nothing_installed_says_there_is_nothing(self):
-        self.assertIn("удалять нечего", kit.uninstall_summary([]))
+        self.assertIn("удалять нечего", kit.uninstall_summary([], RUSSIAN))
 
 
-class AgentschatCommandTests(KitSandbox):
+class AgentschatCase(KitSandbox):
     def setUp(self):
         super().setUp()
         for item in (
             patch.object(client, "STORE", self.manifest_path.parent),
             patch.object(kit, "DEFAULT_ROOTS", self.roots),
+            patch.object(client, "ROOM_LANGUAGE", client_language.RoomLanguage()),
         ):
             item.start()
             self.addCleanup(item.stop)
@@ -449,14 +496,21 @@ class AgentschatCommandTests(KitSandbox):
             str(self.roots["opencode"]),
         )
 
+    def every_target(self):
+        return {(cli, target) for cli in kit.CLIS for target in self.expected(cli)}
+
+
+class AgentschatCommandTests(AgentschatCase):
     def test_install_and_uninstall_through_the_cli_use_the_given_dirs_and_store(self):
-        out, _, code = self.run_agentschat("install", *self.dir_flags())
+        out, _, code = self.run_agentschat(
+            "install", "--lang", RUSSIAN, *self.dir_flags()
+        )
         self.assertEqual(code, 0)
         self.assertIn(f"установлен  {self.plugin()}", out)
         self.assertIn("Перезапустите", out)
         self.assertTrue((client.STORE / "kit.json").is_file())
 
-        out, _, code = self.run_agentschat("uninstall")
+        out, _, code = self.run_agentschat("uninstall", "--lang", RUSSIAN)
         self.assertEqual(code, 0)
         self.assertIn(f"удалён  {self.plugin()}", out)
         self.assertEqual(
@@ -477,8 +531,10 @@ class AgentschatCommandTests(KitSandbox):
     ):
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_text("// чужой плагин", encoding="utf-8")
-        out, err, code = self.run_agentschat("install", *self.dir_flags())
-        self.assertEqual(code, 1)
+        out, err, code = self.run_agentschat(
+            "install", "--lang", RUSSIAN, *self.dir_flags()
+        )
+        self.assertEqual(code, client.FAILURE)
         self.assertEqual(out, "")
         self.assertIn(str(self.plugin()), err)
         self.assertIn("--force", err)
@@ -487,18 +543,530 @@ class AgentschatCommandTests(KitSandbox):
     def test_force_through_the_cli_overwrites_the_unlisted_file(self):
         self.plugin().parent.mkdir(parents=True)
         self.plugin().write_text("// чужой плагин", encoding="utf-8")
-        out, _, code = self.run_agentschat("install", "--force", *self.dir_flags())
+        out, _, code = self.run_agentschat(
+            "install", "--lang", RUSSIAN, "--force", *self.dir_flags()
+        )
         self.assertEqual(code, 0)
         self.assertIn(f"перезаписан  {self.plugin()}", out)
 
     def test_uninstall_force_through_the_cli_removes_an_edited_file(self):
-        self.run_agentschat("install", *self.dir_flags())
+        self.run_agentschat("install", "--lang", RUSSIAN, *self.dir_flags())
         self.plugin().write_text("// моя правка", encoding="utf-8")
-        out, _, _ = self.run_agentschat("uninstall", "--opencode")
+        out, _, _ = self.run_agentschat("uninstall", "--lang", RUSSIAN, "--opencode")
         self.assertIn(f"оставлен (изменён вручную)  {self.plugin()}", out)
-        out, _, _ = self.run_agentschat("uninstall", "--opencode", "--force")
+        out, _, _ = self.run_agentschat(
+            "uninstall", "--lang", RUSSIAN, "--opencode", "--force"
+        )
         self.assertIn(f"удалён  {self.plugin()}", out)
         self.assertTrue(self.claude_skill().is_file())
+
+
+class ReportTests(AgentschatCase):
+    def document(self, *arguments, lang=RUSSIAN):
+        out, err, code = self.run_agentschat(*arguments, "--json", "--lang", lang)
+        return json.loads(out), err, code
+
+    def steps_of(self, document):
+        return {
+            (step["action"], step["cli"], step["target"]) for step in document["steps"]
+        }
+
+    def refused_by(self, *arguments):
+        self.plugin().parent.mkdir(parents=True)
+        self.plugin().write_text("// чужой плагин", encoding="utf-8")
+        return self.document(*arguments, *self.dir_flags())
+
+    def cyrillic_roots(self):
+        return {"claude": self.home / "Андрей", "opencode": self.home / "Олег"}
+
+    def cyrillic_flags(self, roots):
+        return [flag for cli in kit.CLIS for flag in (f"--{cli}-dir", str(roots[cli]))]
+
+    def test_a_first_install_reports_every_file_as_installed(self):
+        document, _, code = self.document("install", *self.dir_flags())
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            document,
+            {
+                "command": "install",
+                "ok": True,
+                "code": "none",
+                "steps": [
+                    {"action": "installed", "cli": cli, "target": str(target)}
+                    for cli, target in sorted(self.every_target())
+                ],
+            },
+        )
+
+    def test_the_document_of_an_install_is_the_only_thing_on_stdout(self):
+        out, _, _ = self.run_agentschat("install", "--json", *self.dir_flags())
+        self.assertEqual(len(out.splitlines()), 1)
+        self.assertIsNone(CYRILLIC.search(out), out)
+
+    def test_a_cyrillic_path_reaches_the_document_of_an_install_as_ascii(self):
+        roots = self.cyrillic_roots()
+        out, _, code = self.run_agentschat(
+            "install", "--json", *self.cyrillic_flags(roots)
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(out.isascii(), out)
+        self.assertIn(str(roots["claude"]), json.loads(out)["steps"][0]["target"])
+
+    def test_a_cyrillic_path_reaches_the_document_of_a_removal_as_ascii(self):
+        roots = self.cyrillic_roots()
+        self.run_agentschat("install", *self.cyrillic_flags(roots))
+        with patch.object(kit, "DEFAULT_ROOTS", roots):
+            out, _, code = self.run_agentschat("uninstall", "--json")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.isascii(), out)
+        self.assertIn(str(roots["claude"]), json.loads(out)["steps"][0]["target"])
+
+    def test_a_repeat_install_reports_every_file_as_unchanged(self):
+        self.run_agentschat("install", "--lang", RUSSIAN, *self.dir_flags())
+        document, _, code = self.document("install", *self.dir_flags())
+        self.assertEqual(code, 0)
+        self.assertEqual({step["action"] for step in document["steps"]}, {"unchanged"})
+
+    def test_an_updated_file_is_reported_as_updated(self):
+        self.run_agentschat("install", "--lang", RUSSIAN, *self.dir_flags())
+        self.plugin().write_text("// старая версия", encoding="utf-8")
+        document, _, _ = self.document("install", *self.dir_flags())
+        self.assertIn(
+            ("updated", "opencode", str(self.plugin())), self.steps_of(document)
+        )
+
+    def test_a_forced_overwrite_is_reported_as_overwritten(self):
+        document, _, code = self.refused_by("install", "--force")
+        self.assertEqual(code, 0)
+        self.assertIn(
+            ("overwritten", "opencode", str(self.plugin())), self.steps_of(document)
+        )
+
+    def test_a_refused_install_reports_the_conflict_in_the_document(self):
+        document, err, code = self.refused_by("install")
+        self.assertEqual(code, client.REFUSED)
+        self.assertEqual(err, "")
+        self.assertEqual(document["code"], "conflict")
+        self.assertFalse(document["ok"])
+        self.assertIn(
+            ("conflict", "opencode", str(self.plugin())), self.steps_of(document)
+        )
+
+    def test_a_refused_install_names_only_the_file_it_refused(self):
+        document, _, _ = self.refused_by("install")
+        self.assertEqual(len(document["steps"]), 1)
+
+    def test_an_uninstall_reports_the_command_it_belongs_to(self):
+        self.run_agentschat("install", "--lang", RUSSIAN, *self.dir_flags())
+        document, _, code = self.document("uninstall")
+        self.assertEqual(code, 0)
+        self.assertEqual(document["command"], "uninstall")
+        self.assertEqual(document["code"], "none")
+
+    def test_an_uninstall_reports_an_edited_file_as_kept_and_the_rest_as_removed(self):
+        self.run_agentschat("install", "--lang", RUSSIAN, *self.dir_flags())
+        self.plugin().write_text("// моя правка", encoding="utf-8")
+        document, _, _ = self.document("uninstall")
+        self.assertIn(("kept", "opencode", str(self.plugin())), self.steps_of(document))
+        self.assertIn(
+            ("removed", "claude", str(self.claude_skill())), self.steps_of(document)
+        )
+
+    def test_a_refusal_without_the_flag_still_names_the_file_and_force(self):
+        self.plugin().parent.mkdir(parents=True)
+        self.plugin().write_text("// чужой плагин", encoding="utf-8")
+        out, err, code = self.run_agentschat(
+            "install", "--lang", RUSSIAN, *self.dir_flags()
+        )
+        self.assertEqual(code, client.FAILURE)
+        self.assertEqual(out, "")
+        self.assertIn(str(self.plugin()), err)
+        self.assertIn("--force", err)
+
+    def test_the_document_does_not_depend_on_the_language(self):
+        russian, _, _ = self.document("install", *self.dir_flags())
+        for root in self.roots.values():
+            shutil.rmtree(root)
+            root.mkdir()
+        self.manifest_path.unlink(missing_ok=True)
+        english, _, _ = self.document("install", lang="en", *self.dir_flags())
+        self.assertEqual(english, russian)
+
+
+class VariantChoiceTests(KitSandbox):
+    def test_every_language_reports_that_it_did_its_work(self):
+        for lang in LANGUAGES:
+            with self.subTest(lang=lang):
+                self.assertEqual(self.install(lang=lang).code, kit.CODE_NONE)
+
+    def test_a_second_install_over_the_same_variant_changes_nothing(self):
+        self.install()
+        again = self.install()
+        self.assertEqual({step.action for step in again.steps}, {Action.UNCHANGED})
+
+    def test_a_manifest_written_by_the_layout_before_the_move_is_read_as_it_was(self):
+        previous_content = b"the skill of the previous release\n"
+        self.claude_skill().parent.mkdir(parents=True)
+        self.claude_skill().write_bytes(previous_content)
+        self.manifest_path.parent.mkdir(parents=True)
+        self.manifest_path.write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {
+                            "path": str(self.claude_skill()),
+                            "sha256": hashlib.sha256(previous_content).hexdigest(),
+                            "cli": "claude",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        report = self.install(clis=("claude",))
+        self.assertEqual(
+            self.actions(report.steps), {self.claude_skill(): Action.UPDATE}
+        )
+
+
+class ReportReadTests(unittest.TestCase):
+    def document(self, **changes) -> str:
+        stored = {
+            "command": "install",
+            "ok": True,
+            "code": "none",
+            "steps": [{"action": "installed", "cli": "claude", "target": "a"}],
+        }
+        return json.dumps(stored | changes)
+
+    def test_a_successful_code_is_read_back_as_ok(self):
+        report = kit.Report.read(self.document(), "install")
+        self.assertEqual(report.code, kit.CODE_NONE)
+        self.assertTrue(report.ok)
+
+    def test_a_refusal_is_read_back_as_not_ok(self):
+        report = kit.Report.read(
+            self.document(code=kit.CODE_CONFLICT, ok=False), "install"
+        )
+        self.assertFalse(report.ok)
+
+    def test_a_code_nobody_defined_is_not_read_even_when_it_claims_success(self):
+        self.assertIsNone(kit.Report.read(self.document(code="mystery"), "install"))
+
+    def test_a_known_code_with_the_wrong_ok_is_not_read(self):
+        wrong = self.document(code=kit.CODE_CONFLICT, ok=True)
+        self.assertIsNone(kit.Report.read(wrong, "install"))
+
+
+class StepLineTests(unittest.TestCase):
+    TABLE = {
+        Action.INSTALL: {"ru": "установлен", "en": "installed"},
+        Action.UPDATE: {"ru": "обновлён", "en": "updated"},
+        Action.OVERWRITE: {"ru": "перезаписан", "en": "overwritten"},
+        Action.UNCHANGED: {"ru": "без изменений", "en": "unchanged"},
+        Action.CONFLICT: {
+            "ru": "занят чужим файлом",
+            "en": "taken by a foreign file",
+        },
+        Action.REMOVE: {"ru": "удалён", "en": "removed"},
+        Action.KEEP: {
+            "ru": "оставлен (изменён вручную)",
+            "en": "left in place (edited by hand)",
+        },
+        Action.GONE: {"ru": "уже нет", "en": "already gone"},
+    }
+
+    def test_every_action_says_the_same_thing_in_both_languages(self):
+        for action, words in self.TABLE.items():
+            for lang in LANGUAGES:
+                with self.subTest(action=action, lang=lang):
+                    self.assertEqual(
+                        kit.CATALOGUE.text(lang, kit.action_key(action)), words[lang]
+                    )
+
+    def test_every_action_of_a_step_has_a_word_in_both_languages(self):
+        for action in kit.Action:
+            for lang in LANGUAGES:
+                with self.subTest(action=action, lang=lang):
+                    self.assertTrue(kit.CATALOGUE.text(lang, kit.action_key(action)))
+
+    def test_the_step_line_is_the_action_word_then_the_target_in_both_languages(self):
+        step = kit.Step(Action.INSTALL, Path("C:/x/SKILL.md"), "claude")
+        self.assertEqual(step.line(RUSSIAN), f"установлен  {Path('C:/x/SKILL.md')}")
+        self.assertEqual(step.line("en"), f"installed  {Path('C:/x/SKILL.md')}")
+
+    def test_the_russian_summary_lines_are_the_ones_the_client_always_printed(self):
+        steps = [
+            kit.Step(Action.INSTALL, Path("a"), "claude"),
+            kit.Step(Action.UPDATE, Path("b"), "opencode"),
+        ]
+        self.assertEqual(
+            kit.install_summary(steps, RUSSIAN),
+            "AGENTSCHAT: набор Quoroom установлен.\n"
+            "Перезапустите открытые сессии Claude Code и OpenCode: "
+            "запущенные изменений не увидят.",
+        )
+
+    def test_the_english_install_summary_says_the_same_thing_in_english(self):
+        steps = [
+            kit.Step(Action.INSTALL, Path("a"), "claude"),
+            kit.Step(Action.UPDATE, Path("b"), "opencode"),
+        ]
+        self.assertEqual(
+            kit.install_summary(steps, "en"),
+            "AGENTSCHAT: the Quoroom kit is installed.\n"
+            "Restart the open Claude Code and OpenCode sessions: "
+            "the running ones will not see the change.",
+        )
+
+    def test_an_install_with_nothing_to_do_says_it_in_both_languages(self):
+        steps = [kit.Step(Action.UNCHANGED, Path("a"), "claude")]
+        self.assertEqual(
+            kit.install_summary(steps, RUSSIAN),
+            "AGENTSCHAT: набор Quoroom уже на месте, менять нечего.",
+        )
+        self.assertEqual(
+            kit.install_summary(steps, "en"),
+            "AGENTSCHAT: the Quoroom kit is already in place, nothing to change.",
+        )
+
+    def test_an_empty_removal_says_it_in_both_languages(self):
+        self.assertEqual(
+            kit.uninstall_summary([], RUSSIAN),
+            "AGENTSCHAT: установленного набора Quoroom нет, удалять нечего.",
+        )
+        self.assertEqual(
+            kit.uninstall_summary([], "en"),
+            "AGENTSCHAT: there is no installed Quoroom kit, nothing to remove.",
+        )
+
+    def test_a_kept_file_is_named_with_the_way_to_remove_it_in_both_languages(self):
+        steps = [kit.Step(Action.KEEP, Path("a"), "claude")]
+        for lang in LANGUAGES:
+            with self.subTest(lang=lang):
+                self.assertIn(
+                    "agentschat uninstall --force",
+                    kit.uninstall_summary(steps, lang),
+                )
+
+    def test_the_refusal_names_the_file_the_reason_and_the_way_out_in_both_languages(
+        self,
+    ):
+        steps = [kit.Step(Action.CONFLICT, Path("C:/x/SKILL.md"), "claude")]
+        said = {lang: str(kit.KitConflict(steps, lang)) for lang in LANGUAGES}
+        for lang, refusal in said.items():
+            with self.subTest(lang=lang):
+                self.assertIn(str(Path("C:/x/SKILL.md")), refusal)
+                self.assertIn("--force", refusal)
+        self.assertIn("ничего не записано", said[RUSSIAN])
+        self.assertIn("отличаются от набора Quoroom", said[RUSSIAN])
+        self.assertIn("nothing was written", said["en"])
+        self.assertIn("differ from the Quoroom kit", said["en"])
+
+    def test_the_english_refusal_and_help_carry_no_cyrillic(self):
+        said = [
+            kit.CATALOGUE.text("en", key, **{"default": "x", "files": "f"})
+            for key in (
+                "kit.conflict",
+                "kit.help_install",
+                "kit.help_uninstall",
+                "kit.help_claude_only",
+                "kit.help_opencode_only",
+                "kit.help_dir",
+                "kit.help_force_install",
+                "kit.help_force_uninstall",
+                "kit.help_json",
+                "kit.help_lang",
+            )
+        ]
+        for line in said:
+            with self.subTest(line=line):
+                self.assertIsNone(CYRILLIC.search(line), line)
+
+
+class HelpTests(AgentschatCase):
+    def shown(self, *arguments) -> tuple[str, int]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = 0
+        with patch.object(sys, "argv", ["agentschat", *arguments]):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                try:
+                    client.main()
+                except SystemExit as exit_code:
+                    code = exit_code.code
+        return stdout.getvalue() + stderr.getvalue(), code
+
+    def helped(self, command: str) -> str:
+        return self.shown(command, "--help")[0]
+
+    def test_the_help_of_both_commands_names_the_language_flag(self):
+        for command in ("install", "uninstall"):
+            with self.subTest(command=command):
+                self.assertIn("--lang", self.helped(command))
+
+    def test_the_help_of_both_commands_says_which_languages_it_takes(self):
+        for command in ("install", "uninstall"):
+            with self.subTest(command=command):
+                self.assertIn("language of the answer: en or ru", self.helped(command))
+
+    def test_the_help_of_both_commands_offers_the_report_flag(self):
+        for command in ("install", "uninstall"):
+            with self.subTest(command=command):
+                self.assertIn("--json", self.helped(command))
+
+    def test_the_main_help_describes_both_commands_in_the_known_language(self):
+        shown, code = self.shown("--help")
+        self.assertEqual(code, 0)
+        self.assertIn("put the Quoroom kit into the Claude Code", shown)
+        self.assertIn("remove the installed Quoroom kit", shown)
+
+    def test_the_remembered_language_decides_the_help(self):
+        (client.STORE).mkdir(parents=True, exist_ok=True)
+        (client.STORE / "language").write_text("ru\n", encoding="utf-8")
+        self.assertIn("перезаписать чужие файлы", self.helped("install"))
+        self.assertIn("удалить и изменённые вручную файлы", self.helped("uninstall"))
+        self.assertIn("отчёт кодом, без предложений", self.helped("install"))
+        self.assertIn("разложить набор Quoroom", self.shown("--help")[0])
+
+    def test_an_unknown_language_is_refused_before_anything_is_installed(self):
+        shown, code = self.shown("install", "--lang", "fr")
+        self.assertEqual(code, 2)
+        self.assertIn("invalid choice: 'fr'", shown)
+        self.assertEqual(tree(self.roots["claude"]), {})
+
+
+class RealClientTests(unittest.TestCase):
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.home = Path(scratch.name).resolve()
+
+    def client(self, *arguments):
+        return subprocess.run(
+            [sys.executable, "-X", "utf8", "-m", "sessionchat.client", *arguments],
+            cwd=BRIDGE,
+            env=dict(
+                os.environ,
+                PYTHONPATH=str(BRIDGE),
+                HOME=str(self.home),
+                USERPROFILE=str(self.home),
+            ),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+
+    def kit_files(self) -> list[Path]:
+        return sorted(
+            path
+            for root in (self.home / ".claude", self.home / ".config" / "opencode")
+            for path in root.rglob("*")
+            if path.is_file()
+        )
+
+    def test_an_english_install_writes_the_kit_and_prints_only_ascii(self):
+        done = self.client("install", "--lang", "en")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(self.kit_files())
+        self.assertTrue(done.stdout.isascii(), done.stdout)
+        self.assertTrue(done.stderr.isascii(), done.stderr)
+
+    def test_an_english_removal_takes_the_kit_back_and_prints_only_ascii(self):
+        self.client("install", "--lang", "en")
+        done = self.client("uninstall", "--lang", "en")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.kit_files(), [])
+        self.assertTrue(done.stdout.isascii(), done.stdout)
+        self.assertTrue(done.stderr.isascii(), done.stderr)
+
+    def test_a_russian_install_says_what_it_always_said(self):
+        done = self.client("install", "--lang", "ru")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("AGENTSCHAT: набор Quoroom установлен.", done.stdout)
+        self.assertIn(
+            "Перезапустите открытые сессии Claude Code и OpenCode", done.stdout
+        )
+
+    def test_an_english_install_names_the_action_of_every_file_in_english(self):
+        done = self.client("install", "--lang", "en")
+        for path in self.kit_files():
+            with self.subTest(path=path):
+                self.assertIn(f"installed  {path}", done.stdout)
+
+    def test_a_refused_english_install_says_why_in_ascii_and_exits_non_zero(self):
+        foreign = self.home / ".claude" / "skills" / "chatlogin"
+        foreign.mkdir(parents=True)
+        (foreign / "SKILL.md").write_text("// not ours\n", encoding="utf-8")
+        done = self.client("install", "--lang", "en")
+        self.assertEqual(done.returncode, client.FAILURE)
+        self.assertTrue(done.stderr.isascii(), done.stderr)
+        self.assertIn("nothing was written", done.stderr)
+        self.assertIn("--force", done.stderr)
+
+    def test_a_refused_english_install_with_the_flag_reports_the_conflict_as_a_code(
+        self,
+    ):
+        foreign = self.home / ".claude" / "skills" / "chatlogin"
+        foreign.mkdir(parents=True)
+        (foreign / "SKILL.md").write_text("// not ours\n", encoding="utf-8")
+        done = self.client("install", "--lang", "en", "--json")
+        self.assertEqual(done.returncode, client.REFUSED)
+        self.assertEqual(json.loads(done.stdout)["code"], "conflict")
+        self.assertEqual(done.stderr, "")
+
+
+class ExitCodeTests(unittest.TestCase):
+    def test_the_refusal_code_of_the_client_is_not_one_the_installer_uses(self):
+        self.assertNotIn(client.REFUSED, set(installer.CODES.values()))
+
+    def test_the_refusal_code_of_the_client_differs_from_a_plain_failure(self):
+        self.assertNotEqual(client.REFUSED, client.FAILURE)
+
+
+class ReportReadingTests(unittest.TestCase):
+    def document(self, **changes) -> str:
+        stored = {
+            "command": kit.COMMAND_INSTALL,
+            "ok": True,
+            "code": kit.CODE_NONE,
+            "steps": [{"action": "unchanged", "cli": "claude", "target": "a"}],
+        }
+        return json.dumps(stored | changes)
+
+    def read(self, raw, command=kit.COMMAND_INSTALL):
+        return kit.Report.read(raw, command)
+
+    def test_a_document_of_the_asked_command_is_read(self):
+        report = self.read(self.document())
+        self.assertEqual(report.command, kit.COMMAND_INSTALL)
+        self.assertEqual(report.code, kit.CODE_NONE)
+        self.assertTrue(report.ok)
+        self.assertEqual(report.steps[0].target, Path("a"))
+
+    def test_a_document_of_another_command_is_no_document(self):
+        self.assertIsNone(self.read(self.document(command=kit.COMMAND_UNINSTALL)))
+
+    def test_a_document_that_contradicts_its_own_code_is_no_document(self):
+        self.assertIsNone(self.read(self.document(ok=False)))
+
+    def test_a_refusal_that_blames_no_file_is_no_document(self):
+        self.assertIsNone(
+            self.read(self.document(code=kit.CODE_CONFLICT, ok=False, steps=[]))
+        )
+
+    def test_an_empty_step_list_is_a_document_when_nothing_was_refused(self):
+        self.assertEqual(self.read(self.document(steps=[])).steps, ())
+
+    def test_words_around_the_document_are_no_document(self):
+        self.assertIsNone(self.read(f"отчёт ниже:\n{self.document()}\nвсё."))
+
+    def test_the_words_of_a_refusal_are_no_document(self):
+        self.assertIsNone(self.read("установка отменена, ничего не записано."))
+
+    def test_an_action_nobody_declared_is_no_document(self):
+        self.assertIsNone(self.read(self.document(steps=[{"action": "written"}])))
 
 
 if __name__ == "__main__":

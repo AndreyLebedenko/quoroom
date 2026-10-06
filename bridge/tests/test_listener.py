@@ -14,14 +14,15 @@ from unittest.mock import patch
 
 import requests
 
-from sessionchat import client
+from sessionchat import client, client_language
+from sessionchat.broker import broker_text
 from sessionchat.protocol import DEAF_SECONDS, Envelope
 
 # poll_once возвращает готовый текст конверта: собирает его брокер, потому
 # что только он знает режим доставки сессии.
 MESSAGE = Envelope(
-    "@human:local", "человек", "проверка связи", "$e", "22:00:00", 0
-).render()
+    "@human:local", "human", "проверка связи", "$e", "22:00:00", 0
+).render("ru", broker_text)
 
 
 class Clock:
@@ -40,7 +41,13 @@ class Clock:
 class ListenerTests(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        store = pathlib.Path(folder.name)
+        (store / "language").write_text("ru\n", encoding="utf-8")
         patches = [
+            patch.object(client, "STORE", store),
+            patch.object(client, "ROOM_LANGUAGE", client_language.RoomLanguage()),
             patch.object(client, "credentials", return_value={"token": "tok"}),
             patch.object(client, "time", self.clock),
         ]

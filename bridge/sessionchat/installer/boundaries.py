@@ -28,6 +28,7 @@ class Runner(Protocol):
         argv: Sequence[str],
         stdin: str | None = ...,
         output: Path | None = ...,
+        env: Mapping[str, str] | None = ...,
     ) -> "subprocess.CompletedProcess[str]": ...
 
 
@@ -91,6 +92,7 @@ def run_command(
     argv: Sequence[str],
     stdin: str | None = None,
     output: Path | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> "subprocess.CompletedProcess[str]":
     sink = None
     if output is not None:
@@ -105,6 +107,7 @@ def run_command(
             stderr=subprocess.STDOUT if sink is not None else subprocess.PIPE,
             text=True,
             check=False,
+            env=None if env is None else {**os.environ, **env},
         )
     finally:
         if sink is not None:

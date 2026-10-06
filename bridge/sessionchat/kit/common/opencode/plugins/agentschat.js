@@ -80,6 +80,53 @@ function chatCommand(args) {
   return { kind, agent: found[1] }
 }
 
+const RESULT_PREFIX = "AGENTSCHAT-RESULT "
+const AGENT_NAME = /^[A-Za-z0-9][\w-]*$/
+const CODE_NAME = /^[a-z][a-z0-9_]*$/
+
+function lastResultLine(text) {
+  const lines = text.split(/\r?\n/).filter((line) => line.startsWith(RESULT_PREFIX))
+  return lines.length ? lines[lines.length - 1] : null
+}
+
+/**
+ * Итог команды login или logout из строки AGENTSCHAT-RESULT: решает последняя
+ * такая строка вывода, остальной текст не читается. Возвращает null, если
+ * привязку или снятие делать нельзя, и записывает причину в лог.
+ */
+function readResult(text, kind) {
+  const line = lastResultLine(text)
+  if (!line) {
+    note(`${kind}: no result line in the command output, nothing changed`)
+    return null
+  }
+  let result
+  try {
+    result = JSON.parse(line.slice(RESULT_PREFIX.length))
+  } catch (error) {
+    note(`${kind}: result line is not valid JSON (${error.message}), nothing changed`)
+    return null
+  }
+  if (result === null || typeof result !== "object" || Array.isArray(result)) {
+    note(`${kind}: result line is not a JSON object, nothing changed`)
+    return null
+  }
+  if (result.command !== kind) return null
+  if (result.ok === false) {
+    const code = typeof result.code === "string" && CODE_NAME.test(result.code) ? result.code : "unknown"
+    return { ok: false, code }
+  }
+  if (result.ok !== true) {
+    note(`${kind}: result line has no boolean ok, nothing changed`)
+    return null
+  }
+  if (typeof result.agent !== "string" || !AGENT_NAME.test(result.agent)) {
+    note(`${kind}: result line names no valid agent, nothing changed`)
+    return null
+  }
+  return { ok: true, agent: result.agent }
+}
+
 /**
  * Состояние общее на весь процесс OpenCode, а не на экземпляр плагина: две
  * сессии в одном процессе делят и карту привязок, и запущенные циклы опроса.
@@ -110,7 +157,7 @@ export const AgentsChat = async ({ client }) => {
   const state = shared()
   state.instances += 1
   state.stopped = false
-  note(`плагин загружен из ${import.meta.url}, брокер ${BROKER}`)
+  note(`plugin loaded from ${import.meta.url}, broker ${BROKER}`)
 
   async function deliver(sessionID, text) {
     await client.session.promptAsync({
@@ -128,11 +175,11 @@ export const AgentsChat = async ({ client }) => {
     if (response.status === 409) {
       // Токен не принят: сессия отключена, слот освобождён молчанием или
       // bridge/state удалён. Ждём нового login и не дёргаемся на каждое сообщение.
-      note(`${agent}: брокер больше не знает эту сессию: ${(await response.text()).trim()}`)
+      note(`${agent}: the broker no longer knows this session: ${(await response.text()).trim()}`)
       state.bindings.delete(agent)
       return null
     }
-    if (!response.ok) throw new Error(`брокер ответил ${response.status}`)
+    if (!response.ok) throw new Error(`broker answered ${response.status}`)
     const data = await response.json()
     return String(data.rendered || data.text || "")
   }
@@ -141,7 +188,7 @@ export const AgentsChat = async ({ client }) => {
     const bound = state.bindings.get(agent)
     if (!bound || bound.looping) return
     bound.looping = true
-    note(`${agent}: слушаю брокера для сессии ${bound.sessionID}`)
+    note(`${agent}: listening to the broker for session ${bound.sessionID}`)
     // Цикл живёт, пока эта привязка остаётся текущей: logout, отказ брокера
     // или вход другой сессии под тем же именем заменяют её, и цикл выходит.
     while (!state.stopped && state.bindings.get(agent) === bound) {
@@ -151,9 +198,9 @@ export const AgentsChat = async ({ client }) => {
         // сессию снаружи. Молчать тут нельзя: однажды такой цикл крутился
         // впустую полчаса, а привязка снаружи выглядела живой.
         bound.tokenless = (bound.tokenless || 0) + 1
-        if (bound.tokenless === 1) note(`${agent}: токен не найден, жду`)
+        if (bound.tokenless === 1) note(`${agent}: token not found, waiting`)
         if (bound.tokenless > TOKENLESS_LIMIT) {
-          note(`${agent}: токена так и нет, привязку снимаю — нужен новый login`)
+          note(`${agent}: token still missing, dropping the binding, a new login is needed`)
           state.bindings.delete(agent)
         }
         await sleep(RETRY_MS)
@@ -166,23 +213,23 @@ export const AgentsChat = async ({ client }) => {
       } catch (error) {
         // Брокер мог быть перезапущен или ещё не поднят. Плагин, в отличие от
         // отдельного listener, умирать не может и не должен: он просто ждёт.
-        note(`${agent}: опрос не удался (${error.message}), повтор через ${RETRY_MS / 1000}с`)
+        note(`${agent}: poll failed (${error.message}), retry in ${RETRY_MS / 1000}s`)
         await sleep(RETRY_MS)
         continue
       }
       if (!envelope || state.bindings.get(agent) !== bound) continue
       try {
         await deliver(bound.sessionID, envelope)
-        note(`${agent}: сообщение доставлено в сессию ${bound.sessionID}`)
+        note(`${agent}: message delivered to session ${bound.sessionID}`)
       } catch (error) {
         note(
-          `${agent}: не удалось вложить сообщение в сессию ${bound.sessionID}: ${error.message}`,
+          `${agent}: could not put the message into session ${bound.sessionID}: ${error.message}`,
         )
         await sleep(RETRY_MS)
       }
     }
     bound.looping = false
-    note(`${agent}: опрос остановлен`)
+    note(`${agent}: polling stopped`)
   }
 
   /**
@@ -203,9 +250,9 @@ export const AgentsChat = async ({ client }) => {
         body: JSON.stringify({ agent, token }),
         signal: AbortSignal.timeout(5_000),
       })
-      note(`${agent}: слот освобождён (${why}), сессия ${bound?.sessionID ?? "?"}`)
+      note(`${agent}: slot released (${why}), session ${bound?.sessionID ?? "?"}`)
     } catch (error) {
-      note(`${agent}: слот освободить не удалось (${why}): ${error.message}`)
+      note(`${agent}: could not release the slot (${why}): ${error.message}`)
     }
   }
 
@@ -213,7 +260,7 @@ export const AgentsChat = async ({ client }) => {
     const already = state.bindings.get(agent)
     if (already && already.sessionID === sessionID) return
     state.bindings.set(agent, { sessionID, looping: false })
-    note(`${why}: агент ${agent} — сессия ${sessionID}`)
+    note(`${why}: agent ${agent}, session ${sessionID}`)
     loop(agent)
   }
 
@@ -229,13 +276,18 @@ export const AgentsChat = async ({ client }) => {
       const started = state.pending.get(input.callID)
       if (!started) return
       state.pending.delete(input.callID)
-      const text = String(output?.output ?? "")
-      if (started.kind === "login" && text.includes("подключена к комнате")) {
-        bind(started.agent, started.sessionID, "к чату подключена сессия")
+      const result = readResult(String(output?.output ?? ""), started.kind)
+      if (!result) return
+      if (!result.ok) {
+        note(`${started.kind} refused for session ${started.sessionID}, code ${result.code}`)
+        return
       }
-      if (started.kind === "logout" && text.includes("отключена")) {
-        note(`${started.agent}: сессия ${started.sessionID} отключена от чата`)
-        state.bindings.delete(started.agent)
+      if (started.kind === "login") {
+        state.names.set(started.sessionID, result.agent)
+        bind(result.agent, started.sessionID, "session logged in to the chat")
+      } else {
+        note(`${result.agent}: session ${started.sessionID} logged out of the chat`)
+        state.bindings.delete(result.agent)
       }
     },
 
@@ -247,7 +299,7 @@ export const AgentsChat = async ({ client }) => {
       const agent = state.names.get(input.sessionID)
       if (!agent || state.bindings.has(agent)) return
       if (!brokerToken(agent)) return
-      bind(agent, input.sessionID, "привязка по сообщению, а не по login")
+      bind(agent, input.sessionID, "binding by message, not by login")
     },
 
     event: async (input) => {
@@ -259,7 +311,7 @@ export const AgentsChat = async ({ client }) => {
         // следующая проверка отвечала на этот вопрос сама.
         if (!state.seenEvents.has(kind)) {
           state.seenEvents.add(kind)
-          note(`событие OpenCode: ${kind}`)
+          note(`OpenCode event: ${kind}`)
         }
       }
       // Сессию закрыли в самом OpenCode. Слот держать больше не за кого.
@@ -267,7 +319,7 @@ export const AgentsChat = async ({ client }) => {
       const sessionID = input.event.properties?.info?.id
       if (!sessionID) return
       for (const [agent, bound] of state.bindings) {
-        if (bound.sessionID === sessionID) await releaseSlot(agent, "сессия закрыта")
+        if (bound.sessionID === sessionID) await releaseSlot(agent, "session closed")
       }
       state.names.delete(sessionID)
     },
@@ -280,7 +332,7 @@ export const AgentsChat = async ({ client }) => {
       // Успеть освободить слоты получается не всегда: убитый процесс не
       // исполняет ничего. Поэтому это ускорение, а не гарантия.
       for (const agent of [...state.bindings.keys()]) {
-        await releaseSlot(agent, "OpenCode закрывается")
+        await releaseSlot(agent, "OpenCode is closing")
       }
       state.bindings.clear()
     },
