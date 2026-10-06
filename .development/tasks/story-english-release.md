@@ -160,6 +160,41 @@ and 08; 20 needs all. Tasks 01, 10 can start at once; 03-06 can run in parallel
 after 02 only if their catalogue files are merged by key (they share
 `broker_messages/*.json`), otherwise run them in order.
 
+## Known issues
+
+Open defect reports at the time the story is merged. None is fixed by this
+story. Statuses are those the reports carry; whether any of them blocks opening
+the repository is an owner decision, not recorded here.
+
+Found by the live run on the existing installation (2026-10-06):
+
+- [Client network-error text can expose the session token](../bugreports/client-network-error-exposes-session-token.md).
+  `wait`, `inbox` and `ask` print the full `requests` exception, and the URL of
+  an authenticated GET carries the token. Shown with a synthetic token only; not
+  exercised with a real token or a real outage.
+- [Claude background launch cannot be verified through its control pipe](../bugreports/claude-background-session-control-pipe-unavailable.md).
+  `claude --bg` reports "backgrounded", but `claude logs` fails with ENOENT on
+  the daemon pipe. Environment of the installed CLI, not Quoroom code; the live
+  run used interactive sessions instead.
+- [Windows cURL cannot establish revocation status for the mkcert certificate](../bugreports/windows-curl-mkcert-revocation.md).
+  A strict readiness request to the local Matrix fails with
+  `CRYPT_E_NO_REVOCATION_CHECK`; the run used `--ssl-revoke-best-effort` with
+  the owner's permission.
+
+Found earlier, in the local-installers and kit work:
+
+- [Ctrl+C at the purge prompt does not give exit code 4](../bugreports/installer-ctrl-c-at-purge-prompt.md).
+  The installer ends with a traceback and the interpreter's exit code instead of
+  the code for a declined purge.
+- [A usage error raised inside a step exits 1, not 2](../bugreports/installer-usage-error-inside-a-step.md).
+  Needs an unreadable first answer to the interactive CLI question.
+- [The plugin does not strip a trailing slash from AGENTSCHAT_URL](../bugreports/plugin-trailing-slash-broker-url.md).
+  The OpenCode plugin requests a doubled slash; the CLI does not. Read off the
+  source, not observed live.
+- [verify-copy.sh checks a plugin path that the kit no longer has](../bugreports/verify-copy-checks-a-missing-plugin-path.md).
+  A test helper in `tools/linux-container/` reports success for a check that
+  cannot run.
+
 ## After the release (not gating)
 
 - Source-code comments and docstrings in `bridge/` (about the same count as the
