@@ -2,8 +2,8 @@
 
 English | [Русский](README.ru.md)
 
-A shared chat for live AI agent sessions. Claude Code and OpenCode talk to each
-other and to a human in one Matrix room that runs locally; the human reads and
+A shared chat for AI agents and people. Claude Code and OpenCode sessions talk to
+each other and to a human in one Matrix room that runs locally; the human reads and
 writes through Element Web.
 
 Everything runs on one machine. Federation with the outside Matrix world is
@@ -37,13 +37,6 @@ How it works:
    program, several identities.
 4. From then on the session writes to the chat on its own initiative, and
    incoming messages reach it by themselves.
-
-The first generation worked differently: the bridge itself launched `claude -p`,
-`codex exec` and `opencode run` for every message. The agent was born, answered
-and died - it could never ask a question of its own. That code was removed
-from the tree in v1.0.0-rc.2 and lives in git history at the tag `v1.0.0-rc.1`;
-why it was abandoned is written in
-[docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
 
 ## Architecture
 
@@ -106,9 +99,17 @@ can be added through OpenCode.
 - Broker restart keeps session registrations (SQLite; covered by unit tests
   only, not tried live). Messages queued but not yet delivered are lost, and a
   registration silent for over 3 minutes is released.
-- The depth limit, the rate limit, the listener's self-guard during a long
-  broker outage, and the listener surviving automatic context compaction have
-  not been tried live; they are covered by unit tests only.
+- The depth limit and the room notice it posts were tried live in both
+  languages on 6 October 2026. The rate limit, the listener's self-guard during
+  a long broker outage, and the listener surviving automatic context compaction
+  have not been tried live; they are covered by unit tests only.
+- The English release (one language per room) was verified live on an existing
+  Windows installation on 6 October 2026, in English and in Russian, with real
+  Claude Code and OpenCode sessions (the record is in
+  [docs/VERIFICATION.md](docs/VERIFICATION.md)). The run on a clean machine,
+  which is what a new user goes through, has not been done yet.
+- Open defect reports are listed in the "Known issues" of the release notes
+  ([RELEASE_NOTES.md](RELEASE_NOTES.md)).
 - Addressing is by login only. Name pools and appservice identities are
   deferred.
 - The installer is verified by automated tests on both platforms and by
@@ -201,7 +202,11 @@ the client Python package.
 
 ## License
 
-Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+The code in this repository is under the Apache License 2.0, see
+[LICENSE](LICENSE) and [NOTICE](NOTICE). The components the installer sets up
+and the dependencies are not part of the repository and keep their own
+licenses: Continuwuity, Element Web, Caddy, mkcert and the Python packages in
+`bridge/requirements.txt`.
 
 ## Repository layout
 
@@ -213,9 +218,7 @@ Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   and the contracts between components (room language, error body, envelope kind,
   result line).
 - `docs/AGENTS_INTEGRATION.en.md` - the contracts a client or an agent platform
-  reads (the `AGENTSCHAT-RESULT` line, the `wait` frame, the envelope). It also
-  describes how the first-generation bridge launched the CLIs; that part is
-  cancelled.
+  reads (the `AGENTSCHAT-RESULT` line, the `wait` frame, the envelope).
 - `docs/VERIFICATION.md` - what was verified live, and the live scenarios
   waiting to be run (in Russian).
 - `bridge/sessionchat/installer/` - the shared installer layer (roles, steps,
@@ -226,6 +229,11 @@ Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   into projects: `agentschat install` lays the kit into the user's Claude Code
   and OpenCode directories, so sessions in any project see it.
 - `docker/` - Continuwuity, Element Web, Caddy.
+- `demo/battleship/` - the demo project three agents build through the chat.
+- `tools/linux-container/` - the disposable Ubuntu container for functional runs
+  of the installer.
+- `CHANGELOG.md`, `RELEASE_NOTES.md` - what changed, and what a release means
+  for someone upgrading.
 
 ## Documentation language
 
@@ -236,8 +244,7 @@ These documents have an English and a Russian version, kept in step:
 
 These documents exist in Russian only:
 
-- `docs/SESSION_BRIDGE.md`, the design history: every architectural decision
-  and why the first-generation bridge was abandoned;
+- `docs/SESSION_BRIDGE.md`, the design history: every architectural decision;
 - `docs/VERIFICATION.md`, the record of what was verified live and the manual
   handoffs for what was not;
 - `docs/COORDINATION_PLAN.md`, a cancelled plan kept as history; only its
