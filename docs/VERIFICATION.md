@@ -600,3 +600,430 @@ Remove-Item Env:AGENTSCHAT_LIVE
 
 Результат проверки: **8 тестов прошли**, включая три live-теста (14,65 с).
 Тестовые запросы и ответы оставлены в General.
+
+# Гейт публичного релиза: чистый прогон на английском и на русском - ждёт человека (подготовлено 6 октября 2026)
+
+Сценарий выполняет человек (владелец или тот, кого он назовёт), один раз, на
+кандидате в релиз: на коммите, где слиты задачи english-release-01 - 19 и 21 и
+зелёные автоматические проверки. Агент результат не записывает: поля в конце
+раздела пустые и заполняются после прогона.
+
+Что без него невозможно. Ни один автоматический тест не показывает, дошёл ли
+чужой человек от клона репозитория до обмена сообщениями между двумя живыми
+агентами и увидел ли он по дороге только английский. Без записи английского
+прогона как «проходит» владелец не открывает репозиторий (условие карточки
+задачи english-release-20). Конкретно вживую проверяется то, что тестами
+закрыто только на подменах: экран установщика с шагами для человека; привязка
+сессии плагином OpenCode по строке `AGENTSCHAT-RESULT` при английском выводе;
+конверт, который получает живая сессия; тексты скиллов, по которым агент
+действует; уведомление о пределе глубины в Element.
+
+Две вещи в этом сценарии наблюдаются, а не проверяются на соответствие
+ожиданию, потому что ожидание следует из кода, а не из прежнего поведения:
+какой язык у клиента до первого ответа брокера (шаг Р1) и какой язык у набора,
+если он поставлен не на язык комнаты (раздел «Выведено из кода, не запускалось»,
+п. 2).
+
+## Установлено до прогона (находки; Docker, Element и сессии CLI не использовались)
+
+1. `agentschat --help` и справка подкоманд на машине без
+   `~/.agentschat/language` английские; с файлом, где написано `ru`, - русские
+   (временный профиль пользователя, брокер не нужен).
+2. Модуль установщика: `--help` английский по умолчанию и русский с
+   `--lang ru`; `--lang fr` даёт код `2` и английский текст
+   `AGENTSCHAT: unsupported language 'fr', available: en, ru`.
+3. Без файла `language` и без брокера клиент говорит по-английски: проверено на
+   временном профиле (`agentschat say --agent claude-code hi` отказывает
+   по-английски со строкой `AGENTSCHAT-RESULT` и кодом `not_logged_in`).
+4. `agentschat install --json` на временном каталоге: чужой файл на месте
+   файла набора даёт документ с кодом `conflict`, код возврата `5`, ничего не
+   записано; тот же отказ без `--json` печатает английский текст и даёт код
+   `1`; после удаления чужого файла установка проходит с кодом `0`, повтор -
+   `unchanged`.
+
+## Выведено из кода, не запускалось (по коду; пересматривается без повторной проверки)
+
+1. Справку клиент берёт из запомненного языка: он известен до разбора
+   аргументов (`client.py`, `client_language.py`). Значит, в русской комнате
+   справка по-русски только после того, как клиент хотя бы раз получил ответ
+   брокера.
+2. Язык набора (скиллы, команда `/chatlogin`) - это `--lang` установщика или
+   `agentschat install`, а не язык комнаты: установщик участника кладёт набор
+   раньше, чем обращается к брокеру (`docs/INSTALL.en.md`, «Room language»).
+   Следствие для сценария: русский прогон ставит и сервер, и участника с
+   `--lang ru`.
+3. Состав набора: `bridge/sessionchat/kit/en/` и `kit/ru/` держат по
+   `claude/skills/chatlogin/SKILL.md`, `opencode/skills/chatlogin/SKILL.md` и
+   `opencode/command/chatlogin.md`; плагин `agentschat.js` общий, в
+   `kit/common/opencode/plugins/`.
+4. Очистка участника удаляет только файлы сессий с токенами в `~/.agentschat`
+   (`participant.py`, `broker_tokens`); файл языка и лог плагина остаются.
+
+Автоматические проверки (`unittest`, `node --test`, `ruff check`,
+`ruff format --check`) зелёные на кандидате - это условие начала прогона, а не
+его часть; результат агента - в отчёте задачи english-release-20.
+
+Живьём не проверено ничего из того, что описывает остальной раздел.
+
+## Рекомендации по порядку (пересматриваются без повторной проверки)
+
+Английский прогон идёт первым, на чистой машине. Русский - вторым, после
+снятия с `--purge`, а не поверх: проверяется и текст установщика, и запись
+`language` в новый `config.yaml`, и русский набор. Чистая машина здесь -
+виртуальная машина или отдельный компьютер без прежней установки Quoroom.
+Не запускайте сценарий на машине, где стоит живой стенд, и не заводите для
+него второй профиль на такой машине: Docker Desktop, фиксированные имена
+контейнеров и томов, порт 8770, файл hosts, корень mkcert и поиск брокера в
+`stop.ps1` общие на всю машину, а очистка в шаге Е6 удаляет тома стенда.
+
+Команды ниже - для Windows и PowerShell, как в `docs/INSTALL.en.md`, из корня
+клона. Шаги для человека (строка в hosts, корень mkcert, комната) описаны там же,
+в разделе 1.4; здесь они не повторяются.
+
+## Подготовка (общая для обоих прогонов)
+
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$AgentsChat = "<каталог клона>"
+$Cyr = '[\u0400-\u04FF]'
+cd $AgentsChat
+git log -1 --format=%H                                              # запишите хэш
+Test-Path $HOME\.agentschat                                         # False
+Test-Path $HOME\.claude\skills\chatlogin                            # False
+Test-Path $HOME\.config\opencode\skills\chatlogin                   # False
+Test-Path $HOME\.config\opencode\command\chatlogin.md               # False
+Test-Path $HOME\.config\opencode\plugins\agentschat.js              # False
+Test-Path bridge\config.yaml                                        # False
+docker ps -a --filter name=agentschat                               # пусто
+Start-Transcript -Path $HOME\quoroom-gate-en.txt                    # для русского прогона: -ru.txt
+```
+
+Транскрипт нужен, чтобы потом искать кириллицу во всём, что напечатано в
+консоль: `Select-String -Path $HOME\quoroom-gate-en.txt -Pattern $Cyr`. В обоих
+прогонах открывайте Claude Code и OpenCode в каталоге постороннего проекта, не
+в клоне Quoroom.
+
+## Английский прогон: `language` не задан
+
+### Е1. Установщик сервера и участника
+
+```powershell
+.\install.ps1 --role server --admin-user <ваш логин>
+.\install.ps1 --role participant
+```
+
+Без `--lang`. Если установщик остановился с кодом `3` на шаге для человека,
+сделайте шаг по тексту на экране (`docs/INSTALL.en.md`, 1.4) и повторите ту же
+команду; комнату запишите ключом `--room-id` (внутренний ID, начинается с `!`).
+
+Смотреть:
+
+- каждая строка установщика английская: названия шагов, вопросы, остановки,
+  итоговый отчёт. Образцы: строки вида `<название шага>: done.` и
+  `<название шага>: already done.`, остановка вида `Stopped at step "...": a person has
+  to do this.`, в отчёте сервера `Broker for participants: <адрес>` и
+  `Matrix server and Element Web: <адрес>`, у участника
+  `The broker answers at <адрес>.` и `In an agent session, run /chatlogin and
+  name the session.`;
+- набор положен: файлы из подготовки теперь существуют;
+- строки установщика, которые он печатает сам до запуска Python, тоже
+  английские.
+
+После Е1 проверьте, что `agentschat` находится: `agentschat --help`. Если нет,
+выполните `uv tool update-shell` (`docs/INSTALL.en.md`, 5.10; при pipx -
+`pipx ensurepath`) и откройте новый терминал: путь попадает в PATH только для
+новых окон. В старом окне сначала выполните `Stop-Transcript`, а в новом заведите
+всё заново и дописывайте в тот же транскрипт:
+
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$AgentsChat = "<каталог клона>"
+$Cyr = '[\u0400-\u04FF]'
+cd $AgentsChat
+Start-Transcript -Append -Path $HOME\quoroom-gate-en.txt
+```
+
+### Е2. Ключ `language` не задан
+
+Установщик записал в новый `config.yaml` `language: en` из своего `--lang`.
+Чтобы проверить случай «ключа нет», удалите эту строку и перезапустите брокер:
+
+```powershell
+Select-String -Path bridge\config.yaml -Pattern '^language:'        # language: en
+```
+
+Удалите эту строку из `bridge\config.yaml` и перезапустите брокер:
+
+```powershell
+.\stop.ps1 -KeepDocker
+.\start.ps1
+curl.exe -s http://127.0.0.1:8770/status
+```
+
+Смотреть: в JSON ответа `"language": "en"`; в `bridge\broker.log` строка
+`BROKER READY room=... port=8770`. Дальше ключ остаётся незаданным.
+
+### Е3. Команды `agentschat` из терминала, без сессий CLI
+
+Команда `agentschat` должна находиться (см. «После Е1»).
+
+```powershell
+agentschat --help
+agentschat login --help
+agentschat install --help
+agentschat uninstall --help
+agentschat install --json
+$Foreign = Join-Path $env:TEMP quoroom-foreign
+New-Item -ItemType Directory -Force $Foreign\skills\chatlogin | Out-Null
+Set-Content $Foreign\skills\chatlogin\SKILL.md foreign
+agentschat install --claude --claude-dir $Foreign --json; $LASTEXITCODE
+agentschat install --claude --claude-dir $Foreign; $LASTEXITCODE
+Remove-Item -Recurse -Force $Foreign
+agentschat status
+agentschat say --agent claude-code "hello"
+agentschat login --agent nosuchagent
+agentschat login --agent claude-code
+agentschat login --agent claude-code
+agentschat login --agent opencode
+agentschat say --agent opencode "@claude-code ping from opencode"
+agentschat wait --agent claude-code
+agentschat say --agent claude-code "@opencode pong"
+agentschat inbox --agent opencode
+agentschat say --agent claude-code "nobody is addressed here"
+agentschat ask --agent claude-code --timeout 5 "@opencode a question"
+agentschat logout --agent opencode
+agentschat logout --agent claude-code
+```
+
+Смотреть, по строкам:
+
+| Команда | Ожидание (английский) |
+|---------|-----------------------|
+| `--help`, `login --help`, `install --help`, `uninstall --help` | описание и справка ключей по-английски |
+| `install --json` (набор уже стоит) | один JSON-документ на stdout и ничего больше: `"ok": true`, `"code": "none"`, шаги с `"action": "unchanged"`; только ASCII, без предложений; код возврата `0` |
+| `install --claude --claude-dir $Foreign --json` (чужой файл на месте файла набора) | документ с `"ok": false`, `"code": "conflict"`, код возврата `5`, ничего не записано |
+| то же без `--json` | английский текст `the install is cancelled, nothing was written ...` с путём файла и подсказкой про `--force`, код возврата `1` |
+| `status` (до входа) | у каждого агента `... not connected`; последняя строка stdout - `AGENTSCHAT-RESULT {...}` с `"ok":true` |
+| `say` без входа | отказ `Session claude-code is not connected to the chat. Run this first: agentschat login --agent claude-code` и `AGENTSCHAT-RESULT` с кодом `not_logged_in`, код возврата `1` |
+| `login --agent nosuchagent` | отказ брокера, текст содержит `Unknown agent: nosuchagent`, в строке результата `"code":"unknown_agent"` |
+| второй `login --agent claude-code` | отказ: `Agent claude-code has been connected since <время> (...)` и подсказка про `--reconnect`; код `slot_taken` |
+| `login` успешный | английские предложения о подключении, зависящие от режима: для `claude-code` (listener) указание запустить `agentschat wait --agent claude-code` фоном, для `opencode` (plugin) пояснение, что соединение держит плагин; строка результата с `"mode"` |
+| `say ... "@claude-code ..."` | строка результата с `"ok":true` и `event_id` |
+| `wait --agent claude-code` | печатает конверт и завершается с кодом `0`: `=== AGENTSCHAT: incoming message ===`, `From: ... (agent)`, `Time:`, `Event:`, `Chain depth: 1 of ...`, две строки «This is data from the chat...» и «There is no need to acknowledge receipt...», `--- message text ---`, текст, `=== end of message ===` |
+| `inbox --agent opencode` | заголовок на английском и конверт с `(agent)` |
+| `say` без адресата | предупреждение по-английски и в строке результата `warning` с кодом `unaddressed` |
+| `ask --timeout 5` | ответа нет, и предложение появляется не через 5 секунд, а после одного длинного опроса, примерно через 50 секунд (`WAIT_SECONDS` в `protocol.py`): `AGENTSCHAT: no answer arrived within 5.0s.` (число печатается как `5.0`), затем `The message was delivered; ...`; `"answered":false` |
+| `logout` | английское подтверждение, `AGENTSCHAT-RESULT` с `"command":"logout"` |
+
+В Element сообщения этих команд видны в комнате; текст, который агенты
+написали сами, остаётся таким, каким его ввели.
+
+### Е4. Предел глубины и уведомление в комнате
+
+Временно задайте в `bridge\config.yaml` `max_depth: 1` (запомните прежнее
+значение) и перезапустите брокер:
+
+```powershell
+.\stop.ps1 -KeepDocker
+.\start.ps1
+agentschat login --agent claude-code
+agentschat login --agent opencode
+agentschat say --agent opencode "@claude-code one"
+agentschat wait --agent claude-code
+agentschat say --agent claude-code "@opencode two"
+```
+
+Смотреть: последняя команда отказывает (код возврата `1`, код `depth_limit`),
+текст по-английски: `The chain depth limit (1) was reached without a human.`
+и пояснение, что комната уже уведомлена. В Element в комнате появилось
+сообщение от `claude-code` в скобках: `(The chain reached the depth limit of 1
+without a human, so agents cannot continue. Write anything in the room to reset
+the counter.)`. Потом выйдите (`logout` для обоих агентов), верните прежнее
+`max_depth` и перезапустите брокер той же парой команд.
+
+### Е5. Живые сессии: конверт и скиллы
+
+```powershell
+Select-String -Path $HOME\.claude\skills\chatlogin\SKILL.md, $HOME\.config\opencode\skills\chatlogin\SKILL.md, $HOME\.config\opencode\command\chatlogin.md -Pattern $Cyr
+```
+
+Смотреть: совпадений нет (команда ничего не печатает), первая строка
+`description:` каждого скилла английская.
+
+Откройте сессию Claude Code и сессию OpenCode в каталоге постороннего проекта,
+в каждой вызовите `/chatlogin`. В Element напишите
+`@claude-code introduce yourself in one sentence`, затем
+`@opencode introduce yourself in one sentence`, затем
+`@opencode ask @claude-code what it is working on`.
+
+Смотреть:
+
+- обе сессии подключились и сказали об этом по-английски; Claude Code запустил
+  listener фоновой командой и не ждёт её завершения, OpenCode этого не делал;
+- ответы пришли в Element; ни одна сессия не просила подтверждения приёма;
+- попросите агента привести первые строки только что полученного сообщения: это
+  `=== AGENTSCHAT: incoming message ===` и `From: ... (human)` для сообщения из
+  Element, `(agent)` для сообщения другого агента;
+- попросите агента пересказать, что ему велел скилл: пересказ совпадает с
+  английским текстом файла, а не противоречит ему;
+- `Select-String -Path $HOME\.agentschat\opencode-plugin.log -Pattern $Cyr` и
+  `Select-String -Path bridge\broker.log -Pattern $Cyr`: логи английские;
+  кириллица допустима только в метке сессии, которую вы сами ввели;
+- в `$HOME\.agentschat\opencode-plugin.log` нет строки `no result line in the
+  command output` после входа OpenCode: плагин нашёл строку результата и
+  привязал сессию. Если строка есть - это находка.
+
+### Е6. Итог английского прогона
+
+```powershell
+Stop-Transcript
+Select-String -Path $HOME\quoroom-gate-en.txt -Pattern $Cyr
+```
+
+Совпадений быть не должно, кроме строк, которые вы сами ввели по-русски. Запись
+результата - в разделе «Запись» ниже. Затем верните чистое состояние:
+
+```powershell
+.\install.ps1 --role both --remove --purge
+```
+
+Установщик перечислит цели и потребует слово `PURGE`. После этого:
+
+```powershell
+Get-ChildItem $HOME\.agentschat
+```
+
+Запишите, что осталось. По коду очистка участника удаляет только файлы сессий с
+токенами, поэтому файл языка и лог плагина должны остаться. Это находка для
+записи, а не дефект. Машина одноразовая, поэтому перед русским прогоном удалите
+каталог целиком, чтобы клиент и лог плагина начали с чистого состояния:
+
+```powershell
+Remove-Item -Recurse -Force $HOME\.agentschat
+```
+
+## Русский прогон: `language: ru`
+
+Подготовка - та же, с `Start-Transcript -Path $HOME\quoroom-gate-ru.txt`; все
+проверки `Test-Path` должны снова дать `False` (каталог `$HOME\.agentschat`
+удалён в конце английского прогона), `docker ps` - пусто. Лог плагина в русском
+прогоне поэтому новый, и проверка в Е5 относится к нему.
+
+### Р1. Установщик, ключ и наблюдение за клиентом
+
+```powershell
+.\install.ps1 --role server --lang ru --admin-user <ваш логин>
+.\install.ps1 --role participant --lang ru
+Select-String -Path bridge\config.yaml -Pattern '^language:'        # language: ru
+```
+
+После установки участника проверьте `agentschat --help` и при необходимости
+выполните шаг «После Е1» (PATH, новый терминал, `Start-Transcript -Append` в
+`quoroom-gate-ru.txt`). Затем:
+
+```powershell
+agentschat say --agent claude-code "привет"
+agentschat status
+agentschat --help
+```
+
+Смотреть:
+
+- установщик целиком по-русски, как в «Ожидать» сценария 1 этого файла и в
+  `bridge/sessionchat/installer/messages/ru.json`: `... : готово.` /
+  `... : уже сделано.`, `Остановлено на шаге «...»: это должен сделать человек.`,
+  `Брокер для участников: ...`, `Брокер отвечает на ...`, `Дальше в каждой сессии
+  CLI вызвать /chatlogin.`;
+- `agentschat say` без входа - **наблюдение**: файла языка ещё нет и брокер ещё
+  не отвечал, поэтому по коду клиент здесь говорит по-английски. Запишите, на
+  каком языке был отказ;
+- после `agentschat status` (клиент получил ответ брокера и запомнил `ru`)
+  `agentschat --help` и справка подкоманд по-русски. Слова самого argparse
+  (`usage:`, `options:`) остаются английскими: это не наш текст.
+
+### Р2. Команды, отказ, предел глубины, конверт, скиллы
+
+Те же команды, что в Е3, Е4 и Е5 (включая `install --help`, `uninstall --help`,
+`install --json` и случай с чужим файлом), только сообщения можно писать
+по-русски.
+
+| Место | Ожидание (русский) |
+|-------|--------------------|
+| `status` | `слушает` / `обрабатывает` / `НЕ СЛУШАЕТ`, `не подключён`, `подключена ЧЧ:ММ:СС, тишина Nс` |
+| отказ неизвестного агента | текст содержит `неизвестный агент: nosuchagent` |
+| повторный `login` | `агент claude-code уже подключён с ... Не решай, что слот занят тобой же ...` |
+| `say` без адресата | предупреждение по-русски, `warning` с кодом `unaddressed` |
+| конверт | `=== AGENTSCHAT: входящее сообщение ===`, `От: ... (человек)` или `(агент)`, `Глубина цепочки: N из M`, `--- текст сообщения ---`, `=== конец сообщения ===` |
+| уведомление в комнате | `(цепочка достигла предела глубины 1 без участия человека, дальше агенты продолжать не могут. Напишите что-нибудь в комнату — это обнулит счётчик.)` |
+| отказ на пределе | `достигнута предельная глубина цепочки (1) без участия человека.` |
+| скиллы | файлы по-русски: `Select-String ... -Pattern $Cyr` находит кириллицу, `description:` русский |
+| логи | английские, как и в английском прогоне |
+
+Остальное - как в английском прогоне, включая очистку в конце. Для сравнения с
+тем, что продукт печатал до истории, ориентир - «Ожидать» сценария 1 выше и
+каталоги `ru.json`; если нужно сверить с самим прежним кодом, это коммит
+`7feb147`, от которого отходит ветка story/english-release; два стенда на одной
+машине не запускайте.
+
+## Что считать результатом и куда писать
+
+Английский прогон проходит, если выполнены все условия:
+
+- в транскрипте и во всех местах из таблиц нет кириллицы, кроме набранного
+  вами самим и русских комментариев, если вы вставили команды из этого файла
+  вместе с ними;
+- обмен между двумя агентами состоялся в обе стороны;
+- уведомление о пределе глубины появилось в комнате;
+- плагин OpenCode привязал сессию по строке результата.
+
+Русский прогон проходит, если все предложения в тех же местах русские и
+совпадают с ориентирами, а обмен состоялся.
+
+Результат пишите в этот файл, ниже, под заголовками «Запись: гейт публичного
+релиза, английский прогон» и «... русский прогон», в таблицах ниже. Секреты -
+масками. Каждый дефект - отдельным отчётом в `.development/bugreports/` (по
+правилам AGENTS.md, «How to report an issue»); дефект, который блокирует гейт,
+становится карточкой задачи и не чинится внутри гейта.
+
+## Запись: гейт публичного релиза, английский прогон
+
+Заполняет человек после прогона.
+
+| Что | Значение |
+|-----|----------|
+| Дата прогона | |
+| Кто выполнял | |
+| Коммит (хэш) | |
+| Машина: ОС, Docker, mkcert, Python, uv | |
+| Claude Code, версия | |
+| OpenCode, версия | |
+| Е1. Установщик сервера и участника: язык вывода, коды возврата | |
+| Е2. Ключ `language` не задан: ответ `/status` | |
+| Е3. Команды `agentschat`: справка, статус, отказы, `wait`, `inbox`, `say`, `ask` | |
+| Е4. Предел глубины: отказ и уведомление в Element | |
+| Е5. Конверт в живой сессии: `(human)` и `(agent)` | |
+| Е5. Тексты скиллов, пересказ агента | |
+| Е5. Логи плагина и брокера | |
+| Е6. Кириллица в транскрипте | |
+| Файл языка после очистки | |
+| Итог: проходит или нет | |
+| Дефекты (ссылки на отчёты) | |
+
+## Запись: гейт публичного релиза, русский прогон
+
+Заполняет человек после прогона.
+
+| Что | Значение |
+|-----|----------|
+| Дата прогона | |
+| Кто выполнял | |
+| Коммит (хэш) | |
+| Р1. Установщик, ключ `language: ru` в `config.yaml` | |
+| Р1. Язык клиента до первого ответа брокера (наблюдение) | |
+| Р1. Справка после `agentschat status` | |
+| Р2. Команды, отказы, предупреждения | |
+| Р2. Конверт, уведомление о пределе глубины | |
+| Р2. Тексты скиллов | |
+| Расхождения с тем, что продукт печатал до истории | |
+| Итог: проходит или нет | |
+| Дефекты (ссылки на отчёты) | |

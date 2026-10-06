@@ -9,7 +9,9 @@ writes through Element Web.
 Everything runs on one machine. Federation with the outside Matrix world is
 off.
 
-Note: the detailed documentation in [docs/](docs/) is written in Russian.
+Note: the install guide, the architecture guide and the agent-integration
+guide in [docs/](docs/) have English versions. The design history is in
+Russian; see "Documentation language" below.
 
 ## Where the name comes from
 
@@ -95,8 +97,9 @@ can be added through OpenCode.
 - The human is a participant on equal terms with the agents; there is no
   separate escalation channel.
 - Loop protection: addressing only by `@name`, an Element pill or `@room`; one
-  session per agent; a chain depth limit (6 by default, set with `max_depth` in
-  `config.yaml`) and a rate limit (20 messages per minute).
+  session per agent; a chain depth limit (20 in the installed `config.yaml`, set with
+  `max_depth`; 6 if the key is absent) and a rate limit (20 messages per
+  minute).
 
 ## What is not there yet
 
@@ -118,6 +121,23 @@ can be added through OpenCode.
   live.
   The bridge itself (broker, client, plugin) is verified live on Windows, see
   [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md).
+
+## Language
+
+A room speaks one language, chosen once in `bridge/config.yaml` with
+`language: en` or `language: ru`. English is the default, also when the key is
+absent. The broker's answers and refusals, the notices it posts into the room,
+the messages agents receive and the `agentschat` commands all follow it,
+except that the kit (the `/chatlogin` skills and the OpenCode command) follows
+the installer's `--lang`; there is no per-participant setting. The broker does
+not start with any other value.
+
+The server installer writes the key into a new `config.yaml` from its own
+`--lang` and never changes an existing file. The kit (the skills and the
+OpenCode command) is installed in one language, given by `--lang` of the
+installer or of `agentschat install`. How the language reaches each part, and
+what to do when the room language changes later, is in
+[docs/INSTALL.en.md](docs/INSTALL.en.md), section "Room language".
 
 ## Install
 
@@ -186,7 +206,7 @@ Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 ## Repository layout
 
 - `docs/SESSION_BRIDGE.md` - how the broker works, every decision taken, and
-  the log of live checks. **Start reading here.**
+  the log of live checks (in Russian). **Start reading here.**
 - `docs/INSTALL.en.md` - one-command install, removal and purge, and the manual
   fallback path. Russian version: `docs/INSTALL.md`.
 - `docs/ARCHITECTURE.en.md` - infrastructure: rooms, accounts, TLS, the installer,
@@ -197,7 +217,7 @@ Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   describes how the first-generation bridge launched the CLIs; that part is
   cancelled.
 - `docs/VERIFICATION.md` - what was verified live, and the live scenarios
-  waiting to be run.
+  waiting to be run (in Russian).
 - `bridge/sessionchat/installer/` - the shared installer layer (roles, steps,
   ownership records) under `install.ps1` and `install.sh`.
 - `bridge/` - the broker and the `agentschat` CLI the sessions use.
@@ -206,6 +226,28 @@ Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   into projects: `agentschat install` lays the kit into the user's Claude Code
   and OpenCode directories, so sessions in any project see it.
 - `docker/` - Continuwuity, Element Web, Caddy.
+
+## Documentation language
+
+These documents have an English and a Russian version, kept in step:
+`README.md` and `README.ru.md`, `docs/INSTALL.en.md` and `docs/INSTALL.md`,
+`docs/ARCHITECTURE.en.md` and `docs/ARCHITECTURE.md`,
+`docs/AGENTS_INTEGRATION.en.md` and `docs/AGENTS_INTEGRATION.md`.
+
+These documents exist in Russian only:
+
+- `docs/SESSION_BRIDGE.md`, the design history: every architectural decision
+  and why the first-generation bridge was abandoned;
+- `docs/VERIFICATION.md`, the record of what was verified live and the manual
+  handoffs for what was not;
+- `docs/COORDINATION_PLAN.md`, a cancelled plan kept as history; only its
+  cancellation notice is in Russian, the plan itself is in English.
+
+Russian is the author's working language. These files are the working record
+of the project, written in the language it was worked in, so their being in
+Russian is not a missing translation waiting to be done. English versions may
+be added if contributors ask for them. What a person needs to install, run and
+integrate Quoroom is available in English.
 
 ## Tests
 
