@@ -44,6 +44,7 @@ from nio import (
 )
 
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, Catalogue
+from .access_log import AccessLogger
 from .protocol import (
     DEFAULT_PORT,
     LISTEN_GRACE,
@@ -862,7 +863,7 @@ async def run(config: Path, agents: str = "") -> None:
     runner = None
     try:
         await broker.join_all()
-        runner = web.AppRunner(broker.app())
+        runner = web.AppRunner(broker.app(), access_log_class=AccessLogger)
         await runner.setup()
         try:
             await web.TCPSite(runner, "127.0.0.1", broker.port).start()
