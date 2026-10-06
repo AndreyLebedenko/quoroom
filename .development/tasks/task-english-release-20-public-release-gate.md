@@ -1,6 +1,6 @@
 # Task english-release-20: The gate before the repository is opened
 
-**Status:** Planned.
+**Status:** Implemented, awaiting the human clean-machine runs (English and Russian) recorded in docs/VERIFICATION.md.
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** all of tasks english-release-01 to 19 and 21.
 **Estimate:** 2 hours of agent work, plus a human run on a clean machine.
