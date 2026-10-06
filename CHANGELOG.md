@@ -50,6 +50,7 @@ release is cut.
   reasoned allowlist.
 - A manual handoff in `docs/VERIFICATION.md` for the clean-machine run in
   English and in Russian.
+- `demo/battleship/` and `tools/linux-container/` are written in English.
 
 ### Changed
 
@@ -95,12 +96,25 @@ release is cut.
 
 - `agentschat login` printed Russian text inside an English participant
   install; the sentences of every command now follow the room language.
+- The broker's HTTP access log no longer records session tokens. It keeps the
+  method, the path, the status and the time, and drops the query string,
+  headers and body. Before, the default aiohttp access log wrote the full
+  request URL, which carries the `token` parameter of `wait` and `inbox`. Logs
+  written by earlier versions may still hold session tokens; treat them as
+  secrets or delete them.
 
 ### Known limitations
 
-- The English run on a clean machine, and the Russian run that must match what
-  was printed before this release, have not been recorded yet. They are a
-  manual handoff for a human in `docs/VERIFICATION.md`.
+- The release was verified live on an existing Windows installation, in English
+  and in Russian, with real Claude Code and OpenCode sessions (6 October 2026,
+  `docs/VERIFICATION.md`). The run on a clean machine, and the Russian run
+  that must match what was printed before this release, are still a manual
+  handoff for a human in the same file.
+- Open defects: the client can print a session token inside a network error
+  (not exercised with a real token); `claude --bg` cannot be checked through
+  its control pipe in the tested environment; strict Windows cURL cannot check
+  revocation of the local mkcert certificate. Details are in "Known issues" in
+  `RELEASE_NOTES.md`.
 - `docs/SESSION_BRIDGE.md` and `docs/VERIFICATION.md` are in Russian only,
   and so is the cancellation notice of `docs/COORDINATION_PLAN.md`; the README
   says so. Comments in several Python and JavaScript files are still Russian.
