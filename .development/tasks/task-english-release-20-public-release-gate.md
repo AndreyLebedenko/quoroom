@@ -2,7 +2,7 @@
 
 **Status:** Planned.
 **Story:** story-english-release.md (shared rules apply).
-**Depends on:** all of tasks english-release-01 to 19.
+**Depends on:** all of tasks english-release-01 to 19 and 21.
 **Estimate:** 2 hours of agent work, plus a human run on a clean machine.
 
 ## Summary
@@ -31,9 +31,8 @@ housekeeping that a public tree needs and a private one does not.
 
 ## Boundary
 
-- `README.md`, `README.ru.md`, `CHANGELOG.md`, `docs/VERIFICATION.md` (a new
-  recorded section, appended; earlier records untouched), and moves or removals
-  that the owner approves for `demo/` and `tools/`.
+- `README.md`, `README.ru.md`, `CHANGELOG.md` and `docs/VERIFICATION.md` (a new
+  recorded section, appended; earlier records untouched).
 - No code change. A defect found by the run becomes a bug report under
   `.development/bugreports/` (AGENTS.md "How to report an issue") and, if it
   blocks the gate, a task card; it is not fixed inside this task.
@@ -44,9 +43,10 @@ housekeeping that a public tree needs and a private one does not.
   `docs/SESSION_BRIDGE.md`, `docs/VERIFICATION.md`, `docs/COORDINATION_PLAN.md`)
   and says the Russian is the author's working language, not a missing
   translation.
-- Owner decision, recorded in the card report: for `demo/battleship/` and
-  `tools/linux-container/` keep with a note in the README, translate, or leave
-  out of the public tree.
+- Owner decision (2026-10-06): `demo/battleship/` and `tools/linux-container/`
+  are translated into English. That work is task english-release-21, not this
+  task; this task only records it in the report and checks the README does not
+  claim they are Russian.
 - Manual handoff prepared for the human: the exact commands for a clean-machine
   run with `language` unset (English) and then with `language: ru`, what to look
   for in each place (installer, each `agentschat` command, a refusal, the room
@@ -58,7 +58,7 @@ housekeeping that a public tree needs and a private one does not.
 ## Acceptance criteria
 
 - [ ] The README states which documents are Russian and why.
-- [ ] The decision about `demo/` and `tools/` is recorded and carried out.
+- [ ] The decision about `demo/` and `tools/` is recorded (carried out by task 21).
 - [ ] The handoff is prepared; the recorded English run passes (human).
 - [ ] The recorded Russian run matches what the product printed before the story
       (human).
