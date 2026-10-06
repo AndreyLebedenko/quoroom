@@ -1,6 +1,6 @@
 # Task english-release-21: demo/battleship and tools/linux-container in English
 
-**Status:** Planned.
+**Status:** Completed (2026-10-06).
 **Story:** story-english-release.md (shared rules apply, except that these
 files have no catalogue: see Boundary).
 **Depends on:** task english-release-17 (the Cyrillic scan and its allowlist).

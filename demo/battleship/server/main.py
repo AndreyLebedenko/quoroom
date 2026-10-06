@@ -1,4 +1,4 @@
-"""Морской бой: авторитетный сервер. Поле противника клиенту не отдаётся."""
+"""Battleship: the authoritative game server."""
 
 import json
 import random
@@ -48,30 +48,30 @@ def random_fleet():
                 ships.append(cells)
                 break
         else:
-            raise RuntimeError("не удалось расставить флот")
+            raise RuntimeError("could not place the fleet")
     return board, ships
 
 
 def validate_fleet(ships):
     if not isinstance(ships, list) or len(ships) != len(SHIP_FLEET):
-        raise GameError("флот должен быть списком из 10 кораблей", 400)
+        raise GameError("the fleet must be a list of 10 ships", 400)
     sizes = sorted(len(s) for s in ships)
     if sizes != sorted(SHIP_FLEET):
-        raise GameError("неверный состав флота", 400)
+        raise GameError("wrong fleet composition", 400)
     board = [[EMPTY] * BOARD_SIZE for _ in range(BOARD_SIZE)]
     norm = []
     for ship in ships:
         cells = []
         for cell in ship:
             if not isinstance(cell, dict) or not {"x", "y"} <= set(cell):
-                raise GameError("клетка корабля: {x, y}", 400)
+                raise GameError("ship cell: {x, y}", 400)
             x, y = cell["x"], cell["y"]
             if not (isinstance(x, int) and isinstance(y, int)
                     and 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE):
-                raise GameError("координаты вне поля", 400)
+                raise GameError("coordinates outside the board", 400)
             cells.append((x, y))
         if len(set(cells)) != len(cells):
-            raise GameError("в корабле повторяются клетки", 400)
+            raise GameError("a ship repeats a cell", 400)
         cells.sort()
         straight = all(
             (c[0] - cells[0][0], c[1] - cells[0][1]) == (i, 0)
@@ -79,10 +79,10 @@ def validate_fleet(ships):
             for i, c in enumerate(cells)
         )
         if not straight:
-            raise GameError("корабль должен быть прямой линией", 400)
+            raise GameError("a ship must be a straight line", 400)
         for x, y in cells:
             if any(board[ny][nx] == SHIP for nx, ny in neighbors(x, y)):
-                raise GameError("корабли не должны касаться даже углами", 400)
+                raise GameError("ships must not touch, not even at the corners", 400)
         for x, y in cells:
             board[y][x] = SHIP
         norm.append(cells)
@@ -110,7 +110,7 @@ class Game:
     def add_player(self):
         with LOCK:
             if len(self.players) >= 2:
-                raise GameError("в этом матче уже двое игроков")
+                raise GameError("this match already has two players")
             player = Player()
             player.board, player.ships = random_fleet()
             self.players.append(player)
@@ -123,13 +123,13 @@ class Game:
         for i, p in enumerate(self.players):
             if p.id == player_id:
                 return i
-        raise GameError("неизвестный player_id", 403)
+        raise GameError("unknown player_id", 403)
 
     def place(self, player_id, ships=None):
         with LOCK:
             idx = self.index_of(player_id)
             if self.shots_fired > 0:
-                raise GameError("расстановка заперта: матч начался")
+                raise GameError("placement is locked: the match has started")
             if ships is None:
                 self.players[idx].board, self.players[idx].ships = random_fleet()
             else:
@@ -139,14 +139,14 @@ class Game:
         with LOCK:
             if not (isinstance(x, int) and isinstance(y, int)
                     and 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE):
-                raise GameError("координаты вне поля", 400)
+                raise GameError("coordinates outside the board", 400)
             idx = self.index_of(player_id)
             if self.phase != "playing":
-                raise GameError("матч не в фазе игры", 409)
+                raise GameError("the match is not in the playing phase", 409)
             if self.turn != idx:
-                raise GameError("не твой ход", 409)
+                raise GameError("not your turn", 409)
             if (x, y) in self.shots[idx]:
-                raise GameError("здесь уже стреляли", 400)
+                raise GameError("this cell was already shot at", 400)
             self.shots[idx].add((x, y))
             self.shots_fired += 1
             enemy = self.players[1 - idx]
@@ -241,14 +241,14 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length).decode("utf-8"))
             return data if isinstance(data, dict) else {}
         except (ValueError, UnicodeDecodeError):
-            raise GameError("тело запроса не JSON", 400)
+            raise GameError("the request body is not JSON", 400)
 
     def _player_id(self, data=None, query=None):
         pid = (data or {}).get("player_id")
         if pid is None and query:
             (pid,) = query.get("player_id", [None])
         if not pid:
-            raise GameError("нет player_id", 400)
+            raise GameError("no player_id", 400)
         return pid
 
     def do_OPTIONS(self):
@@ -271,10 +271,10 @@ class Handler(BaseHTTPRequestHandler):
                     and parts[3] == "state"):
                 game = GAMES.get(parts[2])
                 if game is None:
-                    raise GameError("матч не найден", 404)
+                    raise GameError("match not found", 404)
                 self._send(200, game.state_for(self._player_id(query=query)))
                 return
-            raise GameError("нет такого пути", 404)
+            raise GameError("no such path", 404)
         except GameError as e:
             self._send(e.status, {"error": str(e)})
 
@@ -294,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[0] == "api" and parts[1] == "game":
                 game = GAMES.get(parts[2])
                 if game is None:
-                    raise GameError("матч не найден", 404)
+                    raise GameError("match not found", 404)
                 pid = self._player_id(data)
                 if parts[3] == "place":
                     game.place(pid, data.get("ships"))
@@ -303,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[3] == "fire":
                     self._send(200, game.fire(pid, data.get("x"), data.get("y")))
                     return
-            raise GameError("нет такого пути", 404)
+            raise GameError("no such path", 404)
         except GameError as e:
             self._send(e.status, {"error": str(e)})
 

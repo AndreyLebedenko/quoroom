@@ -1,4 +1,4 @@
-"""Тесты сервера морского боя: протокол, правила, изоляция поля противника."""
+"""Tests of the battleship server: protocol, rules, isolation of the opponent's board."""
 
 import json
 import unittest
@@ -8,7 +8,6 @@ from main import Game, GameError, random_fleet, validate_fleet
 
 
 def classic_fleet():
-    """Валидная расстановка: 1×4, 2×3, 3×2, 4×1, без касаний."""
     return [[{"x": x, "y": 0} for x in range(4)],
             [{"x": x, "y": 5} for x in range(3)],
             [{"x": x, "y": 9} for x in range(3)],
@@ -110,7 +109,7 @@ class GameFlowTests(unittest.TestCase):
 
     def test_unknown_player_rejected(self):
         with self.assertRaises(GameError) as ctx:
-            self.game.state_for("никто")
+            self.game.state_for("nobody")
         self.assertEqual(ctx.exception.status, 403)
 
     def test_miss_passes_turn(self):
@@ -163,7 +162,6 @@ class GameFlowTests(unittest.TestCase):
         st = self.game.state_for(self.a.id)
         self.assertIn(1, st["enemy_sunk"])
         self.assertEqual(st["enemy_view"][2][8], main.SUNK)
-        # Ореол потопленного не раскрыт: соседние клетки остались unknown.
         self.assertEqual(st["enemy_view"][1][8], main.UNKNOWN)
 
     def test_hit_not_sunk_no_cells(self):
@@ -189,7 +187,6 @@ class GameFlowTests(unittest.TestCase):
         self.assertEqual(self.game.phase, "finished")
         self.assertEqual(sorted(self.game.state_for(self.a.id)["enemy_sunk"]),
                          sorted(main.SHIP_FLEET))
-        # После конца матча выстрелы запрещены.
         with self.assertRaises(GameError):
             self.game.fire(self.a.id, 4, 4)
 

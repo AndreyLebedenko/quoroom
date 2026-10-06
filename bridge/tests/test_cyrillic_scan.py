@@ -65,8 +65,17 @@ ALLOWLIST = (
         "bridge/requirements.txt",
         "contributor file; its Russian comments are out of scope of the story",
     ),
-    Allowed("demo/", "the demo project and its Russian brief; classified by the gate"),
-    Allowed("tools/", "contributor tooling; classified by the release gate, task 20"),
+    Allowed(
+        "tools/linux-container/run.sh",
+        "Cyrillic is the fixture: the copy path carries spaces and Cyrillic so"
+        " that a path a ru-locale user has is proved to cross the Windows to"
+        " docker.exe boundary",
+    ),
+    Allowed(
+        "tools/linux-container/verify-shared-home.sh",
+        "Cyrillic is the fixture: a file name the machine writes in Cyrillic"
+        " proves that the engine bind mount carries it",
+    ),
     Allowed(
         "bridge/tests/",
         "tests assert the Russian text that room language ru prints and use"
@@ -99,8 +108,6 @@ ALLOWLIST = (
 
 NOT_RUNTIME = (
     "bridge/tests/",
-    "demo/",
-    "tools/",
     "docs/",
     ".development/",
 )
