@@ -1,44 +1,44 @@
-# Одноразовое окружение Linux
+# Disposable Linux environment
 
-Машина `ubuntu:24.04` со своим движком Docker (`docker:dind`), в которой
-`install.sh` работает по-настоящему. Стенд человека на хосте окружение не
-затрагивает: у собственного проекта compose явное имя `quoroom-linux-lab`, сокет
-Docker хоста не монтируется, `down -v` работает только по своему проекту, а порты
-хоста не занимаются.
+An `ubuntu:24.04` machine with its own Docker engine (`docker:dind`) in which
+`install.sh` runs for real. The environment does not touch the stand of the
+human on the host: its own compose project has the explicit name
+`quoroom-linux-lab`, the Docker socket of the host is not mounted, `down -v`
+works only on its own project, and it takes no host port.
 
-Окружение одноразовое: `./run.sh scenario` убирает его вместе с томами, даже если
-сценарий или подготовка упали.
+The environment is disposable: `./run.sh scenario` removes it together with its
+volumes, even if the scenario or the preparation fell over.
 
-## Что нужно
+## What it needs
 
-Docker на машине, где запускают. Образы `ubuntu:24.04` и `docker:dind`
-скачиваются при первом запуске; внутри машины `apt` ставит prerequisites по
-процедуре Ubuntu 24.04 из гейта 1 истории:
+Docker on the machine that runs it. The images `ubuntu:24.04` and `docker:dind`
+are pulled on the first run; inside the machine `apt` installs the prerequisites
+by the Ubuntu 24.04 procedure of gate 1 of the story:
 
 ```
 python3 python3-venv pipx mkcert libnss3-tools docker.io docker-compose-v2 curl procps git
 ```
 
-Сценарии и `exec` идут от пользователя `lab` без `sudo`: так лаборатория ловит
-установщик, который не должен делать привилегированные шаги сам. `apt` и создание
-пользователя - от `root`, до сценариев дело не допускается.
+Scenarios and `exec` go as the user `lab` without `sudo`: that is how the lab
+catches an installer that must not take privileged steps itself. `apt` and the
+creation of the user are done as `root` before any scenario starts.
 
-## Как запустить
+## How to run it
 
-Запускается из `sh` - Git Bash на Windows или любой Linux. Из PowerShell
-напрямую не работает.
+Started from `sh` - Git Bash on Windows or any Linux. It does not work from
+PowerShell directly.
 
 ```sh
-./run.sh snapshot               # что есть на хосте до прогона
-./run.sh scenario install-help   # поднять, прогнать install.sh --help, убрать
-./run.sh up                     # поднять и оставить живым (нужно для exec и shell)
-./run.sh exec 'команда'          # команда в живой машине, код возврата её команды
-./run.sh shell                  # оболочка в машине
-./run.sh down                   # убрать окружение вместе с томами
+./run.sh snapshot               # what the host has before a run
+./run.sh scenario install-help   # bring it up, run install.sh --help, remove it
+./run.sh up                     # bring it up and leave it running (needed for exec and shell)
+./run.sh exec 'command'          # a command in the live machine, the exit code is that of the command
+./run.sh shell                  # a shell in the machine
+./run.sh down                   # remove the environment together with its volumes
 ```
 
-Снимок состояния хоста (контейнеры, тома, сети) печатается до и после каждого
-прогона. Любой сценарий выполняется как команда в скопированном репозитории:
+The state of the host (containers, volumes, networks) is printed before and after
+every run. Any scenario runs as a command in the copied repository:
 
 ```sh
 ./run.sh scenario './install.sh --role both'
@@ -46,121 +46,129 @@ python3 python3-venv pipx mkcert libnss3-tools docker.io docker-compose-v2 curl 
 ./run.sh scenario verify-shared-home
 ```
 
-## Человеческие шаги: exec-root
+## Human steps: exec-root
 
-Шаги, которые установщик только проверяет, в лаборатории выполняет человек -
-так же, как на своей машине, иначе проверка ничего не доказывает. Внутри
-машины нет `sudo`, а таких шагов два: строка в hosts и `mkcert -install`.
-`exec-root` запускает команду от root:
+The steps that the installer only checks are done in the lab by the human - the
+same way as on their own machine, otherwise the check proves nothing. There is
+no `sudo` inside the machine, and there are two such steps: a line in hosts and
+`mkcert -install`. `exec-root` runs a command as root:
 
 ```sh
 ./run.sh up
 printf '127.0.0.1 agentschat.local\n' | ./run.sh exec-root \
     'grep -q agentschat.local /etc/hosts || cat >> /etc/hosts'
-./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role server --admin-user <имя>'
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<password> ./install.sh --role server --admin-user <name>'
 CAROOT=$(./run.sh exec 'mkcert -CAROOT')
 ./run.sh exec-root "CAROOT=$CAROOT mkcert -install"
-./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<пароль> ./install.sh --role server --admin-user <имя>'
+./run.sh exec 'cd /home/lab/repo && QUOROOM_ADMIN_PASSWORD=<password> ./install.sh --role server --admin-user <name>'
 ```
 
-Порядок важен и повторяет установщик. Строка в hosts нужна раньше всего: без неё
-`agentschat.local` в машине не резолвится. Первый запуск установщика останавливается
-на доверии к сертификату, потому что CA ещё не создан: сертификат выпускает сам
-установщик от пользователя `lab`, и только после этого `mkcert -install` от root
-с тем же `CAROOT` доверяет именно ему. Если выпустить сертификат заранее и от
-root, корень окажется его, и `lab` не сможет им выпустить свой: файл ключа ему
-недоступен.
+The order matters and repeats the installer. The line in hosts is needed first:
+without it `agentschat.local` does not resolve in the machine. The first run of
+the installer stops on the certificate trust, because the CA does not exist yet:
+the certificate is issued by the installer itself as the user `lab`, and only
+after that `mkcert -install` as root with the same `CAROOT` trusts exactly that
+one. If the certificate were issued in advance and as root, the CA would belong
+to root, and `lab` could not issue its own certificate with it: its key file is
+not accessible to `lab`.
 
-Второй запуск продолжает с места остановки и доводит установку до следующего
-человеческого шага - комнаты: её создаёт человек в Element, в лаборатории вместо
-него `room-helper.py` под `exec` (шаг человека, R4). Третий запуск с `--room-id`
-заканчивает установку и печатает отчёт.
+The second run continues where it stopped and carries the installation to the
+next human step - the room: a human creates it in Element, in the lab
+`room-helper.py` under `exec` does it instead (a human step, R4). The third run
+with `--room-id` finishes the installation and prints the report.
 
-`CAROOT` смотрим у пользователя `lab` (`/home/lab/.local/share/mkcert`): CA
-появляется при первом выпуске, а не при вызове `-CAROOT`. Имя `CAROOT` в команде
-обязательно: под rootом свой CA (`/root/.local/share/mkcert`) он установил бы не
-тот, которым подписан выпущенный сертификат, и доверия не было бы.
+`CAROOT` is read as the user `lab` (`/home/lab/.local/share/mkcert`): the CA
+appears at the first issuance, not on the `-CAROOT` call. The name `CAROOT` in
+the command is mandatory: as root it would install its own CA
+(`/root/.local/share/mkcert`), which is not the one that signed the issued
+certificate, and there would be no trust.
 
-Отдельного выпуска сертификата человек не делает: это шаг установщика, и
-`mkcert -install` доверяет уже выпущенному. `exec-root` требует поднятое
-окружение (`./run.sh up` выше) и, в отличие от `scenario`, оставляет его живым.
+The human issues no certificate of their own: that is a step of the installer,
+and `mkcert -install` trusts the one already issued. `exec-root` needs a
+brought-up environment (`./run.sh up` above) and, unlike `scenario`, leaves it
+running.
 
-`exec` работает и с вводом, так что подтверждения можно подавать так:
+`exec` works with input too, so confirmations can be piped in:
 
 ```sh
 printf 'PURGE\n' | ./run.sh exec './install.sh --role both --remove --purge'
 ```
 
-Если окружение уже поднято, `scenario` и новый `up` откажутся: чужое живое
-окружение убирать нельзя. Сначала `./run.sh down`.
+If the environment is already up, `scenario` and a new `up` refuse: a foreign
+live environment must not be removed. Run `./run.sh down` first.
 
-Под mintty (окно Git Bash без winpty) интерактивный `shell` может не показать
-приглашение: тогда либо `winpty ./run.sh shell`, либо `./run.sh exec 'команда'`.
+Under mintty (the Git Bash window without winpty) an interactive `shell` may not
+show the prompt: then either `winpty ./run.sh shell`, or `./run.sh exec 'command'`.
 
-## Общий том и bind mount
+## The shared volume and the bind mount
 
-`/home/lab` - именованный том `quoroom-linux-lab_lab-home`, смонтированный и в
-машину, и в движок. Каталог, записанный машиной, виден контейнеру, запущенному
-через движок с `-v /home/lab/...`, а это и нужно серверной роли: её compose
-монтирует `continuwuity.toml`, Caddyfile и сертификаты по путям, которые
-разрешаются на стороне движка. Проверяет это сценарий:
+`/home/lab` is the named volume `quoroom-linux-lab_lab-home`, mounted both into
+the machine and into the engine. A directory written by the machine is visible to
+a container started through the engine with `-v /home/lab/...`, and that is what
+the server role needs: its compose mounts `continuwuity.toml`, the Caddyfile and
+the certificates by the paths that resolve on the engine side. The scenario
+`verify-shared-home` checks this:
 
 ```sh
 ./run.sh scenario verify-shared-home
 ```
 
-`down -v` удаляет том вместе с окружением.
+`down -v` removes the volume together with the environment.
 
-## Копия репозитория
+## The copy of the repository
 
-Репозиторий копируется по списку `git ls-files -co --exclude-standard`: незакоммиченный
-код задачи попадает внутрь, игнорируемые файлы (`bridge/config.yaml`,
-`docker/.env`, `docker/continuwuity/continuwuity.toml`, `docker/caddy/certs/`,
-`bridge/state/`, `bridge/.venv/`) не копируются никогда.
+The repository is copied by the list of `git ls-files -co --exclude-standard`: the
+uncommitted code of the task gets inside, the ignored files
+(`bridge/config.yaml`, `docker/.env`,
+`docker/continuwuity/continuwuity.toml`, `docker/caddy/certs/`,
+`bridge/state/`, `bridge/.venv/`) are never copied.
 
-Копия живёт по пути с пробелами и кириллицей - `/home/lab/Репо с пробелом`, - а
-рядом с ней симлинк `/home/lab/repo`, по которому заходят, не набирая кириллицу.
-Повторный `up` сносит прежнюю копию целиком, так что старые файлы не выживают.
+The copy lives at a path with spaces and Cyrillic; its exact value is
+`repo_path` in `run.sh`. Next to it there is the symlink `/home/lab/repo`, which
+is what one enters through without typing Cyrillic. A repeated `up` removes the
+previous copy entirely, so old files do not survive.
 
-Файлы, которые git на хосте отдаёт как `w/crlf` (следствие `core.autocrlf`),
-приводятся к LF: нативный клон Linux не должен отличаться от лаборатории.
-Проверяет это сценарий `verify-copy`.
+The files that git hands over on the host as `w/crlf` (a consequence of
+`core.autocrlf`) are converted to LF: a native Linux clone must not differ from
+the lab. The scenario `verify-copy` checks this.
 
-## Оболочка в машине
+## A shell in the machine
 
 ```sh
 ./run.sh up
 ./run.sh shell
 ```
 
-Внутри машины `DOCKER_HOST` указывает на движок окружения, стенд хоста оттуда не
-виден. Окружение живёт, пока не убрано через `./run.sh down`.
+Inside the machine `DOCKER_HOST` points at the engine of the environment, the
+stand of the host is not visible from there. The environment lives until it is
+removed with `./run.sh down`.
 
-## Живая проверка: Element в браузере на Windows
+## Live check: Element in a browser on Windows
 
-Сценарий Linux проверяют так: человек останавливает стенд Windows
-(`./stop.ps1`), публикует 443 движка на 443 хоста и открывает Element в браузере
-Windows на `https://agentschat.local`, приняв предупреждение о сертификате (CA
-контейнера Windows не доверяет).
+The Linux scenario is checked like this: the human stops the Windows stand
+(`./stop.ps1`), publishes the 443 of the engine on the 443 of the host and opens
+Element in a Windows browser at `https://agentschat.local`, accepting the
+certificate warning (Windows does not trust the container's CA).
 
 ```sh
-./stop.ps1                  # в корне репозитория
+./stop.ps1                  # in the root of the repository
 cd tools/linux-container
-./run.sh up --publish-443   # откажется, если 443 на хосте уже занят
-./run.sh shell              # установка ролей и вход в CLI внутри машины
+./run.sh up --publish-443   # refuses if the 443 of the host is already taken
+./run.sh shell              # installing the roles and entering the CLI inside the machine
 ```
 
-Опубликованный 443 - единственное, что окружение делает с ресурсами хоста, и
-только по этому ключу. Проверка занятости смотрит и порты, публикуемые
-контейнерами, и слушатели на самом хосте. По умолчанию порты не публикуются.
+The published 443 is the only thing the environment does with the resources of the
+host, and only under that option. The occupancy check looks both at the ports
+published by containers and at the listeners on the host itself. By default no
+port is published.
 
-## Комната для функциональных прогонов
+## The room for functional runs
 
-Живой человек создаёт комнату в Element и приглашает ботов. Для прогонов этот шаг
-заменяет `room-helper.py`: он логинится по паролю, создаёт комнату и приглашает
-ботов через client-server API. Скрипт отказывается работать вне лаборатории
-(переменная `QUOROOM_LAB`) и проверяет сертификат системным хранилищем; свой CA
-машины можно указать ключом `--ca-file`.
+A live human creates a room in Element and invites the bots. For runs this step
+is replaced by `room-helper.py`: it logs in by password, creates a room and
+invites the bots through the client-server API. The script refuses to work
+outside the lab (the `QUOROOM_LAB` variable) and verifies the certificate with the
+system store; the CA of the machine can be given by the `--ca-file` option.
 
 ```sh
 ./run.sh shell
@@ -168,21 +176,23 @@ python3 tools/linux-container/room-helper.py --url https://agentschat.local \
     --user admin --password ... --room-name Quoroom --invite claude-code,opencode
 ```
 
-## Чего окружение не делает
+## What the environment does not do
 
-- Не монтирует сокет Docker хоста и не видит его стенд.
-- Не запускает `docker compose` в каталоге `docker/` репозитория на хосте.
-- Не удаляет тома и контейнеры чужих проектов: `down -v` вызывается с `-p quoroom-linux-lab`.
-- Не публикует порты без `--publish-443`, и тогда - только 443, и только когда
-  он свободен.
-- Не привязывает монтированием каталог репозитория: копия, а не bind mount,
-  иначе установщик писал бы в рабочую копию человека.
+- It does not mount the Docker socket of the host and does not see its stand.
+- It does not run `docker compose` in the `docker/` directory of the repository on
+  the host.
+- It does not delete the volumes and containers of other projects: `down -v` is
+  called with `-p quoroom-linux-lab`.
+- It does not publish ports without `--publish-443`, and then only 443, and only
+  when it is free.
+- It does not bind-mount the directory of the repository: a copy, not a bind
+  mount, otherwise the installer would write into the human's working copy.
 
-## Мелочи реализации, о которых стоит знать
+## Implementation details worth knowing
 
-- Пути внутрь машины и кириллица едут скриптом через stdin: аргументом они
-  искажаются на границе Windows -> `docker.exe`.
-- Копия приходит потоком `git ls-files | tar` в `docker compose exec`; временного
-  архива в рабочей копии не остаётся.
-- Тесты и проверки этого каталога не входят в `unittest` и в CI: здесь всё
-  проверяется функциональными прогонами.
+- The paths inside the machine, and the Cyrillic in them, travel on stdin: as a
+  command-line argument they are mangled at the Windows to `docker.exe` boundary.
+- The copy arrives as the stream `git ls-files | tar` into `docker compose exec`;
+  no temporary archive is left in the working copy.
+- The tests and checks of this directory are not part of `unittest` and of CI:
+  everything here is checked by functional runs.

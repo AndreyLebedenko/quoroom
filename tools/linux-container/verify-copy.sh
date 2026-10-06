@@ -4,43 +4,43 @@ set -eu
 repo=/home/lab/repo
 cd "$repo"
 
-echo "репозиторий: $repo"
-echo "файлов в копии: $(find . -type f | wc -l)"
-echo "владелец: $(stat -c '%U' "$repo")"
+echo "repository: $repo"
+echo "files in the copy: $(find . -type f | wc -l)"
+echo "owner: $(stat -c '%U' "$repo")"
 
 for secret in bridge/config.yaml bridge/config.yaml.local docker/.env \
     docker/continuwuity/continuwuity.toml bridge/state bridge/.venv \
     docker/caddy/certs; do
     if [ -e "$secret" ]; then
-        echo "СЕКРЕТ ПОПАЛ В КОПИЮ: $secret"
+        echo "A SECRET GOT INTO THE COPY: $secret"
         exit 1
     fi
 done
-echo "игнорируемых секретов в копии нет"
+echo "no ignored secret is in the copy"
 
 for tracked in install.sh install.ps1 tools/linux-container/run.sh \
     tools/linux-container/room-helper.py; do
-    [ -f "$tracked" ] || { echo "нет ожидаемого файла: $tracked"; exit 1; }
+    [ -f "$tracked" ] || { echo "an expected file is missing: $tracked"; exit 1; }
 done
-echo "файлы задачи на месте: install.sh, install.ps1, run.sh, room-helper.py"
+echo "the files of the task are in place: install.sh, install.ps1, run.sh, room-helper.py"
 
-if grep -q 'ЛАБОРАТОРНЫЙ МАРКЕР' README.md; then
-    echo "незакоммиченная правка README.md видна в копии"
+if grep -q 'LAB MARKER' README.md; then
+    echo "an uncommitted edit of README.md is visible in the copy"
 else
-    echo "незакоммиченной правки README.md в копии нет"
+    echo "there is no uncommitted edit of README.md in the copy"
 fi
 
 if grep -q "$(printf '\r')" bridge/sessionchat/kit/opencode/plugins/agentschat.js; then
-    echo "CR ОСТАЛСЯ в файле, который git отдаёт как w/crlf"
+    echo "A CR REMAINED in a file that git hands over as w/crlf"
     exit 1
 fi
-echo "в файле, который git отдаёт как w/crlf, нет ни одного CR"
+echo "the file that git hands over as w/crlf has no CR at all"
 
 id lab
 if [ "$(id -u)" = 0 ]; then
-    echo "СЦЕНАРИЙ ИДЁТ ОТ ROOT, А НЕ ОТ lab"
+    echo "THE SCENARIO RUNS AS root, NOT AS lab"
     exit 1
 fi
-echo "сценарий идёт от пользователя lab без sudo"
-sudo -n true 2>/dev/null && { echo "У lab ЕСТЬ sudo"; exit 1; }
-echo "у lab нет sudo"
+echo "the scenario runs as the lab user without sudo"
+sudo -n true 2>/dev/null && { echo "lab HAS sudo"; exit 1; }
+echo "lab has no sudo"

@@ -12,7 +12,7 @@ files="-p $project -f compose.yaml"
 publish_443=0
 
 say() { echo "==> $*"; }
-die() { echo "ОШИБКА: $1" >&2; exit 9; }
+die() { echo "ERROR: $1" >&2; exit 9; }
 
 dc() { docker compose $files "$@"; }
 
@@ -34,18 +34,18 @@ host_listens_443() {
 }
 
 snapshot() {
-    echo "--- снимок хоста: контейнеры ---"
+    echo "--- host snapshot: containers ---"
     docker ps -a --format '{{.Names}}|{{.Status}}|{{.Ports}}'
-    echo "--- снимок хоста: тома ---"
+    echo "--- host snapshot: volumes ---"
     docker volume ls --format '{{.Name}}'
-    echo "--- снимок хоста: сети ---"
+    echo "--- host snapshot: networks ---"
     docker network ls --format '{{.Name}}'
 }
 
 teardown() {
-    say "Убираю окружение $project вместе с томами."
+    say "Removing the environment $project together with its volumes."
     if ! dc down -v --remove-orphans >/tmp/quoroom-lab-down.log 2>&1; then
-        echo "ВНИМАНИЕ: окружение убрать не удалось:" >&2
+        echo "WARNING: the environment could not be removed:" >&2
         cat /tmp/quoroom-lab-down.log >&2
         dc ps -a >&2 || true
         docker volume ls --filter "label=com.docker.compose.project=$project" >&2 || true
@@ -65,20 +65,20 @@ disarm_teardown() {
 
 want_publish_443() {
     if host_listens_443; then
-        die "порт 443 на хосте уже занят. Остановите стенд Windows (./stop.ps1) и повторите."
+        die "port 443 on the host is already taken. Stop the Windows stand (./stop.ps1) and repeat."
     fi
     files="$files -f compose.live.yaml"
-    say "Публикую 443 движка на 443 хоста - только для живой проверки."
+    say "Publishing the engine 443 on the host 443 - only for the live check."
 }
 
 refuse_live_lab() {
     if [ -n "$(dc ps -q 2>/dev/null)" ]; then
-        die "окружение $project уже поднято. Сначала ./run.sh down, иначе будет убрано чужое окружение."
+        die "the environment $project is already up. Run ./run.sh down first, otherwise a foreign environment is removed."
     fi
 }
 
 wait_for_dind() {
-    say "Жду движок Docker внутри окружения."
+    say "Waiting for the Docker engine inside the environment."
     i=0
     while [ "$i" -lt 60 ]; do
         if dc exec -T dind docker info >/dev/null 2>&1; then
@@ -87,11 +87,11 @@ wait_for_dind() {
         i=$((i + 1))
         sleep 1
     done
-    die "движок Docker в окружении не поднялся за 60с."
+    die "the Docker engine in the environment did not come up in 60s."
 }
 
 prepare_machine() {
-    say "Готовлю машину: пользователь lab и его каталог на общем томе."
+    say "Preparing the machine: the lab user and its home on the shared volume."
     dc exec -T --user root machine sh -c '
         set -eu
         id lab >/dev/null 2>&1 || useradd -m -s /bin/bash lab
@@ -100,7 +100,7 @@ prepare_machine() {
 }
 
 install_prerequisites() {
-    say "Ставлю prerequisites по процедуре Ubuntu 24.04 из гейта 1."
+    say "Installing the prerequisites by the Ubuntu 24.04 procedure of gate 1."
     dc exec -T --user root machine sh -c '
         apt-get update -qq &&
         apt-get install -y \
@@ -110,15 +110,15 @@ install_prerequisites() {
 }
 
 copy_repository() {
-    say "Копирую репозиторий по списку git ls-files -co --exclude-standard."
+    say "Copying the repository by the list of git ls-files -co --exclude-standard."
     printf '%s\n' \
         "set -eu" \
         "rm -rf $repo_link '$repo_path'" \
         "mkdir -p $repo_link" \
         | as_lab sh -s
-    # Пути, начинающиеся с "/", Git Bash переписывает в пути Windows, поэтому
-    # MSYS_NO_PATHCONV на одном этом вызове: кириллица при этом проходит
-    # как есть (проверено), а путь внутрь машины остаётся posix.
+    # Paths that start with "/" are rewritten by Git Bash into Windows paths, so
+    # MSYS_NO_PATHCONV on this one call: the Cyrillic of the copy path passes
+    # through as is (verified), and the path inside the machine stays posix.
     git -C "$repo_root" ls-files -co --exclude-standard -z \
         | tar -C "$repo_root" --null -T - -cf - \
         | MSYS_NO_PATHCONV=1 dc exec -T --user lab machine tar -xf - -C "$repo_link"
@@ -128,12 +128,12 @@ copy_repository() {
         "mv $repo_link '$repo_path'" \
         "ln -s '$repo_path' $repo_link" \
         | as_lab sh -s
-    say "Копия внутри машины: $repo_path (ссылка $repo_link)."
+    say "The copy inside the machine: $repo_path (link $repo_link)."
 }
 
 crlf_to_lf() {
     count=$(crlf_list | wc -l | tr -d ' ')
-    say "Привожу к LF файлов, которые git отдаёт как w/crlf: $count"
+    say "Converting to LF the files that git hands over as w/crlf: $count"
     crlf_list | as_lab sh -c '
         set -eu
         cd /home/lab/repo
@@ -155,19 +155,19 @@ run_command() {
     command=$2
     case "$name" in
         install-help)
-            say "Сценарий install-help: install.sh --help внутри машины."
+            say "Scenario install-help: install.sh --help inside the machine."
             in_machine './install.sh --help'
             ;;
         verify-copy)
-            say "Сценарий verify-copy: что попало в копию репозитория."
+            say "Scenario verify-copy: what got into the repository copy."
             in_machine './tools/linux-container/verify-copy.sh'
             ;;
         verify-shared-home)
-            say "Сценарий verify-shared-home: /home/lab один и тот же у машины и движка."
+            say "Scenario verify-shared-home: /home/lab is one and the same for the machine and the engine."
             in_machine './tools/linux-container/verify-shared-home.sh'
             ;;
         *)
-            say "Сценарий $name: произвольная команда из скопированного репозитория."
+            say "Scenario $name: an arbitrary command from the copied repository."
             in_machine "${command:-$name}"
             ;;
     esac
@@ -185,7 +185,7 @@ up() {
     prepare_machine
     install_prerequisites
     copy_repository
-    say "Окружение готово. Репозиторий внутри: $repo_path"
+    say "The environment is ready. The repository inside: $repo_path"
     snapshot
     disarm_teardown
 }
@@ -208,7 +208,7 @@ scenario() {
     run_command "$name" "$command"
     code=$?
     set -e
-    if [ "$code" -eq 0 ]; then say "Сценарий $name закончился."; fi
+    if [ "$code" -eq 0 ]; then say "Scenario $name finished."; fi
     exit "$code"
 }
 
@@ -227,7 +227,7 @@ case "${1:-}" in
     up) shift; while [ $# -gt 0 ]; do
             case "$1" in
                 --publish-443) publish_443=1 ;;
-                *) die "неизвестный ключ: $1" ;;
+                *) die "unknown option: $1" ;;
             esac
             shift
         done
@@ -242,22 +242,22 @@ case "${1:-}" in
         scenario "${scenario_name:-install-help}" ;;
     exec)
         shift
-        [ -n "${1:-}" ] || die "команда: exec '<команда>'"
-        [ -n "$(dc ps -q 2>/dev/null)" ] || die "окружение не поднято: сначала ./run.sh up"
+        [ -n "${1:-}" ] || die "command: exec '<command>'"
+        [ -n "$(dc ps -q 2>/dev/null)" ] || die "the environment is not up: run ./run.sh up first"
         exec_in_machine "$1"
         ;;
     exec-root)
         shift
-        [ -n "${1:-}" ] || die "команда: exec-root '<команда>'"
-        [ -n "$(dc ps -q 2>/dev/null)" ] || die "окружение не поднято: сначала ./run.sh up"
-        say "Команда от root: $*"
+        [ -n "${1:-}" ] || die "command: exec-root '<command>'"
+        [ -n "$(dc ps -q 2>/dev/null)" ] || die "the environment is not up: run ./run.sh up first"
+        say "Command from root: $*"
         exec_root_in_machine "$1"
         ;;
     shell)
-        [ -n "$(dc ps -q 2>/dev/null)" ] || die "окружение не поднято: сначала ./run.sh up"
-        say "Оболочка в машине от пользователя lab, репозиторий: $repo_link. Выход: exit."
+        [ -n "$(dc ps -q 2>/dev/null)" ] || die "the environment is not up: run ./run.sh up first"
+        say "A shell in the machine as the lab user, the repository: $repo_link. To leave: exit."
         MSYS_NO_PATHCONV=1 dc exec --user lab machine sh -lc "cd $repo_link && exec bash"
         ;;
     down) teardown ;;
-    *) die "команда: snapshot | up [--publish-443] | scenario [имя] [--publish-443] | exec '<команда>' | exec-root '<команда>' | shell | down" ;;
+    *) die "command: snapshot | up [--publish-443] | scenario [name] [--publish-443] | exec '<command>' | exec-root '<command>' | shell | down" ;;
 esac

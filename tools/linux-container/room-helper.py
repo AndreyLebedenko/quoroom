@@ -11,8 +11,8 @@ import urllib.request
 def refuse(reason: str) -> None:
     sys.exit(
         f"{reason}\n"
-        "Скрипт работает только внутри лаборатории "
-        "(tools/linux-container) и не должен ходить на живой стенд."
+        "This script works only inside the lab "
+        "(tools/linux-container) and must not talk to a live stand."
     )
 
 
@@ -33,14 +33,14 @@ def call(
             return json.loads(response.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", "replace")
-        sys.exit(f"HTTP {error.code} на {url}: {detail}")
+        sys.exit(f"HTTP {error.code} at {url}: {detail}")
 
 
 def main() -> None:
     if os.environ.get("QUOROOM_LAB") != "1":
-        refuse("вне лаборатории QUOROOM_LAB не задан")
+        refuse("outside the lab QUOROOM_LAB is not set")
 
-    parser = argparse.ArgumentParser(description="комната для функциональных прогонов")
+    parser = argparse.ArgumentParser(description="the room for functional runs")
     parser.add_argument("--url", default="https://agentschat.local")
     parser.add_argument("--user", required=True)
     parser.add_argument("--password", required=True)
@@ -78,8 +78,8 @@ def main() -> None:
             {"user_id": f"@{bot}:agentschat.local"},
             context,
         )
-        print(f"приглашён @{bot}")
-    print(f"комната {room} создана, учётная запись: {arguments.user}")
+        print(f"invited @{bot}")
+    print(f"room {room} created, account: {arguments.user}")
 
 
 if __name__ == "__main__":
