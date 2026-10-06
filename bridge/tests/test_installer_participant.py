@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from tests.installer_fakes import (
     SH,
@@ -20,7 +21,7 @@ from tests.installer_fakes import (
     make_run,
     posix_path,
 )
-from sessionchat import client, kit
+from sessionchat import client, client_language, client_result, kit
 from sessionchat.installer import participant
 from sessionchat.installer.boundaries import Probe
 from sessionchat.installer.main import CANCELLED, DONE, FAILED, HUMAN, main
@@ -31,6 +32,7 @@ from sessionchat.installer.roles import built_in_roles
 
 ROLE = "participant"
 STATUS = "/status"
+STATUS_COMMAND = "status"
 STORE = participant.STORE
 MANIFEST = participant.KIT_MANIFEST
 RESTART = "Перезапустите открытые сессии"
@@ -53,6 +55,8 @@ class Machine:
         kit_answers: str = "document",
         kit_claims_no_writes: bool = False,
         kit_code: str = kit.CODE_NONE,
+        room_language: str = "en",
+        status_mode: str = "ok",
     ) -> None:
         self.home = home
         self.platform = platform
@@ -65,14 +69,19 @@ class Machine:
         self.fails = fails
         self.log: list[str] = []
         self.installed_by: set[str] = set()
+        self.status_env: dict[str, str] = {}
+        self.room_language = room_language
+        self.status_mode = status_mode
 
-    def __call__(self, argv):
+    def __call__(self, argv, env=None):
         argv = [str(part) for part in argv]
         name = Path(argv[0]).name
         if name in ("uv", "pipx"):
+            if env is not None:
+                raise TypeError(f"{name} must not be given an environment")
             return self.tool(name, argv)
         if name.startswith("agentschat"):
-            return self.agentschat(argv)
+            return self.agentschat(argv, env)
         raise AssertionError(f"непредусмотренный вызов: {' '.join(argv)}")
 
     def tool(self, name: str, argv: list[str]):
@@ -110,8 +119,10 @@ class Machine:
             return f"{participant.PACKAGE} v1.0.0rc1\n- {participant.PACKAGE}\n"
         return f"{participant.PACKAGE} 1.0.0rc1\n"
 
-    def agentschat(self, argv: list[str]):
+    def agentschat(self, argv: list[str], env=None):
         self.log.append(" ".join(argv))
+        if STATUS_COMMAND in argv[1:]:
+            return self.status(env)
         if self.fails == "kit install":
             return completed("", "agentschat: сбой установки", 1)
         if self.fails == "kit uninstall":
@@ -128,6 +139,36 @@ class Machine:
                 return completed(f"{WRAP_BEFORE}{document}{WRAP_AFTER}", NOISE, 0)
             return completed(document, NOISE)
         return completed(self.uninstall_kit(argv[2:]), NOISE)
+
+    def status(self, env) -> CompletedProcess:
+        self.status_env = dict(env or {})
+        if self.status_mode == "missing":
+            raise FileNotFoundError("agentschat")
+        if self.status_mode == "undecodable":
+            raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid start byte")
+        if self.status_mode == "refuses":
+            return completed(
+                client_result.line("status", False, code="broker_unreachable"),
+                "брокер недоступен",
+                1,
+            )
+        if self.status_mode == "not-ok":
+            return completed(
+                f"{NOISE}\n{client_result.line('status', False, code='unexpected_answer')}"
+            )
+        if self.status_mode == "words":
+            return completed("Язык комнаты: ru\n")
+        if self.status_mode == "another-command":
+            return completed(
+                client_result.line("login", True, language=self.room_language)
+            )
+        client_language.remember(self.store(), self.room_language)
+        answer = client_result.line(
+            "status", True, language=self.room_language, sessions=[]
+        )
+        if self.status_mode == "quiet":
+            return completed(answer)
+        return completed(f"{answer}\n{NOISE}")
 
     def clis_for(self, flags: list[str]) -> list[str]:
         picked = [flag[2:] for flag in flags if flag[2:] in kit.CLIS]

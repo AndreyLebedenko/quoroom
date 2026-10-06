@@ -32,9 +32,12 @@ release is cut.
   already in rc.2) now exits with code 5 when it refuses to overwrite foreign
   files; without `--json` it exits with code 1 as before.
 - The client remembers the room language in `~/.agentschat/language`. The file
-  is written only after the client has received its first JSON answer from the
-  broker, and `agentschat install` does not write it; until then, and when it
-  is absent, the client speaks English, including `--help` and a refusal to
+  is written by the client and only from a JSON answer of the broker;
+  `agentschat install` does not write it. The participant installer runs
+  `agentschat status` once, right after it has confirmed that the broker
+  answers, so on a freshly installed participant the file is there before the
+  person runs a command of their own. Until a broker has answered, and when the
+  file is absent, the client speaks English, including `--help` and a refusal to
   `say` without a login.
 - The kit ships one variant per language (`en`, `ru`) plus the shared OpenCode
   plugin, and `agentschat install --lang en|ru` (already in rc.2) picks one.
@@ -76,11 +79,13 @@ release is cut.
   `agentschat install --lang <room language>` and restart the open sessions.
   The OpenCode plugin installed before this release decides that a session is
   logged in or out by Russian phrases and does not work with English output.
-- The client's own language comes from `~/.agentschat/language`, which exists
-  only after the first JSON answer from the broker and is not written by
-  `install`. On an existing machine of a Russian room, `agentschat --help` and a
-  refused `say` are English until the client has had its first contact with the
-  broker.
+- The client's own language comes from `~/.agentschat/language`, which the
+  client writes from the first JSON answer of the broker and `install` does not
+  write. On an existing machine of a Russian room run the participant installer
+  again: as soon as it has confirmed the broker it asks the client once
+  (`agentschat status`), and from then on `agentschat --help` and a refused
+  `say` are Russian. Without that run the file is still absent and the client
+  stays English until the first answer of the broker.
 - The language of the kit is the language given to the installer or to
   `agentschat install`, not the room's: the participant installer lays the kit
   down before it asks the broker. For a room in the other language run

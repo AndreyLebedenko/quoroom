@@ -1,6 +1,6 @@
 # Task english-release-22: The participant installer teaches the client the room language
 
-**Status:** Planned.
+**Status:** Completed (2026-10-06).
 **Story:** story-english-release.md (shared rules apply).
 **Depends on:** tasks english-release-07 (client language source), 11 (kit install) and 12 (machine contract).
 **Blocks:** closing task english-release-20 (the Russian run expects this behaviour).
