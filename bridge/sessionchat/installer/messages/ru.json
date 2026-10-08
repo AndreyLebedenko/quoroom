@@ -194,7 +194,6 @@
   "step.find_docker": "Найти Docker",
   "step.find_mkcert": "Найти mkcert",
   "step.find_uv_or_pipx": "Найти uv или pipx",
-  "step.install_dsh": "Поставить участника DeepSeek Harness",
   "step.install_kit": "Обновить набор по CLI агентов",
   "step.install_package": "Поставить пакет quoroom",
   "step.issue_certificate": "Выпустить сертификат",

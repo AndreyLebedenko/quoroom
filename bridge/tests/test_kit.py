@@ -6,16 +6,11 @@ from importlib.resources.abc import Traversable
 from sessionchat import kit
 
 EXPECTED_KIT_FILES = {
-    "common/dsh/plugin/cordis.patch.yml",
-    "common/dsh/plugin/package.json",
-    "common/dsh/plugin/src/index.js",
     "common/opencode/plugins/agentschat.js",
     "en/claude/skills/chatlogin/SKILL.md",
-    "en/dsh/skills/chatlogin/SKILL.md",
     "en/opencode/command/chatlogin.md",
     "en/opencode/skills/chatlogin/SKILL.md",
     "ru/claude/skills/chatlogin/SKILL.md",
-    "ru/dsh/skills/chatlogin/SKILL.md",
     "ru/opencode/command/chatlogin.md",
     "ru/opencode/skills/chatlogin/SKILL.md",
 }
@@ -95,19 +90,14 @@ class KitContentsTests(unittest.TestCase):
             kit.digest(with_unix_line_ends(unix_checkout)),
         )
 
-    def test_the_plugins_are_the_only_files_every_language_shares(self):
+    def test_the_plugin_is_the_one_file_every_language_shares(self):
         self.assertEqual(
             sorted(
                 relative
                 for relative in EXPECTED_KIT_FILES
                 if relative.startswith(f"{kit.COMMON}/")
             ),
-            [
-                "common/dsh/plugin/cordis.patch.yml",
-                "common/dsh/plugin/package.json",
-                "common/dsh/plugin/src/index.js",
-                "common/opencode/plugins/agentschat.js",
-            ],
+            ["common/opencode/plugins/agentschat.js"],
         )
 
 
@@ -125,7 +115,7 @@ class SkillAgreementTests(unittest.TestCase):
     FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z-]*)")
     INLINE_CODE = re.compile(r"`([^`\n]+)`")
     FENCE = "```"
-    SHARED_COMMANDS = {"say", "ask", "status"}
+    SHARED_COMMANDS = {"login", "say", "ask", "status"}
 
     def skill(self, lang: str, cli: str) -> str:
         resource = kit_root().joinpath(lang, cli, "skills", "chatlogin", "SKILL.md")
@@ -145,18 +135,16 @@ class SkillAgreementTests(unittest.TestCase):
         code = self.code_of(text)
         return set(self.COMMAND.findall(code)), set(self.FLAG.findall(code))
 
-    ALL_CLIS = (*kit.CLIS, "dsh")
-
     def skills(self) -> dict[tuple[str, str], str]:
         return {
             (lang, cli): self.skill(lang, cli)
             for lang in variants()
-            for cli in self.ALL_CLIS
+            for cli in kit.CLIS
         }
 
     def test_every_language_and_cli_pair_has_a_skill_to_compare(self):
         for lang in variants():
-            for cli in self.ALL_CLIS:
+            for cli in kit.CLIS:
                 resource = kit_root().joinpath(
                     lang, cli, "skills", "chatlogin", "SKILL.md"
                 )
@@ -165,7 +153,7 @@ class SkillAgreementTests(unittest.TestCase):
 
     def test_the_languages_of_one_cli_name_the_same_commands_and_flags(self):
         skills = self.skills()
-        for cli in self.ALL_CLIS:
+        for cli in kit.CLIS:
             said = [
                 self.mentions(skills[(lang, cli)])
                 for lang in variants()
@@ -222,7 +210,6 @@ class SkillAgreementTests(unittest.TestCase):
 class KitCompletenessTests(unittest.TestCase):
     FILES_OF_A_LANGUAGE = {
         "claude/skills/chatlogin/SKILL.md",
-        "dsh/skills/chatlogin/SKILL.md",
         "opencode/command/chatlogin.md",
         "opencode/skills/chatlogin/SKILL.md",
     }
@@ -239,9 +226,10 @@ class KitCompletenessTests(unittest.TestCase):
     def test_every_language_ships_a_skill_for_both_clis(self):
         for lang in variants():
             with self.subTest(lang=lang):
-                clis = {relative.split("/", 1)[0] for relative in self.paths_of(lang)}
-                self.assertEqual(clis - {"dsh"}, set(kit.CLIS))
-                self.assertIn("dsh", clis)
+                self.assertEqual(
+                    {relative.split("/", 1)[0] for relative in self.paths_of(lang)},
+                    set(kit.CLIS),
+                )
 
     def test_a_language_without_a_file_is_reported_as_missing(self):
         broken = self.paths_of("en") - {"opencode/command/chatlogin.md"}
