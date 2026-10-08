@@ -1,0 +1,24 @@
+{
+  "name": "dsh-agentschat",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: joins a live session to the Quoroom room through the agentschat broker.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.14"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
