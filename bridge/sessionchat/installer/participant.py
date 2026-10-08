@@ -33,6 +33,14 @@ DEFAULT_BROKER = "http://127.0.0.1:8770"
 URL_DEST = "participant_broker_url"
 CLAUDE_DEST = "participant_claude"
 OPENCODE_DEST = "participant_opencode"
+DSH_DEST = "participant_dsh"
+DSH_HOME_DEST = "participant_dsh_home"
+PROFILE_DEST = "participant_profile"
+DSH_CLI = "dsh"
+PNPM_CLI = "pnpm"
+PLUGIN_NAME = "dsh-agentschat"
+SKILL_NAME = "chatlogin"
+DEFAULT_PROFILE = "web"
 PATHEXT = ".COM;.EXE;.BAT;.CMD"
 SERVER_ROLE = "server"
 JSON_FLAG = "--json"
@@ -164,6 +172,109 @@ class KitInstallStep:
                 raise RuntimeError(kit_failure(run, result, kit.COMMAND_INSTALL))
             self.written = report.wrote
         self.handled = True
+
+
+@dataclass
+class DshStep:
+    name: str = "install_dsh"
+    handled: bool = False
+
+    def enabled(self, run: Run) -> bool:
+        return bool(run.plan.answers.get(ROLE, {}).get(DSH_DEST))
+
+    def dsh_home(self, run: Run) -> Path:
+        given = run.plan.answers.get(ROLE, {}).get(DSH_HOME_DEST)
+        return Path(given) if given else Path.home() / ".dsh"
+
+    def profile_name(self, run: Run) -> str:
+        given = run.plan.answers.get(ROLE, {}).get(PROFILE_DEST) or DEFAULT_PROFILE
+        return str(given)
+
+    def profile_dir(self, run: Run) -> Path:
+        return self.dsh_home(run) / "profiles" / self.profile_name(run)
+
+    def skill_target(self, run: Run) -> Path:
+        return self.dsh_home(run) / "skills" / SKILL_NAME / "SKILL.md"
+
+    def check(self, run: Run) -> State:
+        if self.handled or not self.enabled(run):
+            return State.DONE
+        return State.TODO
+
+    def apply(self, run: Run) -> None:
+        self.handled = True
+        self.install_skill(run)
+        self.install_plugin(run)
+
+    def install_skill(self, run: Run) -> None:
+        source = self.skill_source(run)
+        target = self.skill_target(run)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+
+    def skill_source(self, run: Run) -> Path:
+        lang = run.boundaries.lang
+        kit_dir = run.boundaries.repo / "bridge" / "sessionchat" / "kit"
+        for variant in (lang, "ru"):
+            candidate = kit_dir / variant / "dsh" / "skills" / SKILL_NAME / "SKILL.md"
+            if candidate.is_file():
+                return candidate
+        raise FileNotFoundError(f"the kit has no dsh skill in {lang}")
+
+    def install_plugin(self, run: Run) -> None:
+        profile_dir = self.profile_dir(run)
+        if dsh_cli_present(run):
+            result = run.boundaries.run(
+                [
+                    DSH_CLI,
+                    "plugin",
+                    "--profile",
+                    self.profile_name(run),
+                    "add",
+                    PLUGIN_NAME,
+                ]
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"dsh plugin add failed: {result.stderr or result.stdout}"
+                )
+        else:
+            pnpm_add(run, profile_dir)
+            edit_manifests(run, profile_dir)
+
+
+def dsh_cli_present(run: Run) -> bool:
+    try:
+        return run.boundaries.run([DSH_CLI, "--version"]).returncode == 0
+    except OSError:
+        return False
+
+
+def pnpm_add(run: Run, profile_dir: Path) -> None:
+    result = run.boundaries.run([PNPM_CLI, "add", PLUGIN_NAME], cwd=profile_dir)
+    if result.returncode != 0:
+        raise RuntimeError(f"pnpm add failed: {result.stderr or result.stdout}")
+
+
+def edit_manifests(run: Run, profile_dir: Path) -> None:
+    package_path = profile_dir / "package.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    plugin_source = str(
+        run.boundaries.repo
+        / "bridge"
+        / "sessionchat"
+        / "kit"
+        / "common"
+        / "dsh"
+        / "plugin"
+    )
+    package.setdefault("dependencies", {})[PLUGIN_NAME] = f"file:{plugin_source}"
+    dsh = package.setdefault("dsh", {})
+    profile = dsh.setdefault("profile", {})
+    bundles = profile.setdefault("bundles", [])
+    if PLUGIN_NAME not in bundles:
+        bundles.append(PLUGIN_NAME)
+    package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
 
 
 @dataclass
@@ -306,6 +417,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
     removal = Removal()
     kit = KitInstallStep()
     language = LanguageStep()
+    dsh = DshStep()
     return Role(
         name=ROLE,
         record_path=record_path,
@@ -315,6 +427,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
             PackageStep(),
             kit,
             BrokerStep(),
+            dsh,
             language,
         ),
         remove=(
@@ -339,6 +452,21 @@ def add_options(options: RoleOptions) -> None:
     )
     options.add(
         "--opencode", action="store_true", help=options.t("participant.help_opencode")
+    )
+    options.add(
+        "--dsh",
+        action="store_true",
+        help="install the DeepSeek Harness participant (skill + plugin)",
+    )
+    options.add(
+        "--dsh-home",
+        default=None,
+        help="the DSH home directory (default: ~/.dsh)",
+    )
+    options.add(
+        "--profile",
+        default=DEFAULT_PROFILE,
+        help=f"the DSH profile name (default: {DEFAULT_PROFILE})",
     )
 
 

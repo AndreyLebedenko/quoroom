@@ -194,6 +194,7 @@
   "step.find_docker": "Find Docker",
   "step.find_mkcert": "Find mkcert",
   "step.find_uv_or_pipx": "Find uv or pipx",
+  "step.install_dsh": "Install the DeepSeek Harness participant",
   "step.install_kit": "Refresh the kit for the agent CLIs",
   "step.install_package": "Install the quoroom package",
   "step.issue_certificate": "Issue the certificate",
