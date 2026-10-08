@@ -60,7 +60,7 @@ class Machine:
     ) -> None:
         self.home = home
         self.platform = platform
-        self.present = {"uv": False, "pipx": True, "dsh": True} | (present or {})
+        self.present = {"uv": False, "pipx": True} | (present or {})
         self.kit_conflict = kit_conflict
         self.kit_conflict_code = kit_conflict_code
         self.kit_answers = kit_answers
@@ -72,11 +72,8 @@ class Machine:
         self.status_env: dict[str, str] = {}
         self.room_language = room_language
         self.status_mode = status_mode
-        self.dsh_plugin_added = False
-        self.pnpm_added = False
-        self.pnpm_cwd: Path | None = None
 
-    def __call__(self, argv, env=None, stdin=None, output=None, cwd=None):
+    def __call__(self, argv, env=None):
         argv = [str(part) for part in argv]
         name = Path(argv[0]).name
         if name in ("uv", "pipx"):
@@ -85,30 +82,7 @@ class Machine:
             return self.tool(name, argv)
         if name.startswith("agentschat"):
             return self.agentschat(argv, env)
-        if name == "dsh":
-            return self.dsh(argv)
-        if name == "pnpm":
-            return self.pnpm(argv, cwd)
         raise AssertionError(f"непредусмотренный вызов: {' '.join(argv)}")
-
-    def dsh(self, argv: list[str]):
-        self.log.append(" ".join(argv))
-        if not self.present.get("dsh", True):
-            raise FileNotFoundError("dsh")
-        if argv[1] == "--version":
-            return completed("dsh 1.0.0")
-        if "plugin" in argv[1:]:
-            self.dsh_plugin_added = True
-            return completed("plugin added")
-        return completed("")
-
-    def pnpm(self, argv: list[str], cwd: Path | None):
-        self.log.append(" ".join(argv))
-        if "add" in argv[1:]:
-            self.pnpm_added = True
-            self.pnpm_cwd = cwd
-            return completed("added")
-        return completed("")
 
     def tool(self, name: str, argv: list[str]):
         if not self.present.get(name, False):
@@ -2036,68 +2010,6 @@ class BuiltInRolesTests(ParticipantCase):
         self.assertEqual(
             plan.answers[ROLE][participant.URL_DEST], participant.DEFAULT_BROKER
         )
-
-
-class DshStepTests(ParticipantCase):
-    def setUp(self):
-        super().setUp()
-        self.dsh_home = self.home / "dsh-home"
-        self.profile_dir = self.dsh_home / "profiles" / "web"
-        self.profile_dir.mkdir(parents=True)
-        self.profile_dir.joinpath("package.json").write_text(
-            json.dumps({"dependencies": {}, "dsh": {"profile": {"bundles": []}}}),
-            encoding="utf-8",
-        )
-        kit_dir = (
-            self.repo
-            / "bridge"
-            / "sessionchat"
-            / "kit"
-            / "ru"
-            / "dsh"
-            / "skills"
-            / "chatlogin"
-        )
-        kit_dir.mkdir(parents=True)
-        kit_dir.joinpath("SKILL.md").write_text("skill content", encoding="utf-8")
-
-    def dsh_flags(self, *extra: str):
-        return ["--dsh", "--dsh-home", str(self.dsh_home), *extra]
-
-    def test_the_dsh_step_is_skipped_without_the_flag(self):
-        status, given = self.install("--claude")
-        self.assertEqual(status, DONE)
-        self.assertFalse((self.dsh_home / "skills" / "chatlogin").exists())
-
-    def test_the_skill_is_installed_to_the_dsh_skills_root(self):
-        status, given = self.install(*self.dsh_flags())
-        self.assertEqual(status, DONE)
-        target = self.dsh_home / "skills" / "chatlogin" / "SKILL.md"
-        self.assertTrue(target.is_file())
-        self.assertEqual(target.read_text(encoding="utf-8"), "skill content")
-
-    def test_the_plugin_is_added_with_the_dsh_cli_when_present(self):
-        status, given = self.install(*self.dsh_flags())
-        self.assertEqual(status, DONE)
-        self.assertTrue(self.machine.dsh_plugin_added)
-        self.assertFalse(self.machine.pnpm_added)
-
-    def test_the_plugin_falls_back_to_pnpm_when_dsh_is_missing(self):
-        self.machine.present["dsh"] = False
-        status, given = self.install(*self.dsh_flags())
-        self.assertEqual(status, DONE)
-        self.assertTrue(self.machine.pnpm_added)
-        self.assertEqual(self.machine.pnpm_cwd, self.profile_dir)
-
-    def test_the_fallback_edits_the_profile_manifest(self):
-        self.machine.present["dsh"] = False
-        status, given = self.install(*self.dsh_flags())
-        self.assertEqual(status, DONE)
-        package = json.loads(
-            self.profile_dir.joinpath("package.json").read_text(encoding="utf-8")
-        )
-        self.assertIn("dsh-agentschat", package["dependencies"])
-        self.assertIn("dsh-agentschat", package["dsh"]["profile"]["bundles"])
 
 
 if __name__ == "__main__":

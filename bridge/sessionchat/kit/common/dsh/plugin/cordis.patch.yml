@@ -1,5 +1,0 @@
-- insert:
-    - id: agentschat
-      name: dsh-agentschat
-      config:
-        brokerUrl: http://127.0.0.1:8770
