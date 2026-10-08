@@ -11,9 +11,10 @@ reached via `install.ps1 --role participant`) gains the DSH step:
 
 - the skill goes to the DSH skills root (`<dshHome>/skills/chatlogin/`);
 - the plugin package goes into the named profile: added as a dependency in
-  the profile `package.json`, listed in `dsh.profile.bundles`, and inserted
-  into the profile `cordis.patch.yml` (the patch layer, not `cordis.yml`).
-  With `patchReload: live` the profile picks the plugin up without a restart.
+  the profile `package.json` and listed in `dsh.profile.bundles`. The plugin
+  bundle ships its own `cordis.patch.yml` (declared in `dsh.bundle.patch`),
+  which the DSH loader applies when the bundle loads, so the installer does
+  not touch the profile-level `cordis.patch.yml`.
 - If the `dsh` CLI is not on PATH (this machine), the installer falls back to
   `pnpm add` plus manifest edits in the profile directory.
 

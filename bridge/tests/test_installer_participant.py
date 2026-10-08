@@ -2048,9 +2048,6 @@ class DshStepTests(ParticipantCase):
             json.dumps({"dependencies": {}, "dsh": {"profile": {"bundles": []}}}),
             encoding="utf-8",
         )
-        self.profile_dir.joinpath("cordis.patch.yml").write_text(
-            "[]\n", encoding="utf-8"
-        )
         kit_dir = (
             self.repo
             / "bridge"
@@ -2101,11 +2098,6 @@ class DshStepTests(ParticipantCase):
         )
         self.assertIn("dsh-agentschat", package["dependencies"])
         self.assertIn("dsh-agentschat", package["dsh"]["profile"]["bundles"])
-        patch = self.profile_dir.joinpath("cordis.patch.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("agentschat", patch)
-        self.assertIn("dsh-agentschat", patch)
 
 
 if __name__ == "__main__":

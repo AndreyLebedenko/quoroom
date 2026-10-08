@@ -275,27 +275,6 @@ def edit_manifests(run: Run, profile_dir: Path) -> None:
     if PLUGIN_NAME not in bundles:
         bundles.append(PLUGIN_NAME)
     package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
-    insert_plugin_patch(profile_dir / "cordis.patch.yml")
-
-
-def insert_plugin_patch(patch_path: Path) -> None:
-    entry = [
-        "- insert:",
-        "    - id: agentschat",
-        "      name: dsh-agentschat",
-        "      config:",
-        "        brokerUrl: http://127.0.0.1:8770",
-    ]
-    if not patch_path.is_file():
-        patch_path.write_text("\n".join(entry) + "\n", encoding="utf-8")
-        return
-    content = patch_path.read_text(encoding="utf-8").strip()
-    if content == "[]":
-        patch_path.write_text("\n".join(entry) + "\n", encoding="utf-8")
-        return
-    patch_path.write_text(
-        content.rstrip() + "\n" + "\n".join(entry) + "\n", encoding="utf-8"
-    )
 
 
 @dataclass
