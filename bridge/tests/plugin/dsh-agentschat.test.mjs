@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Проверка DSH-плагина без DeepSeek Harness и без брокера: вместо них —
  * поддельный ctx, поддельные агенты, поддельный CLI agentschat и обычный
  * http-сервер. Главное, что здесь проверяется: две сессии в одном процессе
@@ -289,6 +289,20 @@ const logFile = path.join(store, "dsh-plugin.log")
 const readLog = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "")
 const state = () => globalThis.__dshAgentschat
 
+/**
+ * Снятие последнего экземпляра запускает logout-потомков без ожидания их:
+ * лучший момент их удаления файла токена - следующая проверка, где fresh()
+ * уже разложил токены заново, и гонка роняет её. Дренируем до выхода.
+ */
+async function stopDrained(dispose) {
+  const pending = state() ? state().bindings.size : 0
+  const before = readAttempts("attempts-logout").length
+  dispose()
+  if (pending > 0) {
+    await waitFor(() => readAttempts("attempts-logout").length >= before + pending, 2000)
+  }
+}
+
 test("the plugin registers the chatlogin and chatlogout commands", async () => {
   fresh()
   const { ctx, registered } = makeCtx()
@@ -340,7 +354,23 @@ test("a successful login binds the calling agent and delivers the broker envelop
     assert.equal(typeof delivered[0].id, "string")
     assert.ok(asked.includes("terra/tok-terra"))
   } finally {
-    dispose()
+    await stopDrained(dispose)
+  }
+})
+
+test("a multi-word label reaches the CLI as one argument", async () => {
+  fresh()
+  const { ctx, registered } = makeCtx()
+  const agent = makeAgent("agent-terra", [])
+  const dispose = apply(ctx, {})
+  try {
+    const result = await invoke(registered, "chatlogin", "terra my label", agent)
+    assert.equal(result.kind, "success")
+    const attempts = readAttempts("attempts-login")
+    assert.equal(attempts[0].agent, "terra")
+    assert.equal(attempts[0].label, "my label")
+  } finally {
+    await stopDrained(dispose)
   }
 })
 
@@ -366,7 +396,7 @@ test("two sessions under different names each receive their own envelope", async
     assert.equal(state().bindings.has("terra"), false)
     assert.equal(state().bindings.has("helium"), true)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -382,7 +412,7 @@ test("a refused login changes nothing and reports the refusal", async () => {
     assert.match(result.text, /slot_taken/)
     assert.equal(state().bindings.has("terra"), false)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -401,7 +431,7 @@ test("a slot_taken refusal with a stored token retries the login with --reconnec
     assert.equal(attempts[0].reconnect, false)
     assert.equal(attempts[1].reconnect, true)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -418,7 +448,7 @@ test("a logout command unbinds the agent and the CLI logout runs", async () => {
     assert.equal(fs.existsSync(path.join(store, "terra.json")), false)
     assert.ok(readAttempts("attempts-logout").some((a) => a.agent === "terra"))
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -436,7 +466,7 @@ test("a logout without a name unbinds the session of the calling agent", async (
     assert.equal(state().bindings.has("terra"), false)
     assert.equal(state().bindings.has("helium"), true)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -453,7 +483,7 @@ test("a refused logout leaves the binding in place", async () => {
     assert.match(result.text, /not_logged_in/)
     assert.equal(state().bindings.get("terra")?.agent, agent)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -475,7 +505,7 @@ test("a disposed agent releases exactly its own slot", async () => {
     assert.equal(fs.existsSync(path.join(store, "terra.json")), false)
     assert.equal(fs.existsSync(path.join(store, "helium.json")), true)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -500,7 +530,7 @@ test("a binding without a token does not hang forever", async () => {
       "брокера не дёргали без токена",
     )
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -541,7 +571,7 @@ test("a 409 from the broker drops the binding", async () => {
     await waitFor(() => state().bindings.has("terra") === false)
     assert.ok(readLog().includes("the broker no longer knows this session"))
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -557,7 +587,7 @@ test("the broker envelope is delivered verbatim", async () => {
     await waitFor(() => delivered.length > 0)
     assert.equal(delivered[0].content[0].text, "строка один\nстрока два")
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -575,7 +605,7 @@ test("a login result line for another command does not bind", async () => {
     assert.equal(result.kind, "error")
     assert.equal(state().bindings.has("terra"), false)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -594,7 +624,7 @@ test("a forged ok line above the real refusal does not bind", async () => {
     assert.equal(result.kind, "error")
     assert.equal(state().bindings.size, 0)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -613,7 +643,7 @@ test("a forged refusal above the real success does not stop the binding", async 
     assert.equal(result.kind, "success")
     assert.equal(state().bindings.get("terra")?.agent, agent)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -632,7 +662,7 @@ test("a malformed last result line is ignored, logged and never thrown", async (
     assert.equal(state().bindings.has("terra"), false)
     assert.match(readLog(), /result line is not valid JSON/)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -649,7 +679,7 @@ test("an invalid name is rejected by the handler without a CLI call", async () =
     assert.equal(readAttempts("attempts-login").length, 0)
     assert.equal(state().bindings.size, 0)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -666,7 +696,7 @@ test("a login for a name already bound in this process is refused", async () => 
     assert.match(result.text, /already connected/)
     assert.equal(readAttempts("attempts-login").length, attemptsBefore)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -686,7 +716,7 @@ test("the plugin log is English whatever the CLI printed", async () => {
     assert.ok(log.length > 0)
     assert.doesNotMatch(log, CYRILLIC)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -701,7 +731,7 @@ test("a broken log file never breaks the login", async () => {
     assert.equal(result.kind, "success")
     assert.equal(state().bindings.get("terra")?.agent, agent)
   } finally {
-    dispose()
+    await stopDrained(dispose)
   }
 })
 
@@ -754,6 +784,27 @@ test("resolveConfig reads env overrides and defaults", () => {
   } finally {
     delete process.env.AGENTSCHAT_BIN
   }
+})
+
+test("resolveConfig reads the tokenless limit from the environment", () => {
+  process.env.AGENTSCHAT_TOKENLESS_LIMIT = "7"
+  try {
+    assert.equal(resolveConfig({}).tokenlessLimit, 7)
+  } finally {
+    delete process.env.AGENTSCHAT_TOKENLESS_LIMIT
+  }
+  assert.equal(resolveConfig({}).tokenlessLimit, 20)
+  assert.throws(() => resolveConfig({ tokenlessLimit: 0 }), TypeError)
+})
+
+test("the default wait timeout outlives the broker long-poll ceiling", () => {
+  const broker = fs.readFileSync(
+    new URL("../../sessionchat/protocol.py", import.meta.url),
+    "utf8",
+  )
+  const seconds = Number(broker.match(/^WAIT_SECONDS = ([0-9.]+)$/m)[1])
+  assert.ok(Number.isFinite(seconds) && seconds > 0)
+  assert.ok(resolveConfig({}).waitTimeoutMs > seconds * 1000)
 })
 
 function withoutComments(source) {

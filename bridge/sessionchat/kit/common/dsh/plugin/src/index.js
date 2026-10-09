@@ -7,6 +7,9 @@ import { randomUUID } from "node:crypto"
 const RESULT_PREFIX = "AGENTSCHAT-RESULT "
 const AGENT_NAME = /^[A-Za-z0-9][\w-]*$/
 const CODE_NAME = /^[a-z][a-z0-9_]*$/
+const CMD_SHIM = /\.(cmd|bat)$/i
+const PATHED = /[/\\]/
+const PATHEXT_DEFAULT = ".COM;.EXE;.BAT;.CMD"
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -41,7 +44,10 @@ export function resolveConfig(config = {}) {
     brokerUrl: parsed.toString().replace(/\/$/, ""),
     cli,
     retryMs: positiveInt(env("AGENTSCHAT_RETRY_MS") ?? config.retryMs ?? 3000, "retryMs"),
-    tokenlessLimit: positiveInt(config.tokenlessLimit ?? 20, "tokenlessLimit"),
+    tokenlessLimit: positiveInt(
+      env("AGENTSCHAT_TOKENLESS_LIMIT") ?? config.tokenlessLimit ?? 20,
+      "tokenlessLimit",
+    ),
     loginTimeoutMs: positiveInt(config.loginTimeoutMs ?? 30000, "loginTimeoutMs"),
     logoutTimeoutMs: positiveInt(config.logoutTimeoutMs ?? 15000, "logoutTimeoutMs"),
     waitTimeoutMs: positiveInt(config.waitTimeoutMs ?? 70000, "waitTimeoutMs"),
@@ -82,6 +88,39 @@ function note(message) {
   }
 }
 
+function findOnPath(name) {
+  const extensions = String(process.env.PATHEXT || PATHEXT_DEFAULT).split(";")
+  for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue
+    for (const ext of extensions) {
+      const candidate = path.join(dir, `${name}${ext}`)
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate
+      } catch {
+        continue
+      }
+    }
+  }
+  return null
+}
+
+const needsQuotes = (value) => value === "" || /[\s&()^%!"<>|]/.test(value)
+const quote = (value) => (needsQuotes(value) ? `"${value}"` : value)
+
+function spawnCli(cli, args, options) {
+  if (process.platform !== "win32") return spawn(cli, args, options)
+  let command = cli
+  if (!PATHED.test(cli) && !CMD_SHIM.test(cli)) {
+    command = findOnPath(cli) ?? cli
+  }
+  if (!CMD_SHIM.test(command)) return spawn(command, args, options)
+  const line = [command, ...args].map(quote).join(" ")
+  return spawn("cmd.exe", ["/d", "/s", "/c", `"${line}"`], {
+    ...options,
+    windowsVerbatimArguments: true,
+  })
+}
+
 function runCli(cli, args, timeoutMs) {
   return new Promise((resolve) => {
     let out = ""
@@ -93,7 +132,7 @@ function runCli(cli, args, timeoutMs) {
       clearTimeout(timer)
       resolve({ code, out })
     }
-    const child = spawn(cli, args, { shell: true, windowsHide: true })
+    const child = spawnCli(cli, args, { windowsHide: true })
     timer = setTimeout(() => {
       try {
         child.kill()

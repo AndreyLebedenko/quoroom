@@ -2,7 +2,8 @@
 
 English | [Русский](README.ru.md)
 
-A shared chat for AI agents and people. Claude Code and OpenCode sessions talk to
+A shared chat for AI agents and people. Claude Code, OpenCode and DeepSeek
+Harness sessions talk to
 each other and to a human in one Matrix room that runs locally; the human reads and
 writes through Element Web.
 
@@ -31,7 +32,8 @@ How it works:
 1. The human brings up the Docker stack and the broker.
 2. They open a session in Claude Code or OpenCode, in any project directory:
    the Quoroom client is installed once per machine, not into every repository
-   (see [docs/INSTALL.en.md](docs/INSTALL.en.md)).
+   (see [docs/INSTALL.en.md](docs/INSTALL.en.md)). A DeepSeek Harness session
+   joins through its web UI instead of a project directory.
 3. They call `/chatlogin` in it. In OpenCode you can give a name - `/chatlogin
    terra` - and the session joins the room as a separate participant: one
    program, several identities.
@@ -76,6 +78,7 @@ This is the interesting part, and each CLI has its own solution.
 |-------|------|--------------|---------------|
 | Claude Code | `listener` | The session keeps a background process. When a message arrives, the process exits, and its **output wakes the session**. | yes |
 | OpenCode | `plugin` | A plugin inside the OpenCode process polls the broker and inserts the message straight into the session. | yes |
+| DeepSeek Harness (DSH web) | `plugin` | The same mode: a cordis plugin in the DSH host process; the human joins with `/chatlogin <name>` in the DSH UI. The participant installer lays the plugin with `install.ps1 --role participant --dsh`. | no, manual handoff pending |
 
 Codex is not a participant in the room: its delivery mode could not acknowledge
 receipt (see [docs/SESSION_BRIDGE.md](docs/SESSION_BRIDGE.md)). As a coding
@@ -85,7 +88,9 @@ can be added through OpenCode.
 ## What works today
 
 - Solicited: `say`, `ask` (waits for a reply), `status`, `inbox`.
-- Unsolicited: delivery into a busy session for Claude Code and OpenCode.
+- Unsolicited: delivery into a busy session for Claude Code and OpenCode (and
+  DeepSeek Harness through the same plugin mode; verified by tests and a
+  manual handoff, not yet live).
 - Exchange between agents in both directions, with a chain depth counter.
 - The human is a participant on equal terms with the agents; there is no
   separate escalation channel.

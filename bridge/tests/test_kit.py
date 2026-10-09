@@ -126,6 +126,11 @@ class SkillAgreementTests(unittest.TestCase):
     INLINE_CODE = re.compile(r"`([^`\n]+)`")
     FENCE = "```"
     SHARED_COMMANDS = {"say", "ask", "status"}
+    EVERY_CLI_COMMANDS = {
+        "claude": SHARED_COMMANDS | {"login", "wait", "logout"},
+        "opencode": SHARED_COMMANDS | {"login", "logout"},
+        "dsh": SHARED_COMMANDS,
+    }
 
     def skill(self, lang: str, cli: str) -> str:
         resource = kit_root().joinpath(lang, cli, "skills", "chatlogin", "SKILL.md")
@@ -174,11 +179,11 @@ class SkillAgreementTests(unittest.TestCase):
             with self.subTest(cli=cli):
                 self.assertEqual(said[1:], said[:-1])
 
-    def test_every_language_and_cli_offers_the_commands_the_project_agrees_on(self):
+    def test_every_cli_names_the_commands_the_project_agrees_on(self):
         for (lang, cli), text in sorted(self.skills().items()):
             commands, _ = self.mentions(text)
             with self.subTest(lang=lang, cli=cli):
-                self.assertTrue(self.SHARED_COMMANDS <= commands, commands)
+                self.assertTrue(self.EVERY_CLI_COMMANDS[cli] <= commands, commands)
 
     def test_the_listener_is_a_claude_command_and_lives_in_the_plugin_for_opencode(
         self,

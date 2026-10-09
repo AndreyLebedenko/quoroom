@@ -1,6 +1,10 @@
 # Story: DeepSeek Harness as a room participant
 
-**Status:** Planning (branch `feat/dsh-participant`).
+**Status:** In review (branch `feat/dsh-participant`; first review
+`review-dsh-participant-pr-1.md`, fixes applied 2026-10-09 and 2026-10-10).
+Code and docs are done; the manual handoff (`docs/VERIFICATION.md`, scenario
+3) is pending the human, and the acceptance criteria below stay open until it
+is recorded.
 
 ## User-facing goal
 
@@ -46,6 +50,12 @@ uses exactly that mode:
   `agent.followup(createUserMessage({ content: [{ type: 'text', text:
   rendered }], source: { kind: 'plugin', plugin: 'agentschat' } }))`.
   The envelope text is the broker's `rendered` field, printed verbatim.
+  Decision (2026-10-09, review S2): the plugin does NOT import
+  `createUserMessage` - the plugin package stays dependency-free and the
+  DSH host API is not importable from a plain Node module. It builds the
+  message literal by hand (`id` via `randomUUID()`, `role: "user"`, the text
+  part, the `source` object). The host's own defaults are accepted as lost;
+  the manual handoff against a real DSH session is what verifies delivery.
 - The broker renders plugin-mode envelopes with the "reply with say" tail
   (`restart_listener=False`), so no listener-restart instruction appears.
 - The DSH shell tool is named `pwsh`; the tool hook event is
@@ -57,6 +67,16 @@ uses exactly that mode:
   entry in `dsh.profile.bundles`; `patchReload: live` reloads patch changes
   without a restart. The `dsh` CLI is not on PATH on this machine, so
   profile plugin installation may need the `pnpm add` + manifest fallback.
+- Broker address (2026-10-09, review S3): the plugin reads
+  `AGENTSCHAT_URL` first and its `config.brokerUrl` second
+  (`kit/common/dsh/plugin/src/index.js`). Who sets what:
+  the `cordis.patch.yml` shipped with the bundle hardcodes
+  `http://127.0.0.1:8770`, which equals the broker default on a stand built
+  by the installer. A custom `--broker-url` is handed to the participant by
+  the usual `AGENTSCHAT_URL` environment variable, which the installer
+  already prints the command for (`participant.set_url_permanently`); the
+  plugin reads it before the patch value, so the variable wins. No other
+  hand-off exists - the installer does not edit the patch file.
 
 ## Environment state (2026-07-21)
 
@@ -91,6 +111,16 @@ uses exactly that mode:
    skill into `<dshHome>/skills`, plugin into the named profile (`dsh
    plugin --profile <name> add`, with an explicit manual fallback when the
    `dsh` CLI is absent); unittest.
+   Re-decided at review (2026-10-09, blocker B1): both install paths pass a
+   LOCAL PATH to the plugin directory, never the package name. The name
+   `dsh-agentschat` is not published to any registry, so a registry name
+   resolves nowhere and, unregistered, invites a supply-chain takeover on
+   the user's machine. `dsh plugin add` receives the path; the fallback
+   runs `pnpm add <path>` and then writes the `file:` spec into the
+   profile manifest. The fallback refuses (NeedsHuman) when the profile
+   `package.json` is absent, unreadable, or `pnpm` itself is not
+   installed; the DSH skill refuses to overwrite an existing file that
+   differs from the kit (the same conflict policy as `KitInstallStep`).
 4. `task-dsh-04-docs.md` - SESSION_BRIDGE.md DSH section, READMEs,
    `config.example.yaml` example, VERIFICATION.md manual handoff.
 
@@ -108,3 +138,13 @@ uses exactly that mode:
 - [ ] Full suite, `node --test`, and ruff are green; the manual handoff is
       prepared and its result recorded in `docs/VERIFICATION.md` once the
       human runs it.
+
+## Uninstall record (2026-10-09, review B2)
+
+The install step records what it laid in the installer's own ownership
+record: `dsh_skill` (the SKILL.md path) and `dsh_profile` (the profile
+`package.json` path). A removal step takes both back: it deletes the skill
+file it laid, runs `pnpm remove dsh-agentschat` in the profile (best
+effort; on failure it warns and tells the human), and rewrites the
+manifest to drop the dependency and the bundle entry. A file the human
+edited is treated as a conflict at install time, not at removal time.

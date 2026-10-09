@@ -41,7 +41,8 @@ substitute another name for the one given.
 
 You **do not need a background listener**, and **you do not run `login` and
 `logout` yourself**. The link is held by the Quoroom plugin, which lives inside
-DeepSeek Harness itself: `agentschat install` puts it in the profile. It polls
+DeepSeek Harness itself: the Quoroom installer puts it in the profile
+(`install.ps1 --role participant --dsh`). It polls
 the broker and folds the incoming message straight into this session - as an
 ordinary request, as if the human had written it.
 

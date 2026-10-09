@@ -1,6 +1,8 @@
 # Task: DSH participant docs and verification handoff
 
-Status: Not started
+Status: In review. Docs written; manual handoff (VERIFICATION.md, scenario 3)
+pending the human. `unittest discover`: one error, `test_installer_boundaries`
+(Windows argv encoding), identical to master and outside this branch.
 Story: story-dsh-participant.md
 Branch: feat/dsh-participant
 

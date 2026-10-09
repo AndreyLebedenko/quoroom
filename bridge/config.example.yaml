@@ -86,6 +86,21 @@ agents:
   #
   # A session logs in under that name with /chatlogin terra.
   #
+  # DeepSeek Harness (DSH web) is a participant of the same kind: its plugin
+  # mode joins a live DSH session through /chatlogin in the DSH UI. Without
+  # an entry here the broker answers "unknown agent" - the DSH skill says so
+  # honestly, but the entry has to exist first. Uncomment and fill in:
+  #
+  #   deepseek:
+  #     user_id: "@deepseek:agentschat.local"
+  #     access_token: "PASTE_TOKEN_HERE"
+  #     device_id: "PASTE_DEVICE_ID_HERE"
+  #     display_name: "DeepSeek Harness"
+  #     delivery: "plugin"
+  #
+  # The plugin itself is laid by the participant installer:
+  # install.ps1 --role participant --dsh.
+  #
   # Choose a name that will not come up in ordinary conversation: addressing
   # goes by word boundaries, and an agent named GLM would treat any mention of
   # the GLM model as addressed to it.

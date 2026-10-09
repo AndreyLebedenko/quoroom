@@ -40,6 +40,8 @@ DSH_CLI = "dsh"
 PNPM_CLI = "pnpm"
 PLUGIN_NAME = "dsh-agentschat"
 SKILL_NAME = "chatlogin"
+DSH_SKILL_KIND = "dsh_skill"
+DSH_PROFILE_KIND = "dsh_profile"
 DEFAULT_PROFILE = "web"
 PATHEXT = ".COM;.EXE;.BAT;.CMD"
 SERVER_ROLE = "server"
@@ -177,7 +179,6 @@ class KitInstallStep:
 @dataclass
 class DshStep:
     name: str = "install_dsh"
-    handled: bool = False
 
     def enabled(self, run: Run) -> bool:
         return bool(run.plan.answers.get(ROLE, {}).get(DSH_DEST))
@@ -196,51 +197,141 @@ class DshStep:
     def skill_target(self, run: Run) -> Path:
         return self.dsh_home(run) / "skills" / SKILL_NAME / "SKILL.md"
 
+    def skill_source(self, run: Run) -> Path:
+        source = (
+            run.boundaries.repo
+            / "bridge"
+            / "sessionchat"
+            / "kit"
+            / run.boundaries.lang
+            / "dsh"
+            / "skills"
+            / SKILL_NAME
+            / "SKILL.md"
+        )
+        if not source.is_file():
+            raise RuntimeError(
+                run.t("participant.dsh_skill_missing", variant=run.boundaries.lang)
+            )
+        return source
+
+    def plugin_source(self, run: Run) -> Path:
+        return (
+            run.boundaries.repo
+            / "bridge"
+            / "sessionchat"
+            / "kit"
+            / "common"
+            / "dsh"
+            / "plugin"
+        )
+
+    def profile_package(self, run: Run) -> dict | None:
+        path = self.profile_dir(run) / "package.json"
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def plugin_registered(self, run: Run) -> bool:
+        package = self.profile_package(run)
+        if package is None:
+            return False
+        dependencies = package.get("dependencies")
+        dsh = package.get("dsh")
+        bundles = (
+            dsh.get("profile", {}).get("bundles") if isinstance(dsh, dict) else None
+        )
+        return (
+            isinstance(dependencies, dict)
+            and PLUGIN_NAME in dependencies
+            and isinstance(bundles, list)
+            and PLUGIN_NAME in bundles
+        )
+
     def check(self, run: Run) -> State:
-        if self.handled or not self.enabled(run):
+        if not self.enabled(run):
             return State.DONE
-        return State.TODO
+        if not self.skill_target(run).is_file():
+            return State.TODO
+        if not self.plugin_registered(run):
+            return State.TODO
+        return State.DONE
 
     def apply(self, run: Run) -> None:
-        self.handled = True
         self.install_skill(run)
+        run.record(ROLE, DSH_SKILL_KIND, str(self.skill_target(run)))
         self.install_plugin(run)
+        run.record(ROLE, DSH_PROFILE_KIND, str(self.profile_dir(run) / "package.json"))
 
     def install_skill(self, run: Run) -> None:
         source = self.skill_source(run)
         target = self.skill_target(run)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read_bytes())
-
-    def skill_source(self, run: Run) -> Path:
-        lang = run.boundaries.lang
-        kit_dir = run.boundaries.repo / "bridge" / "sessionchat" / "kit"
-        for variant in (lang, "ru"):
-            candidate = kit_dir / variant / "dsh" / "skills" / SKILL_NAME / "SKILL.md"
-            if candidate.is_file():
-                return candidate
-        raise FileNotFoundError(f"the kit has no dsh skill in {lang}")
+        if not target.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+            return
+        if target.read_bytes() != source.read_bytes():
+            raise NeedsHuman(run.t("participant.dsh_skill_edited", target=target))
 
     def install_plugin(self, run: Run) -> None:
         profile_dir = self.profile_dir(run)
+        source = str(self.plugin_source(run))
         if dsh_cli_present(run):
             result = run.boundaries.run(
-                [
-                    DSH_CLI,
-                    "plugin",
-                    "--profile",
-                    self.profile_name(run),
-                    "add",
-                    PLUGIN_NAME,
-                ]
+                [DSH_CLI, "plugin", "--profile", self.profile_name(run), "add", source]
             )
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"dsh plugin add failed: {result.stderr or result.stdout}"
+                    run.t(
+                        "participant.dsh_plugin_failed",
+                        detail=(result.stderr or result.stdout or "").strip(),
+                    )
                 )
         else:
-            pnpm_add(run, profile_dir)
-            edit_manifests(run, profile_dir)
+            if not (profile_dir / "package.json").is_file():
+                raise NeedsHuman(
+                    run.t(
+                        "participant.dsh_profile_missing",
+                        path=profile_dir / "package.json",
+                    )
+                )
+            if not pnpm_present(run):
+                raise NeedsHuman(run.t("participant.pnpm_missing"))
+            result = run.boundaries.run([PNPM_CLI, "add", source], cwd=profile_dir)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    run.t(
+                        "participant.pnpm_failed",
+                        detail=(result.stderr or result.stdout or "").strip(),
+                    )
+                )
+        self.edit_manifests(run, profile_dir)
+
+    def edit_manifests(self, run: Run, profile_dir: Path) -> None:
+        package_path = profile_dir / "package.json"
+        package = self.profile_package(run)
+        if package is None:
+            raise NeedsHuman(
+                run.t("participant.dsh_profile_missing", path=package_path)
+            )
+        package.setdefault("dependencies", {})[PLUGIN_NAME] = self.plugin_spec(
+            run, profile_dir
+        )
+        dsh = package.setdefault("dsh", {})
+        profile = dsh.setdefault("profile", {})
+        bundles = profile.setdefault("bundles", [])
+        if PLUGIN_NAME not in bundles:
+            bundles.append(PLUGIN_NAME)
+        package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+
+    def plugin_spec(self, run: Run, profile_dir: Path) -> str:
+        source = self.plugin_source(run)
+        try:
+            relative = os.path.relpath(source, profile_dir)
+        except ValueError:
+            return f"file:{source}"
+        return f"file:{Path(relative).as_posix()}"
 
 
 def dsh_cli_present(run: Run) -> bool:
@@ -250,31 +341,67 @@ def dsh_cli_present(run: Run) -> bool:
         return False
 
 
-def pnpm_add(run: Run, profile_dir: Path) -> None:
-    result = run.boundaries.run([PNPM_CLI, "add", PLUGIN_NAME], cwd=profile_dir)
-    if result.returncode != 0:
-        raise RuntimeError(f"pnpm add failed: {result.stderr or result.stdout}")
+def pnpm_present(run: Run) -> bool:
+    try:
+        return run.boundaries.run([PNPM_CLI, "--version"]).returncode == 0
+    except OSError:
+        return False
 
 
-def edit_manifests(run: Run, profile_dir: Path) -> None:
-    package_path = profile_dir / "package.json"
-    package = json.loads(package_path.read_text(encoding="utf-8"))
-    plugin_source = str(
-        run.boundaries.repo
-        / "bridge"
-        / "sessionchat"
-        / "kit"
-        / "common"
-        / "dsh"
-        / "plugin"
-    )
-    package.setdefault("dependencies", {})[PLUGIN_NAME] = f"file:{plugin_source}"
-    dsh = package.setdefault("dsh", {})
-    profile = dsh.setdefault("profile", {})
-    bundles = profile.setdefault("bundles", [])
-    if PLUGIN_NAME not in bundles:
-        bundles.append(PLUGIN_NAME)
-    package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+@dataclass
+class DshRemoveStep:
+    name: str = "remove_dsh"
+
+    def check(self, run: Run) -> State:
+        ownership = run.ownership_of(ROLE)
+        if ownership.of_kind(DSH_SKILL_KIND) or ownership.of_kind(DSH_PROFILE_KIND):
+            return State.TODO
+        return State.DONE
+
+    def apply(self, run: Run) -> None:
+        ownership = run.ownership_of(ROLE)
+        for id in ownership.of_kind(DSH_SKILL_KIND):
+            self.drop_skill(Path(id))
+            run.forget(ROLE, DSH_SKILL_KIND, id)
+        for id in ownership.of_kind(DSH_PROFILE_KIND):
+            self.revert_manifest(run, Path(id))
+            run.forget(ROLE, DSH_PROFILE_KIND, id)
+
+    def drop_skill(self, target: Path) -> None:
+        target.unlink(missing_ok=True)
+        for directory in (target.parent, target.parent.parent):
+            try:
+                directory.rmdir()
+            except OSError:
+                break
+
+    def revert_manifest(self, run: Run, package_path: Path) -> None:
+        profile_dir = package_path.parent
+        if pnpm_present(run):
+            result = run.boundaries.run(
+                [PNPM_CLI, "remove", PLUGIN_NAME], cwd=profile_dir
+            )
+            if result.returncode != 0:
+                run.warn(run.t("participant.dsh_prune_failed", path=profile_dir))
+        package = None
+        try:
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            run.warn(run.t("participant.dsh_manifest_kept", path=package_path))
+            return
+        dependencies = package.get("dependencies")
+        if isinstance(dependencies, dict):
+            dependencies.pop(PLUGIN_NAME, None)
+        dsh = package.get("dsh")
+        if isinstance(dsh, dict):
+            profile = dsh.get("profile")
+            if isinstance(profile, dict):
+                bundles = profile.get("bundles")
+                if isinstance(bundles, list):
+                    profile["bundles"] = [
+                        bundle for bundle in bundles if bundle != PLUGIN_NAME
+                    ]
+        package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
 
 
 @dataclass
@@ -432,6 +559,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
         ),
         remove=(
             KitRemoveStep(removal=removal),
+            DshRemoveStep(),
             PackageRemoveStep(removal=removal),
         ),
         purge=(session_step(),),
@@ -456,17 +584,17 @@ def add_options(options: RoleOptions) -> None:
     options.add(
         "--dsh",
         action="store_true",
-        help="install the DeepSeek Harness participant (skill + plugin)",
+        help=options.t("participant.help_dsh"),
     )
     options.add(
         "--dsh-home",
         default=None,
-        help="the DSH home directory (default: ~/.dsh)",
+        help=options.t("participant.help_dsh_home", default="~/.dsh"),
     )
     options.add(
         "--profile",
         default=DEFAULT_PROFILE,
-        help=f"the DSH profile name (default: {DEFAULT_PROFILE})",
+        help=options.t("participant.help_profile", default=DEFAULT_PROFILE),
     )
 
 
