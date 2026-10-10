@@ -91,7 +91,7 @@ if (Test-Path $pidFile) {
     $bpid = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($bpid) { $bpid = $bpid.Trim() }
     $broker = $null
-    if ($bpid) {
+    if ($bpid -match '^\d+$') {
         $broker = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$bpid)" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match 'sessionchat\.broker' }
     }

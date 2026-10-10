@@ -280,7 +280,14 @@ class DshStep:
         source = str(self.plugin_source(run))
         if dsh_cli_present(run):
             result = run.boundaries.run(
-                [DSH_CLI, "plugin", "--profile", self.profile_name(run), "add", source]
+                [
+                    dsh_command(),
+                    "plugin",
+                    "--profile",
+                    self.profile_name(run),
+                    "add",
+                    source,
+                ]
             )
             if result.returncode != 0:
                 raise RuntimeError(
@@ -337,9 +344,13 @@ class DshStep:
         return f"file:{Path(relative).as_posix()}"
 
 
+def dsh_command() -> str:
+    return shutil.which(DSH_CLI) or DSH_CLI
+
+
 def dsh_cli_present(run: Run) -> bool:
     try:
-        return run.boundaries.run([DSH_CLI, "--version"]).returncode == 0
+        return run.boundaries.run([dsh_command(), "--version"]).returncode == 0
     except OSError:
         return False
 

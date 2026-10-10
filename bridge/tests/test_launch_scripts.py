@@ -135,7 +135,17 @@ function docker {
 }
 if ($env:FAKE_DOCKER_ABSENT) { Remove-Item function:docker }
 function Start-Sleep { }
-function Get-CimInstance { }
+function Get-CimInstance {
+    [CmdletBinding()]
+    param($ClassName, $Filter)
+    $brokers = @($env:FAKE_BROKER_PID)
+    if ($env:FAKE_PID_FILE) { $brokers += $PID }
+    foreach ($id in $brokers) {
+        if ($id -and $Filter -eq "ProcessId = $id") {
+            [pscustomobject]@{ ProcessId = [int]$id; CommandLine = 'python -X utf8 -m sessionchat.broker' }
+        }
+    }
+}
 function Start-Process { throw 'Start-Process must not run in a test' }
 if ($env:FAKE_PID_FILE) {
     New-Item -ItemType Directory -Force -Path (Split-Path $env:FAKE_PID_FILE) | Out-Null
@@ -518,10 +528,38 @@ class StopPowerShellTests(PowerShellCase):
                 self.addCleanup(sleeper.kill)
                 pid_file = self.root / "bridge" / "state" / "broker.pid"
                 pid_file.write_text(str(sleeper.pid), encoding="ascii")
-                code, said = self.run_script(["--lang", lang], switches="-KeepDocker")
+                code, said = self.run_script(
+                    ["--lang", lang],
+                    switches="-KeepDocker",
+                    FAKE_BROKER_PID=sleeper.pid,
+                )
                 self.assertIn(with_values(table["stopping_broker"], sleeper.pid), said)
                 self.assertNotIn(table["not_running"], said)
                 sleeper.wait(timeout=20)
+                self.assertFalse(pid_file.exists())
+
+    def test_a_pid_file_that_is_not_a_number_is_removed_without_a_crash(self):
+        for lang, table in (("en", self.english), ("ru", self.russian)):
+            with self.subTest(lang=lang):
+                pid_file = self.root / "bridge" / "state" / "broker.pid"
+                pid_file.write_text("12 34", encoding="ascii")
+                code, said = self.run_script(["--lang", lang], switches="-KeepDocker")
+                self.assertEqual(code, 0, said)
+                self.assertIn(table["not_running"], said)
+                self.assertFalse(pid_file.exists())
+
+    def test_a_pid_file_naming_another_process_leaves_that_process_alone(self):
+        for lang, table in (("en", self.english), ("ru", self.russian)):
+            with self.subTest(lang=lang):
+                bystander = subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(60)"]
+                )
+                self.addCleanup(bystander.kill)
+                pid_file = self.root / "bridge" / "state" / "broker.pid"
+                pid_file.write_text(str(bystander.pid), encoding="ascii")
+                code, said = self.run_script(["--lang", lang], switches="-KeepDocker")
+                self.assertIsNone(bystander.poll(), said)
+                self.assertIn(table["not_running"], said)
                 self.assertFalse(pid_file.exists())
 
     def test_the_docker_stack_is_brought_down_and_a_failure_is_a_warning(self):

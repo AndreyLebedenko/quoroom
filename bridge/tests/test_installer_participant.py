@@ -87,14 +87,14 @@ class Machine:
             return self.tool(name, argv)
         if name.startswith("agentschat"):
             return self.agentschat(argv, env)
-        if name == "dsh":
+        if Path(argv[0]).stem == "dsh":
             return self.dsh(argv)
         if Path(argv[0]).stem == "pnpm":
             return self.pnpm(argv, cwd)
         raise AssertionError(f"непредусмотренный вызов: {' '.join(argv)}")
 
     def dsh(self, argv: list[str]):
-        self.log.append(" ".join(argv))
+        self.log.append(" ".join(["dsh", *argv[1:]]))
         if not self.present.get("dsh", True):
             raise FileNotFoundError("dsh")
         if argv[1] == "--version":
@@ -2161,6 +2161,12 @@ class DshStepTests(DshCase):
         self.profile_dir.joinpath("package.json").unlink()
         code, _ = self.install(*self.dsh_flags())
         self.assertEqual(code, HUMAN)
+
+    def test_dsh_is_found_through_the_path_so_a_cmd_shim_runs(self):
+        with mock.patch.object(
+            participant.shutil, "which", return_value=r"C:\nvm4w\nodejs\dsh.CMD"
+        ):
+            self.assertEqual(participant.dsh_command(), r"C:\nvm4w\nodejs\dsh.CMD")
 
     def test_pnpm_is_found_through_the_path_so_a_cmd_shim_runs(self):
         with mock.patch.object(

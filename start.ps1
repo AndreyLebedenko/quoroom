@@ -159,7 +159,7 @@ if (Test-Path $pidFile) {
     $existing = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($existing) { $existing = $existing.Trim() }
     $broker = $null
-    if ($existing) {
+    if ($existing -match '^\d+$') {
         $broker = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$existing)" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match 'sessionchat\.broker' }
     }
