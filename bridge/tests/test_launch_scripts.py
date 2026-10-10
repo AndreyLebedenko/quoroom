@@ -138,12 +138,12 @@ function Start-Sleep { }
 function Get-CimInstance {
     [CmdletBinding()]
     param($ClassName, $Filter)
-    $brokers = @($env:FAKE_BROKER_PID)
-    if ($env:FAKE_PID_FILE) { $brokers += $PID }
-    foreach ($id in $brokers) {
-        if ($id -and $Filter -eq "ProcessId = $id") {
-            [pscustomobject]@{ ProcessId = [int]$id; CommandLine = 'python -X utf8 -m sessionchat.broker' }
-        }
+    $known = @{}
+    if ($env:FAKE_BROKER_PID) { $known[$env:FAKE_BROKER_PID] = 'python -X utf8 -m sessionchat.broker' }
+    if ($env:FAKE_OTHER_PID) { $known[$env:FAKE_OTHER_PID] = 'python -c import time; time.sleep(60)' }
+    if ($env:FAKE_PID_FILE) { $known["$PID"] = 'python -X utf8 -m sessionchat.broker' }
+    if ($Filter -match '^ProcessId = (\\d+)$' -and $known.ContainsKey($Matches[1])) {
+        [pscustomobject]@{ ProcessId = [int]$Matches[1]; CommandLine = $known[$Matches[1]] }
     }
 }
 function Start-Process { throw 'Start-Process must not run in a test' }
@@ -557,7 +557,11 @@ class StopPowerShellTests(PowerShellCase):
                 self.addCleanup(bystander.kill)
                 pid_file = self.root / "bridge" / "state" / "broker.pid"
                 pid_file.write_text(str(bystander.pid), encoding="ascii")
-                code, said = self.run_script(["--lang", lang], switches="-KeepDocker")
+                code, said = self.run_script(
+                    ["--lang", lang],
+                    switches="-KeepDocker",
+                    FAKE_OTHER_PID=bystander.pid,
+                )
                 self.assertIsNone(bystander.poll(), said)
                 self.assertIn(table["not_running"], said)
                 self.assertFalse(pid_file.exists())

@@ -77,9 +77,11 @@ class Machine:
         self.pnpm_added = False
         self.pnpm_cwd: Path | None = None
         self.pnpm_manifest_before: dict | None = None
+        self.executed: dict[str, str] = {}
 
     def __call__(self, argv, env=None, stdin=None, output=None, cwd=None):
         argv = [str(part) for part in argv]
+        self.executed[Path(argv[0]).stem] = argv[0]
         name = Path(argv[0]).name
         if name in ("uv", "pipx"):
             if env is not None:
@@ -2162,17 +2164,28 @@ class DshStepTests(DshCase):
         code, _ = self.install(*self.dsh_flags())
         self.assertEqual(code, HUMAN)
 
-    def test_dsh_is_found_through_the_path_so_a_cmd_shim_runs(self):
+    def test_the_dsh_cli_is_run_through_the_path_resolution(self):
+        shim = self.home / "bin" / "dsh.CMD"
         with mock.patch.object(
-            participant.shutil, "which", return_value=r"C:\nvm4w\nodejs\dsh.CMD"
+            participant.shutil,
+            "which",
+            side_effect=lambda name: str(shim) if name == "dsh" else None,
         ):
-            self.assertEqual(participant.dsh_command(), r"C:\nvm4w\nodejs\dsh.CMD")
+            status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertEqual(self.machine.executed["dsh"], str(shim))
 
-    def test_pnpm_is_found_through_the_path_so_a_cmd_shim_runs(self):
+    def test_the_pnpm_cli_is_run_through_the_path_resolution(self):
+        shim = self.home / "bin" / "pnpm.CMD"
+        self.machine.present["dsh"] = False
         with mock.patch.object(
-            participant.shutil, "which", return_value=r"C:\nvm4w\nodejs\pnpm.CMD"
+            participant.shutil,
+            "which",
+            side_effect=lambda name: str(shim) if name == "pnpm" else None,
         ):
-            self.assertEqual(participant.pnpm_command(), r"C:\nvm4w\nodejs\pnpm.CMD")
+            status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertEqual(self.machine.executed["pnpm"], str(shim))
 
     def test_a_missing_pnpm_stops_for_a_human(self):
         self.machine.present = {"uv": False, "pipx": True, "dsh": False, "pnpm": False}
