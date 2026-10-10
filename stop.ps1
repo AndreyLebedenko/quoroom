@@ -90,9 +90,14 @@ $stopped = $false
 if (Test-Path $pidFile) {
     $bpid = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($bpid) { $bpid = $bpid.Trim() }
-    if ($bpid -and (Get-Process -Id ([int]$bpid) -ErrorAction SilentlyContinue)) {
+    $broker = $null
+    if ($bpid) {
+        $broker = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$bpid)" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match 'sessionchat\.broker' }
+    }
+    if ($broker) {
         Say 'stopping_broker' @($bpid)
-        Stop-Process -Id ([int]$bpid) -Force
+        Stop-Process -Id $broker.ProcessId -Force
         $stopped = $true
     }
     Remove-Item $pidFile -ErrorAction SilentlyContinue

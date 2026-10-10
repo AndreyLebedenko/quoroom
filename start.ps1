@@ -158,9 +158,16 @@ $running = $false
 if (Test-Path $pidFile) {
     $existing = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($existing) { $existing = $existing.Trim() }
-    if ($existing -and (Get-Process -Id ([int]$existing) -ErrorAction SilentlyContinue)) {
+    $broker = $null
+    if ($existing) {
+        $broker = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$existing)" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match 'sessionchat\.broker' }
+    }
+    if ($broker) {
         $running = $true
         Say 'already_running' @($existing)
+    } else {
+        Remove-Item $pidFile -ErrorAction SilentlyContinue
     }
 }
 
