@@ -12,6 +12,7 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 from subprocess import CompletedProcess
+from unittest import mock
 
 from tests.installer_fakes import (
     SH,
@@ -88,7 +89,7 @@ class Machine:
             return self.agentschat(argv, env)
         if name == "dsh":
             return self.dsh(argv)
-        if name == "pnpm":
+        if Path(argv[0]).stem == "pnpm":
             return self.pnpm(argv, cwd)
         raise AssertionError(f"непредусмотренный вызов: {' '.join(argv)}")
 
@@ -104,7 +105,7 @@ class Machine:
         return completed("")
 
     def pnpm(self, argv: list[str], cwd: Path | None):
-        self.log.append(" ".join(argv))
+        self.log.append(" ".join(["pnpm", *argv[1:]]))
         if not self.present.get("pnpm", True):
             raise FileNotFoundError("pnpm")
         if "add" in argv[1:]:
@@ -2160,6 +2161,12 @@ class DshStepTests(DshCase):
         self.profile_dir.joinpath("package.json").unlink()
         code, _ = self.install(*self.dsh_flags())
         self.assertEqual(code, HUMAN)
+
+    def test_pnpm_is_found_through_the_path_so_a_cmd_shim_runs(self):
+        with mock.patch.object(
+            participant.shutil, "which", return_value=r"C:\nvm4w\nodejs\pnpm.CMD"
+        ):
+            self.assertEqual(participant.pnpm_command(), r"C:\nvm4w\nodejs\pnpm.CMD")
 
     def test_a_missing_pnpm_stops_for_a_human(self):
         self.machine.present = {"uv": False, "pipx": True, "dsh": False, "pnpm": False}

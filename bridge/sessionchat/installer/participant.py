@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -298,7 +299,9 @@ class DshStep:
                 )
             if not pnpm_present(run):
                 raise NeedsHuman(run.t("participant.pnpm_missing"))
-            result = run.boundaries.run([PNPM_CLI, "add", source], cwd=profile_dir)
+            result = run.boundaries.run(
+                [pnpm_command(), "add", source], cwd=profile_dir
+            )
             if result.returncode != 0:
                 raise RuntimeError(
                     run.t(
@@ -341,9 +344,13 @@ def dsh_cli_present(run: Run) -> bool:
         return False
 
 
+def pnpm_command() -> str:
+    return shutil.which(PNPM_CLI) or PNPM_CLI
+
+
 def pnpm_present(run: Run) -> bool:
     try:
-        return run.boundaries.run([PNPM_CLI, "--version"]).returncode == 0
+        return run.boundaries.run([pnpm_command(), "--version"]).returncode == 0
     except OSError:
         return False
 
@@ -379,7 +386,7 @@ class DshRemoveStep:
         profile_dir = package_path.parent
         if pnpm_present(run):
             result = run.boundaries.run(
-                [PNPM_CLI, "remove", PLUGIN_NAME], cwd=profile_dir
+                [pnpm_command(), "remove", PLUGIN_NAME], cwd=profile_dir
             )
             if result.returncode != 0:
                 run.warn(run.t("participant.dsh_prune_failed", path=profile_dir))
