@@ -1,10 +1,11 @@
 # Story: DeepSeek Harness as a room participant
 
-**Status:** In review (branch `feat/dsh-participant`; first review
-`review-dsh-participant-pr-1.md`, fixes applied 2026-10-09 and 2026-10-10).
-Code and docs are done; the manual handoff (`docs/VERIFICATION.md`, scenario
-3) is pending the human, and the acceptance criteria below stay open until it
-is recorded.
+**Status:** Task 05 completed after owner review on 2026-10-16, on
+`codex/dsh-pr3-integration`. The feature is restored after the master revert
+and the accepted review findings are repaired; 1818 unittest tests and both
+plugin suites pass. The manual handoff (`docs/VERIFICATION.md`, scenario 3)
+remains pending the human; the story stays open and no live DSH result is
+claimed. Publication of the branch and the GitHub PR merge remain separate.
 
 ## User-facing goal
 
@@ -31,6 +32,10 @@ uses exactly that mode:
   commands. The handlers run in the DSH host process (no file sandbox) and
   spawn the `agentschat` CLI, which owns the token file in
   `~/.agentschat/`.
+  Ordinary login never retries a taken slot with `--reconnect`. Only the
+  human's explicit `/chatlogin <name> --reconnect` requests reattachment.
+  This supersedes task 01's retry rule, preserving SESSION_BRIDGE.md's
+  prohibition on implicit takeover between windows.
 - **Slot release.** `agent/disposed` triggers a best-effort
   `agentschat logout`; the broker's 3-minute silence stays the fallback.
 
@@ -119,10 +124,13 @@ uses exactly that mode:
    runs `pnpm add <path>` and then writes the `file:` spec into the
    profile manifest. The fallback refuses (NeedsHuman) when the profile
    `package.json` is absent, unreadable, or `pnpm` itself is not
-   installed; the DSH skill refuses to overwrite an existing file that
-   differs from the kit (the same conflict policy as `KitInstallStep`).
+   installed. Task 05 refines skill refresh: a saved digest distinguishes an
+   unedited previous kit from a foreign or user-edited skill.
 4. `task-dsh-04-docs.md` - SESSION_BRIDGE.md DSH section, READMEs,
    `config.example.yaml` example, VERIFICATION.md manual handoff.
+5. `task-dsh-05-pr3-integration.md` - restore the complete feature against
+   master, explicit reconnect, selected removal and safe skill refresh;
+   regression tests and the final automated gate before human review.
 
 ## Acceptance criteria
 
@@ -133,8 +141,9 @@ uses exactly that mode:
       shell without sandbox friction in steady state.
 - [ ] `/chatlogout` and `agent/disposed` release the slot; the broker's
       3-minute silence remains the fallback.
-- [ ] `agentschat install --dsh` lays the skill and the plugin;
-      `uninstall` removes exactly what it laid.
+- [ ] `install.ps1 --role participant --dsh` lays the skill and the plugin;
+      `--remove --dsh` removes the selected profile, retaining the shared
+      skill and client package while another installed profile needs them.
 - [ ] Full suite, `node --test`, and ruff are green; the manual handoff is
       prepared and its result recorded in `docs/VERIFICATION.md` once the
       human runs it.
@@ -148,3 +157,21 @@ file it laid, runs `pnpm remove dsh-agentschat` in the profile (best
 effort; on failure it warns and tells the human), and rewrites the
 manifest to drop the dependency and the bundle entry. A file the human
 edited is treated as a conflict at install time, not at removal time.
+
+## Refresh and selection contract (2026-10-15, task 05)
+
+The participant installer reads `~/.quoroom/installer/dsh-kit.json` when a
+human repeats `--dsh`, including after a kit update or a `--lang` change.
+It uses kit.Entry, kit.digest and the kit manifest format, independently of
+the Claude/OpenCode manifest. Without the digest it cannot distinguish an
+old copied skill from a human edit and cannot safely refresh it. A missing
+legacy digest may be adopted only when the file already matches the kit.
+
+With `--dsh` alone, install/remove leave Claude and OpenCode kits unchanged.
+Explicit `--claude` or `--opencode` removal leaves DSH alone unless `--dsh`
+is also present. With `--dsh`, removal selects the given home and profile;
+without CLI selection flags it removes all recorded participant integrations.
+Each DSH home shares one skill across its profiles. The last recorded
+profile releases that skill, its digest and, if no CLI still needs it, the
+installer-owned client package. Removal keeps its pre-existing policy of
+deleting the recorded DSH skill even if it was edited after installation.

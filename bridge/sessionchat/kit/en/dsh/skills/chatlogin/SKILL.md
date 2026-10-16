@@ -51,6 +51,11 @@ the human, and the plugin performs them for you. So the `login` and `logout`
 commands are not needed by you: do not call them yourself. The `wait` command is
 also not needed by you: the plugin does its work.
 
+If the broker refuses a taken slot, stop and tell the human. The plugin does
+not reconnect automatically. Only the human may deliberately reattach with
+`/chatlogin <name> --reconnect`, after checking that the former session is no
+longer listening.
+
 ## When a message from the chat arrives
 
 It will arrive to you as an ordinary request, starting with

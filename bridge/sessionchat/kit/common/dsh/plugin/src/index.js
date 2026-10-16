@@ -206,15 +206,11 @@ async function readCliLogin(args, resolved) {
   return result
 }
 
-async function login(name, label, resolved) {
+async function login(name, label, reconnect, resolved) {
   const base = ["login", "--agent", name]
   if (label) base.push("--label", label)
-  const first = await readCliLogin(base, resolved)
-  if (first !== null && !first.ok && first.code === "slot_taken" && brokerToken(name) !== null) {
-    const retry = await readCliLogin([...base, "--reconnect"], resolved)
-    if (retry !== null) return retry
-  }
-  return first
+  if (reconnect) base.push("--reconnect")
+  return readCliLogin(base, resolved)
 }
 
 async function logoutCli(name, resolved) {
@@ -325,9 +321,12 @@ function parseInput(rawInput) {
   if (tokens.length === 0) return null
   let name = null
   let label = null
+  let reconnect = false
   const rest = []
   for (let i = 0; i < tokens.length; i += 1) {
-    if (tokens[i] === "--agent" && i + 1 < tokens.length) {
+    if (tokens[i] === "--reconnect") {
+      reconnect = true
+    } else if (tokens[i] === "--agent" && i + 1 < tokens.length) {
       name = tokens[i + 1]
       i += 1
     } else if (tokens[i] === "--label" && i + 1 < tokens.length) {
@@ -341,7 +340,7 @@ function parseInput(rawInput) {
   if (name === null) return null
   if (!AGENT_NAME.test(name)) return null
   if (label === null && rest.length > 0) label = rest.join(" ")
-  return { name, label }
+  return { name, label, reconnect }
 }
 
 export const inject = ["commands"]
@@ -356,15 +355,15 @@ export function apply(ctx, config = {}) {
   const offLogin = ctx.commands.register({
     name: "chatlogin",
     description: "Join the shared room as a named participant",
-    input: { hint: "<name> [label]" },
+    input: { hint: "<name> [--reconnect] [label]" },
     handler: async (invocation) => {
       const parsed = parseInput(invocation.rawInput)
-      if (parsed === null) return { kind: "error", text: "usage: /chatlogin <name> [label]" }
-      const { name, label } = parsed
+      if (parsed === null) return { kind: "error", text: "usage: /chatlogin <name> [--reconnect] [label]" }
+      const { name, label, reconnect } = parsed
       if (state.bindings.has(name)) {
         return { kind: "error", text: `session ${name} is already connected in this process` }
       }
-      const outcome = await login(name, label, resolved)
+      const outcome = await login(name, label, reconnect, resolved)
       if (outcome === null) {
         return { kind: "error", text: "login did not confirm; nothing changed" }
       }

@@ -1,8 +1,10 @@
 # Task: DSH participant docs and verification handoff
 
 Status: In review. Docs written; manual handoff (VERIFICATION.md, scenario 3)
-pending the human. `unittest discover`: one error, `test_installer_boundaries`
-(Windows argv encoding), identical to master and outside this branch.
+pending the human. The earlier `test_installer_boundaries` Windows encoding
+failure was not reproduced on master on 2026-10-15: 1767 tests completed
+without errors, one skipped, with per-process UTF-8 enabled. Task 05 owns
+the PR #3 integration regression gate.
 Story: story-dsh-participant.md
 Branch: feat/dsh-participant
 

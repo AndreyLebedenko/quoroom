@@ -174,6 +174,31 @@ The language of the kit is the installer's `--lang`, not the room's (see "Room
 language" above). For a room in the other language, run
 `agentschat install --lang <room language>` afterwards.
 
+For DeepSeek Harness, select it explicitly:
+
+```powershell
+.\install.ps1 --role participant --dsh --profile web --lang en
+```
+
+DSH needs Node.js 22.14 or newer and an existing profile. The installer adds
+the local plugin to that profile and copies `chatlogin` to the DSH skills
+root. `--dsh-home` selects another home (default `~/.dsh`); `--profile`
+defaults to `web`. With `--dsh` alone, Claude and OpenCode kits are left
+unchanged. Add their flags explicitly if needed. When `dsh` is unavailable,
+the fallback needs pnpm and the profile's existing `package.json`.
+
+After an update or a room language change, repeat this command with the
+desired `--lang`. An unedited skill is refreshed; a foreign or edited copy
+stops installation with code `3`. The previous copy's digest is kept in
+`~/.quoroom/installer/dsh-kit.json`. A legacy copy without that record is
+adopted only if it already matches the kit. `agentschat install` does not
+install or refresh the DSH integration.
+
+The human joins in the DSH UI with `/chatlogin <name> [label]`. A taken slot
+is refused. Deliberate reattachment uses `/chatlogin <name> --reconnect`,
+after checking that the former session is no longer listening. Live DSH
+verification is still pending; see scenario 3 in `VERIFICATION.md`.
+
 ### 1.2. The server role
 
 ```powershell
@@ -327,6 +352,14 @@ Participant: removes the kit through `agentschat uninstall`, then the
 `quoroom` package. Kit files that you edited by hand are left by `uninstall`,
 which names them - they can only be deleted with `agentschat uninstall
 --force`. The session files in `~/.agentschat` stay.
+
+For DSH, `--remove --dsh --profile web` removes only the selected profile in
+the chosen `--dsh-home`. Claude/OpenCode kits and other DSH profiles stay.
+The shared DSH skill is removed with the last recorded profile in that home,
+including a skill edited after installation. A remaining DSH profile keeps
+the client package installed. Removal without CLI selection flags removes
+all recorded participant integrations; `--remove --claude` or `--opencode`
+alone leaves DSH untouched.
 
 ### 3.2. What purge does
 

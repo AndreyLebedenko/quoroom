@@ -205,6 +205,21 @@ class RunCommandTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0)
         self.assertEqual(done.stdout.strip(), "http://10.0.0.5:8770")
 
+    def test_a_child_uses_the_requested_directory_without_changing_the_installers_directory(
+        self,
+    ):
+        before = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            done = run_command(
+                [sys.executable, "-c", "import os; print(os.getcwd())"],
+                cwd=Path(directory),
+            )
+            self.assertEqual(done.returncode, 0)
+            self.assertEqual(
+                Path(done.stdout.strip()).resolve(), Path(directory).resolve()
+            )
+        self.assertEqual(Path.cwd(), before)
+
     def test_a_child_keeps_the_environment_of_the_installer_around_the_addition(self):
         done = run_command(
             [sys.executable, "-c", "import os; print(os.environ.get('PATH', ''))"],

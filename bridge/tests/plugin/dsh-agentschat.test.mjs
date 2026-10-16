@@ -416,7 +416,7 @@ test("a refused login changes nothing and reports the refusal", async () => {
   }
 })
 
-test("a slot_taken refusal with a stored token retries the login with --reconnect", async () => {
+test("an ordinary login never reconnects to a taken slot even with a stored token", async () => {
   fresh()
   fs.writeFileSync(path.join(store, "refuse-login-terra"), "first")
   const { ctx, registered } = makeCtx()
@@ -424,12 +424,33 @@ test("a slot_taken refusal with a stored token retries the login with --reconnec
   const dispose = apply(ctx, {})
   try {
     const result = await invoke(registered, "chatlogin", "terra", agent)
-    assert.equal(result.kind, "success")
-    assert.equal(state().bindings.get("terra")?.agent, agent)
+    assert.equal(result.kind, "error")
+    assert.match(result.text, /slot_taken/)
+    assert.equal(state().bindings.has("terra"), false)
     const attempts = readAttempts("attempts-login")
-    assert.equal(attempts.length, 2)
+    assert.equal(attempts.length, 1)
     assert.equal(attempts[0].reconnect, false)
-    assert.equal(attempts[1].reconnect, true)
+    assert.equal(asked.length, 0)
+  } finally {
+    await stopDrained(dispose)
+  }
+})
+
+test("an explicit reconnect reaches the CLI once and resumes envelope delivery", async () => {
+  fresh()
+  const { ctx, registered } = makeCtx()
+  const delivered = []
+  const agent = makeAgent("agent-terra", delivered)
+  const dispose = apply(ctx, {})
+  try {
+    const result = await invoke(registered, "chatlogin", "terra --reconnect my label", agent)
+    assert.equal(result.kind, "success")
+    assert.match(result.text, /reconnected/)
+    assert.deepEqual(readAttempts("attempts-login"), [
+      { agent: "terra", label: "my label", reconnect: true },
+    ])
+    await waitFor(() => delivered.length > 0)
+    assert.equal(delivered[0].content[0].text, "конверт для terra")
   } finally {
     await stopDrained(dispose)
   }
