@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -33,6 +34,17 @@ DEFAULT_BROKER = "http://127.0.0.1:8770"
 URL_DEST = "participant_broker_url"
 CLAUDE_DEST = "participant_claude"
 OPENCODE_DEST = "participant_opencode"
+DSH_DEST = "participant_dsh"
+DSH_HOME_DEST = "participant_dsh_home"
+PROFILE_DEST = "participant_profile"
+DSH_CLI = "dsh"
+PNPM_CLI = "pnpm"
+PLUGIN_NAME = "dsh-agentschat"
+SKILL_NAME = "chatlogin"
+DSH_SKILL_KIND = "dsh_skill"
+DSH_PROFILE_KIND = "dsh_profile"
+DSH_KIT_MANIFEST = "dsh-kit.json"
+DEFAULT_PROFILE = "web"
 PATHEXT = ".COM;.EXE;.BAT;.CMD"
 SERVER_ROLE = "server"
 JSON_FLAG = "--json"
@@ -167,6 +179,303 @@ class KitInstallStep:
 
 
 @dataclass
+class DshStep:
+    name: str = "install_dsh"
+
+    def enabled(self, run: Run) -> bool:
+        return bool(run.plan.answers.get(ROLE, {}).get(DSH_DEST))
+
+    def dsh_home(self, run: Run) -> Path:
+        given = run.plan.answers.get(ROLE, {}).get(DSH_HOME_DEST)
+        return (
+            Path(given).expanduser().resolve()
+            if given
+            else run.boundaries.home / ".dsh"
+        )
+
+    def profile_name(self, run: Run) -> str:
+        given = run.plan.answers.get(ROLE, {}).get(PROFILE_DEST) or DEFAULT_PROFILE
+        return str(given)
+
+    def profile_dir(self, run: Run) -> Path:
+        return self.dsh_home(run) / "profiles" / self.profile_name(run)
+
+    def skill_target(self, run: Run) -> Path:
+        return self.dsh_home(run) / "skills" / SKILL_NAME / "SKILL.md"
+
+    def skill_source(self, run: Run) -> Path:
+        source = (
+            run.boundaries.repo
+            / "bridge"
+            / "sessionchat"
+            / "kit"
+            / run.boundaries.lang
+            / "dsh"
+            / "skills"
+            / SKILL_NAME
+            / "SKILL.md"
+        )
+        if not source.is_file():
+            raise RuntimeError(
+                run.t("participant.dsh_skill_missing", variant=run.boundaries.lang)
+            )
+        return source
+
+    def plugin_source(self, run: Run) -> Path:
+        return (
+            run.boundaries.repo
+            / "bridge"
+            / "sessionchat"
+            / "kit"
+            / "common"
+            / "dsh"
+            / "plugin"
+        )
+
+    def profile_package(self, run: Run) -> dict | None:
+        path = self.profile_dir(run) / "package.json"
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def plugin_registered(self, run: Run) -> bool:
+        package = self.profile_package(run)
+        if package is None:
+            return False
+        dependencies = package.get("dependencies")
+        dsh = package.get("dsh")
+        bundles = (
+            dsh.get("profile", {}).get("bundles") if isinstance(dsh, dict) else None
+        )
+        return (
+            isinstance(dependencies, dict)
+            and PLUGIN_NAME in dependencies
+            and isinstance(bundles, list)
+            and PLUGIN_NAME in bundles
+        )
+
+    def check(self, run: Run) -> State:
+        if not self.enabled(run):
+            return State.DONE
+        target = self.skill_target(run)
+        content = self.skill_source(run).read_bytes()
+        entry = kit.load_manifest(dsh_manifest_path(run)).get(target)
+        if (
+            not target.is_file()
+            or target.read_bytes() != content
+            or entry != kit.Entry(DSH_CLI, kit.digest(content))
+        ):
+            return State.TODO
+        if not self.plugin_registered(run):
+            return State.TODO
+        if not run.ownership_of(ROLE).owns(
+            DSH_PROFILE_KIND, str(self.profile_dir(run) / "package.json")
+        ):
+            return State.TODO
+        return State.DONE
+
+    def apply(self, run: Run) -> None:
+        self.install_skill(run)
+        run.record(ROLE, DSH_SKILL_KIND, str(self.skill_target(run)))
+        if not self.plugin_registered(run):
+            self.install_plugin(run)
+        run.record(ROLE, DSH_PROFILE_KIND, str(self.profile_dir(run) / "package.json"))
+
+    def install_skill(self, run: Run) -> None:
+        content = self.skill_source(run).read_bytes()
+        target = self.skill_target(run)
+        manifest = kit.load_manifest(dsh_manifest_path(run))
+        entry = manifest.get(target)
+        previous = target.read_bytes() if target.is_file() else None
+        if previous is not None and previous != content:
+            if entry is None or kit.digest(previous) != entry.sha256:
+                raise NeedsHuman(run.t("participant.dsh_skill_edited", target=target))
+        if previous != content:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        manifest[target] = kit.Entry(DSH_CLI, kit.digest(content))
+        kit.save_manifest(dsh_manifest_path(run), manifest)
+
+    def install_plugin(self, run: Run) -> None:
+        profile_dir = self.profile_dir(run)
+        source = str(self.plugin_source(run))
+        if dsh_cli_present(run):
+            result = run.boundaries.run(
+                [
+                    dsh_command(),
+                    "plugin",
+                    "--profile",
+                    self.profile_name(run),
+                    "add",
+                    source,
+                ]
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    run.t(
+                        "participant.dsh_plugin_failed",
+                        detail=(result.stderr or result.stdout or "").strip(),
+                    )
+                )
+        else:
+            if not (profile_dir / "package.json").is_file():
+                raise NeedsHuman(
+                    run.t(
+                        "participant.dsh_profile_missing",
+                        path=profile_dir / "package.json",
+                    )
+                )
+            if not pnpm_present(run):
+                raise NeedsHuman(run.t("participant.pnpm_missing"))
+            result = run.boundaries.run(
+                [pnpm_command(), "add", source], cwd=profile_dir
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    run.t(
+                        "participant.pnpm_failed",
+                        detail=(result.stderr or result.stdout or "").strip(),
+                    )
+                )
+        self.edit_manifests(run, profile_dir)
+
+    def edit_manifests(self, run: Run, profile_dir: Path) -> None:
+        package_path = profile_dir / "package.json"
+        package = self.profile_package(run)
+        if package is None:
+            raise NeedsHuman(
+                run.t("participant.dsh_profile_missing", path=package_path)
+            )
+        package.setdefault("dependencies", {})[PLUGIN_NAME] = self.plugin_spec(
+            run, profile_dir
+        )
+        dsh = package.setdefault("dsh", {})
+        profile = dsh.setdefault("profile", {})
+        bundles = profile.setdefault("bundles", [])
+        if PLUGIN_NAME not in bundles:
+            bundles.append(PLUGIN_NAME)
+        package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+
+    def plugin_spec(self, run: Run, profile_dir: Path) -> str:
+        source = self.plugin_source(run)
+        try:
+            relative = os.path.relpath(source, profile_dir)
+        except ValueError:
+            return f"file:{source}"
+        return f"file:{Path(relative).as_posix()}"
+
+
+def dsh_command() -> str:
+    return shutil.which(DSH_CLI) or DSH_CLI
+
+
+def dsh_cli_present(run: Run) -> bool:
+    try:
+        return run.boundaries.run([dsh_command(), "--version"]).returncode == 0
+    except OSError:
+        return False
+
+
+def pnpm_command() -> str:
+    return shutil.which(PNPM_CLI) or PNPM_CLI
+
+
+def pnpm_present(run: Run) -> bool:
+    try:
+        return run.boundaries.run([pnpm_command(), "--version"]).returncode == 0
+    except OSError:
+        return False
+
+
+@dataclass
+class DshRemoveStep:
+    name: str = "remove_dsh"
+
+    def selected(self, run: Run) -> bool:
+        return DshStep().enabled(run) or not flagged_clis(run)
+
+    def profiles(self, run: Run) -> list[str]:
+        if not self.selected(run):
+            return []
+        profiles = run.ownership_of(ROLE).of_kind(DSH_PROFILE_KIND)
+        installation = DshStep()
+        if not installation.enabled(run):
+            return profiles
+        target = installation.profile_dir(run) / "package.json"
+        return [id for id in profiles if Path(id) == target]
+
+    def skills(self, run: Run) -> list[str]:
+        if not self.selected(run):
+            return []
+        ownership = run.ownership_of(ROLE)
+        remaining = set(ownership.of_kind(DSH_PROFILE_KIND)) - set(self.profiles(run))
+        in_use = {
+            Path(id).parents[2] / "skills" / SKILL_NAME / "SKILL.md" for id in remaining
+        }
+        installation = DshStep()
+        return [
+            id
+            for id in ownership.of_kind(DSH_SKILL_KIND)
+            if Path(id) not in in_use
+            and (
+                not installation.enabled(run)
+                or Path(id) == installation.skill_target(run)
+            )
+        ]
+
+    def check(self, run: Run) -> State:
+        return State.TODO if self.profiles(run) or self.skills(run) else State.DONE
+
+    def apply(self, run: Run) -> None:
+        for id in self.profiles(run):
+            self.revert_manifest(run, Path(id))
+            run.forget(ROLE, DSH_PROFILE_KIND, id)
+        manifest = kit.load_manifest(dsh_manifest_path(run))
+        for id in self.skills(run):
+            self.drop_skill(Path(id))
+            manifest.pop(Path(id), None)
+            kit.save_manifest(dsh_manifest_path(run), manifest)
+            run.forget(ROLE, DSH_SKILL_KIND, id)
+
+    def drop_skill(self, target: Path) -> None:
+        target.unlink(missing_ok=True)
+        for directory in (target.parent, target.parent.parent):
+            try:
+                directory.rmdir()
+            except OSError:
+                break
+
+    def revert_manifest(self, run: Run, package_path: Path) -> None:
+        profile_dir = package_path.parent
+        if pnpm_present(run):
+            result = run.boundaries.run(
+                [pnpm_command(), "remove", PLUGIN_NAME], cwd=profile_dir
+            )
+            if result.returncode != 0:
+                run.warn(run.t("participant.dsh_prune_failed", path=profile_dir))
+        package = None
+        try:
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            run.warn(run.t("participant.dsh_manifest_kept", path=package_path))
+            return
+        dependencies = package.get("dependencies")
+        if isinstance(dependencies, dict):
+            dependencies.pop(PLUGIN_NAME, None)
+        dsh = package.get("dsh")
+        if isinstance(dsh, dict):
+            profile = dsh.get("profile")
+            if isinstance(profile, dict):
+                bundles = profile.get("bundles")
+                if isinstance(bundles, list):
+                    profile["bundles"] = [
+                        bundle for bundle in bundles if bundle != PLUGIN_NAME
+                    ]
+        package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+
+
+@dataclass
 class Removal:
     uninstalled: bool = False
     package_gone: bool = False
@@ -180,7 +489,7 @@ class KitRemoveStep:
     removal: Removal = field(default_factory=Removal, kw_only=True)
 
     def check(self, run: Run) -> State:
-        if self.handled or not manifest_path(run).is_file():
+        if self.handled or not manifest_path(run).is_file() or not removal_clis(run):
             return State.DONE
         return State.TODO
 
@@ -219,7 +528,7 @@ class PackageRemoveStep:
                     run.t("participant.package_unrecorded", package=PACKAGE),
                 )
             return State.DONE
-        using = clis_using_package(manifest_clis(run), self.removal)
+        using = package_users(run, self.removal)
         if using:
             run.warn_once("package-in-use", package_in_use(run, using))
             return State.DONE
@@ -306,6 +615,7 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
     removal = Removal()
     kit = KitInstallStep()
     language = LanguageStep()
+    dsh = DshStep()
     return Role(
         name=ROLE,
         record_path=record_path,
@@ -315,10 +625,12 @@ def participant_role(version: tuple[int, int] | None = None) -> Role:
             PackageStep(),
             kit,
             BrokerStep(),
+            dsh,
             language,
         ),
         remove=(
             KitRemoveStep(removal=removal),
+            DshRemoveStep(),
             PackageRemoveStep(removal=removal),
         ),
         purge=(session_step(),),
@@ -340,10 +652,29 @@ def add_options(options: RoleOptions) -> None:
     options.add(
         "--opencode", action="store_true", help=options.t("participant.help_opencode")
     )
+    options.add(
+        "--dsh",
+        action="store_true",
+        help=options.t("participant.help_dsh"),
+    )
+    options.add(
+        "--dsh-home",
+        default=None,
+        help=options.t("participant.help_dsh_home", default="~/.dsh"),
+    )
+    options.add(
+        "--profile",
+        default=DEFAULT_PROFILE,
+        help=options.t("participant.help_profile", default=DEFAULT_PROFILE),
+    )
 
 
 def record_path(boundaries: Boundaries) -> Path:
     return boundaries.home / INSTALLER_HOME / "installer" / f"{ROLE}.json"
+
+
+def dsh_manifest_path(run: Run) -> Path:
+    return record_path(run.boundaries).with_name(DSH_KIT_MANIFEST)
 
 
 def store(run: Run) -> Path:
@@ -546,6 +877,14 @@ def clis_using_package(remaining: set[str], removal: Removal) -> set[str]:
     return remaining - set(removal.asked)
 
 
+def package_users(run: Run, removal: Removal) -> set[str]:
+    using = clis_using_package(manifest_clis(run), removal)
+    ownership = run.ownership_of(ROLE)
+    if ownership.of_kind(DSH_SKILL_KIND) or ownership.of_kind(DSH_PROFILE_KIND):
+        using.add(DSH_CLI)
+    return using
+
+
 def flagged_clis(run: Run) -> set[str]:
     given = run.plan.answers.get(ROLE, {})
     return {
@@ -557,6 +896,8 @@ def flagged_clis(run: Run) -> set[str]:
 
 def wanted_clis(run: Run) -> tuple[str, ...]:
     picked = flagged_clis(run)
+    if not picked and DshStep().enabled(run):
+        return ()
     installed = manifest_clis(run)
     if not picked and not installed:
         picked = set(asked_clis(run) if run.boundaries.stdin.isatty() else kit.CLIS)
@@ -565,6 +906,8 @@ def wanted_clis(run: Run) -> tuple[str, ...]:
 
 def removal_clis(run: Run) -> tuple[str, ...]:
     picked = flagged_clis(run)
+    if not picked and DshStep().enabled(run):
+        return ()
     if not picked:
         picked = manifest_clis(run) or set(kit.CLIS)
     return tuple(cli for cli in kit.CLIS if cli in picked)
@@ -706,7 +1049,7 @@ def restart_instruction(run: Run, written: bool, clis: Sequence[str]) -> str:
 def removal_lines(run: Run, removal: Removal) -> list[str]:
     remaining = manifest_clis(run)
     left = kit_left(run, remaining, removal)
-    using = clis_using_package(remaining, removal)
+    using = package_users(run, removal)
     tool = owning_tool(run)
     if tool is not None:
         left.append(

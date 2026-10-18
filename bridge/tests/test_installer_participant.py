@@ -12,6 +12,7 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 from subprocess import CompletedProcess
+from unittest import mock
 
 from tests.installer_fakes import (
     SH,
@@ -60,7 +61,7 @@ class Machine:
     ) -> None:
         self.home = home
         self.platform = platform
-        self.present = {"uv": False, "pipx": True} | (present or {})
+        self.present = {"uv": False, "pipx": True, "dsh": True} | (present or {})
         self.kit_conflict = kit_conflict
         self.kit_conflict_code = kit_conflict_code
         self.kit_answers = kit_answers
@@ -72,9 +73,15 @@ class Machine:
         self.status_env: dict[str, str] = {}
         self.room_language = room_language
         self.status_mode = status_mode
+        self.dsh_plugin_added = False
+        self.pnpm_added = False
+        self.pnpm_cwd: Path | None = None
+        self.pnpm_manifest_before: dict | None = None
+        self.executed: dict[str, str] = {}
 
-    def __call__(self, argv, env=None):
+    def __call__(self, argv, env=None, stdin=None, output=None, cwd=None):
         argv = [str(part) for part in argv]
+        self.executed[Path(argv[0]).stem] = argv[0]
         name = Path(argv[0]).name
         if name in ("uv", "pipx"):
             if env is not None:
@@ -82,7 +89,41 @@ class Machine:
             return self.tool(name, argv)
         if name.startswith("agentschat"):
             return self.agentschat(argv, env)
+        if Path(argv[0]).stem == "dsh":
+            return self.dsh(argv)
+        if Path(argv[0]).stem == "pnpm":
+            return self.pnpm(argv, cwd)
         raise AssertionError(f"непредусмотренный вызов: {' '.join(argv)}")
+
+    def dsh(self, argv: list[str]):
+        self.log.append(" ".join(["dsh", *argv[1:]]))
+        if not self.present.get("dsh", True):
+            raise FileNotFoundError("dsh")
+        if argv[1] == "--version":
+            return completed("dsh 1.0.0")
+        if "plugin" in argv[1:]:
+            if self.fails == "dsh plugin":
+                return completed("", "dsh plugin failed", 1)
+            self.dsh_plugin_added = True
+            return completed("plugin added")
+        return completed("")
+
+    def pnpm(self, argv: list[str], cwd: Path | None):
+        self.log.append(" ".join(["pnpm", *argv[1:]]))
+        if not self.present.get("pnpm", True):
+            raise FileNotFoundError("pnpm")
+        if self.fails == f"pnpm {argv[1]}":
+            return completed("", f"pnpm {argv[1]} failed", 1)
+        if "add" in argv[1:]:
+            self.pnpm_added = True
+            self.pnpm_cwd = cwd
+            manifest = (cwd or self.home) / "package.json"
+            if manifest.is_file():
+                self.pnpm_manifest_before = json.loads(
+                    manifest.read_text(encoding="utf-8")
+                )
+            return completed("added")
+        return completed("")
 
     def tool(self, name: str, argv: list[str]):
         if not self.present.get(name, False):
@@ -2010,6 +2051,559 @@ class BuiltInRolesTests(ParticipantCase):
         self.assertEqual(
             plan.answers[ROLE][participant.URL_DEST], participant.DEFAULT_BROKER
         )
+
+
+class DshCase(ParticipantCase):
+    def setUp(self):
+        super().setUp()
+        self.dsh_home = self.home / "dsh-home"
+        self.profile_dir = self.dsh_home / "profiles" / "web"
+        self.profile_dir.mkdir(parents=True)
+        kit_dir = (
+            self.repo
+            / "bridge"
+            / "sessionchat"
+            / "kit"
+            / "ru"
+            / "dsh"
+            / "skills"
+            / "chatlogin"
+        )
+        kit_dir.mkdir(parents=True)
+        kit_dir.joinpath("SKILL.md").write_text("skill content", encoding="utf-8")
+
+    def dsh_flags(self, *extra: str):
+        return ["--dsh", "--dsh-home", str(self.dsh_home), *extra]
+
+    def plugin_dir(self) -> Path:
+        return (
+            self.repo / "bridge" / "sessionchat" / "kit" / "common" / "dsh" / "plugin"
+        )
+
+    def skill_target(self) -> Path:
+        return self.dsh_home / "skills" / "chatlogin" / "SKILL.md"
+
+
+class DshStepTests(DshCase):
+    def setUp(self):
+        super().setUp()
+        self.profile_dir.joinpath("package.json").write_text(
+            json.dumps({"dependencies": {}, "dsh": {"profile": {"bundles": []}}}),
+            encoding="utf-8",
+        )
+
+    def stored_package(self) -> dict:
+        return json.loads(
+            self.profile_dir.joinpath("package.json").read_text(encoding="utf-8")
+        )
+
+    def test_the_dsh_step_is_skipped_without_the_flag(self):
+        status, _ = self.install("--claude")
+        self.assertEqual(status, DONE)
+        self.assertFalse((self.dsh_home / "skills" / "chatlogin").exists())
+
+    def test_the_skill_is_installed_to_the_dsh_skills_root(self):
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "skill content"
+        )
+
+    def test_the_dsh_cli_receives_the_local_plugin_directory(self):
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertTrue(self.machine.dsh_plugin_added)
+        self.assertIn(
+            f"dsh plugin --profile web add {self.plugin_dir()}", self.machine.log
+        )
+        self.assertNotIn(
+            "dsh-agentschat", [line.split("add ")[-1] for line in self.machine.log]
+        )
+
+    def test_the_plugin_falls_back_to_pnpm_when_dsh_is_missing(self):
+        self.machine.present["dsh"] = False
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertTrue(self.machine.pnpm_added)
+        self.assertEqual(self.machine.pnpm_cwd, self.profile_dir)
+
+    def test_the_fallback_adds_the_plugin_by_its_local_path(self):
+        self.machine.present["dsh"] = False
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertIn(f"pnpm add {self.plugin_dir()}", self.machine.log)
+
+    def test_the_fallback_edits_the_profile_manifest(self):
+        self.machine.present["dsh"] = False
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        package = self.stored_package()
+        self.assertIn("dsh-agentschat", package["dependencies"])
+        self.assertIn("dsh-agentschat", package["dsh"]["profile"]["bundles"])
+
+    def test_the_manifest_points_at_the_plugin_relative_to_the_profile(self):
+        self.machine.present["dsh"] = False
+        self.install(*self.dsh_flags())
+        spec = self.stored_package()["dependencies"]["dsh-agentschat"].removeprefix(
+            "file:"
+        )
+        self.assertFalse(Path(spec).is_absolute())
+        self.assertEqual(
+            (self.profile_dir / spec).resolve(), self.plugin_dir().resolve()
+        )
+
+    def test_the_manifest_is_edited_only_after_pnpm_has_added_the_plugin(self):
+        self.machine.present["dsh"] = False
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertIsNotNone(self.machine.pnpm_manifest_before)
+        self.assertNotIn(
+            "dsh-agentschat", self.machine.pnpm_manifest_before["dependencies"]
+        )
+        self.assertIn("dsh-agentschat", self.stored_package()["dependencies"])
+
+    def test_a_missing_profile_manifest_stops_for_a_human(self):
+        self.machine.present["dsh"] = False
+        self.profile_dir.joinpath("package.json").unlink()
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, HUMAN)
+
+    def test_the_dsh_cli_cannot_claim_success_without_a_profile_manifest(self):
+        self.profile_dir.joinpath("package.json").unlink()
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, HUMAN)
+        self.assertFalse(self.profile_dir.joinpath("package.json").exists())
+
+    def test_a_failed_dsh_plugin_install_reports_the_failure_and_keeps_the_skill_for_retry(
+        self,
+    ):
+        self.machine.fails = "dsh plugin"
+        code, given = self.install(*self.dsh_flags())
+        self.assertEqual(code, FAILED)
+        self.assertIn("dsh plugin failed", given.stderr.getvalue())
+        self.assertTrue(self.skill_target().is_file())
+        self.assertEqual(
+            Ownership.load(participant.record_path(self.given())).of_kind(
+                participant.DSH_PROFILE_KIND
+            ),
+            [],
+        )
+
+    def test_a_failed_pnpm_add_reports_the_failure(self):
+        self.machine.present["dsh"] = False
+        self.machine.fails = "pnpm add"
+        code, given = self.install(*self.dsh_flags())
+        self.assertEqual(code, FAILED)
+        self.assertIn("pnpm add failed", given.stderr.getvalue())
+        self.assertNotIn("dsh-agentschat", self.stored_package()["dependencies"])
+
+    def test_a_minimal_profile_manifest_gets_the_dependency_and_bundle(self):
+        self.profile_dir.joinpath("package.json").write_text("{}", encoding="utf-8")
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertIn("dsh-agentschat", self.stored_package()["dependencies"])
+        self.assertEqual(
+            self.stored_package()["dsh"]["profile"]["bundles"], ["dsh-agentschat"]
+        )
+
+    def test_manifest_editing_does_not_duplicate_a_bundle_already_added_by_the_cli(
+        self,
+    ):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        step = participant.DshStep()
+        with mock.patch.object(step, "profile_dir", return_value=self.profile_dir):
+            step.edit_manifests(self.plan_run(), self.profile_dir)
+        self.assertEqual(
+            self.stored_package()["dsh"]["profile"]["bundles"], ["dsh-agentschat"]
+        )
+
+    def test_a_plugin_on_another_drive_uses_an_absolute_file_spec(self):
+        with mock.patch.object(participant.os.path, "relpath", side_effect=ValueError):
+            spec = participant.DshStep().plugin_spec(self.plan_run(), self.profile_dir)
+        self.assertEqual(spec, f"file:{self.plugin_dir()}")
+
+    def test_the_dsh_cli_is_run_through_the_path_resolution(self):
+        shim = self.home / "bin" / "dsh.CMD"
+        with mock.patch.object(
+            participant.shutil,
+            "which",
+            side_effect=lambda name: str(shim) if name == "dsh" else None,
+        ):
+            status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertEqual(self.machine.executed["dsh"], str(shim))
+
+    def test_the_pnpm_cli_is_run_through_the_path_resolution(self):
+        shim = self.home / "bin" / "pnpm.CMD"
+        self.machine.present["dsh"] = False
+        with mock.patch.object(
+            participant.shutil,
+            "which",
+            side_effect=lambda name: str(shim) if name == "pnpm" else None,
+        ):
+            status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertEqual(self.machine.executed["pnpm"], str(shim))
+
+    def test_a_missing_pnpm_stops_for_a_human(self):
+        self.machine.present = {"uv": False, "pipx": True, "dsh": False, "pnpm": False}
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, HUMAN)
+        self.assertFalse(any(line.startswith("pnpm add") for line in self.machine.log))
+
+    def test_a_missing_dsh_skill_of_the_run_language_fails_the_run(self):
+        code, given = self.install(*self.dsh_flags(), lang="en")
+        self.assertEqual(code, FAILED)
+        self.assertIn("no DSH chatlogin skill in en", given.stderr.getvalue())
+
+    def test_a_foreign_dsh_skill_stops_for_a_human(self):
+        target = self.skill_target()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("чужой навык\n", encoding="utf-8")
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, HUMAN)
+        self.assertEqual(target.read_text(encoding="utf-8"), "чужой навык\n")
+
+    def test_a_repeat_dsh_install_runs_pnpm_once(self):
+        self.machine.present["dsh"] = False
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.machine.log.clear()
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.assertFalse([line for line in self.machine.log if "pnpm add" in line])
+
+    def test_a_dsh_only_install_does_not_install_other_cli_kits(self):
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertFalse(self.machine.target_for("claude").exists())
+        self.assertFalse(self.machine.target_for("opencode").exists())
+
+    def test_the_default_dsh_home_comes_from_the_installer_boundary(self):
+        self.assertEqual(
+            participant.DshStep().dsh_home(self.plan_run()), self.home / ".dsh"
+        )
+
+    def test_reinstall_refreshes_an_unedited_skill_without_reinstalling_the_plugin(
+        self,
+    ):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        source = self.repo / "bridge/sessionchat/kit/ru/dsh/skills/chatlogin/SKILL.md"
+        source.write_text("updated skill", encoding="utf-8")
+        self.machine.log.clear()
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "updated skill"
+        )
+        self.assertFalse(any(" add " in line for line in self.machine.log))
+
+    def test_reinstall_switches_the_skill_language(self):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        source = self.repo / "bridge/sessionchat/kit/en/dsh/skills/chatlogin/SKILL.md"
+        source.parent.mkdir(parents=True)
+        source.write_text("English skill", encoding="utf-8")
+        code, _ = self.install(*self.dsh_flags(), lang="en")
+        self.assertEqual(code, DONE)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "English skill"
+        )
+
+    def test_reinstall_refuses_to_overwrite_a_skill_edited_after_installation(self):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        self.skill_target().write_text("my edited skill", encoding="utf-8")
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, HUMAN)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "my edited skill"
+        )
+
+    def test_reinstall_restores_a_missing_skill_without_reinstalling_the_plugin(self):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        self.skill_target().unlink()
+        self.machine.log.clear()
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "skill content"
+        )
+        self.assertFalse(any(" add " in line for line in self.machine.log))
+
+    def test_a_legacy_skill_matching_the_kit_is_adopted_before_a_later_update(self):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        manifest = participant.record_path(self.given()).with_name("dsh-kit.json")
+        manifest.unlink()
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        source = self.repo / "bridge/sessionchat/kit/ru/dsh/skills/chatlogin/SKILL.md"
+        source.write_text("later update", encoding="utf-8")
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "later update"
+        )
+
+    def test_a_legacy_skill_without_a_digest_is_not_overwritten_when_it_differs(self):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        manifest = participant.record_path(self.given()).with_name("dsh-kit.json")
+        manifest.unlink()
+        self.skill_target().write_text("unknown legacy content", encoding="utf-8")
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, HUMAN)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "unknown legacy content"
+        )
+
+    def test_a_corrupt_skill_manifest_stops_installation_without_touching_the_skill(
+        self,
+    ):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        manifest = participant.record_path(self.given()).with_name("dsh-kit.json")
+        manifest.write_text("{", encoding="utf-8")
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, FAILED)
+        self.assertEqual(
+            self.skill_target().read_text(encoding="utf-8"), "skill content"
+        )
+
+    def test_reinstall_recovers_missing_profile_ownership_without_reinstalling_the_plugin(
+        self,
+    ):
+        self.assertEqual(self.install(*self.dsh_flags())[0], DONE)
+        self.record([(participant.PACKAGE_KIND, "pipx")])
+        self.machine.log.clear()
+        code, _ = self.install(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        recorded = Ownership.load(participant.record_path(self.given()))
+        self.assertEqual(
+            recorded.of_kind(participant.DSH_PROFILE_KIND),
+            [str(self.profile_dir / "package.json")],
+        )
+        self.assertFalse(any(" add " in line for line in self.machine.log))
+
+    def test_the_dsh_step_records_what_it_laid(self):
+        self.install(*self.dsh_flags())
+        recorded = Ownership.load(participant.record_path(self.given()))
+        self.assertEqual(
+            sorted(recorded.of_kind(participant.DSH_SKILL_KIND)),
+            [str(self.skill_target())],
+        )
+        self.assertEqual(
+            recorded.of_kind(participant.DSH_PROFILE_KIND),
+            [str(self.profile_dir / "package.json")],
+        )
+
+
+class DshRemovalTests(DshCase):
+    def installed(self) -> None:
+        self.machine.present["dsh"] = False
+        self.profile_dir.joinpath("package.json").write_text(
+            json.dumps({"dependencies": {}, "dsh": {"profile": {"bundles": []}}}),
+            encoding="utf-8",
+        )
+        status, _ = self.install(*self.dsh_flags())
+        self.assertEqual(status, DONE)
+        self.machine.log.clear()
+
+    def other_profile(self, home: Path | None = None) -> Path:
+        root = home or self.dsh_home
+        directory = root / "profiles" / "other"
+        directory.mkdir(parents=True)
+        package = directory / "package.json"
+        package.write_text(
+            json.dumps({"dependencies": {}, "dsh": {"profile": {"bundles": []}}}),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            self.install("--dsh", "--dsh-home", str(root), "--profile", "other")[0],
+            DONE,
+        )
+        self.machine.log.clear()
+        return package
+
+    def test_removing_claude_keeps_the_dsh_profile_skill_and_shared_package(self):
+        self.installed()
+        self.assertEqual(self.install("--claude")[0], DONE)
+        package = self.profile_dir.joinpath("package.json").read_bytes()
+        code, _ = self.remove("--claude")
+        self.assertEqual(code, DONE)
+        self.assertTrue(self.skill_target().is_file())
+        self.assertEqual(
+            self.profile_dir.joinpath("package.json").read_bytes(), package
+        )
+        self.assertIn("pipx", self.machine.installed_by)
+
+    def test_removing_dsh_keeps_the_other_cli_kit(self):
+        self.installed()
+        self.assertEqual(self.install("--claude")[0], DONE)
+        target = self.machine.target_for("claude")
+        original = target.read_bytes()
+        code, _ = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertEqual(target.read_bytes(), original)
+        self.assertFalse(self.skill_target().exists())
+
+    def test_removing_one_profile_keeps_the_other_profile_and_the_shared_skill(self):
+        self.installed()
+        other = self.other_profile()
+        original = other.read_bytes()
+        code, _ = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertEqual(other.read_bytes(), original)
+        self.assertTrue(self.skill_target().is_file())
+        self.assertIn("pipx", self.machine.installed_by)
+        self.assertEqual(
+            Ownership.load(participant.record_path(self.given())).of_kind(
+                participant.DSH_PROFILE_KIND
+            ),
+            [str(other)],
+        )
+
+    def test_removing_the_last_profile_removes_the_shared_skill_and_package(self):
+        self.installed()
+        self.other_profile()
+        self.assertEqual(self.remove(*self.dsh_flags())[0], DONE)
+        code, _ = self.remove(*self.dsh_flags("--profile", "other"))
+        self.assertEqual(code, DONE)
+        self.assertFalse(self.skill_target().exists())
+        self.assertNotIn("pipx", self.machine.installed_by)
+        self.assertFalse(
+            participant.record_path(self.given()).with_name("dsh-kit.json").exists()
+        )
+
+    def test_removing_a_profile_keeps_profiles_and_skills_in_another_dsh_home(self):
+        self.installed()
+        other_home = self.home / "another-dsh-home"
+        other = self.other_profile(other_home)
+        original = other.read_bytes()
+        code, _ = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertEqual(other.read_bytes(), original)
+        self.assertTrue((other_home / "skills/chatlogin/SKILL.md").is_file())
+        self.assertFalse(self.skill_target().exists())
+        self.assertIn("pipx", self.machine.installed_by)
+
+    def test_removing_an_unrecorded_profile_keeps_the_installed_profile(self):
+        self.installed()
+        original = self.profile_dir.joinpath("package.json").read_bytes()
+        code, _ = self.remove(*self.dsh_flags("--profile", "not-installed"))
+        self.assertEqual(code, DONE)
+        self.assertEqual(
+            self.profile_dir.joinpath("package.json").read_bytes(), original
+        )
+        self.assertTrue(self.skill_target().is_file())
+        self.assertIn("pipx", self.machine.installed_by)
+
+    def test_claude_and_dsh_can_be_removed_together_explicitly(self):
+        self.installed()
+        self.assertEqual(self.install("--claude")[0], DONE)
+        code, _ = self.remove(*self.dsh_flags("--claude"))
+        self.assertEqual(code, DONE)
+        self.assertFalse(self.machine.target_for("claude").exists())
+        self.assertFalse(self.skill_target().exists())
+        self.assertNotIn("pipx", self.machine.installed_by)
+
+    def test_unqualified_removal_removes_all_installed_dsh_profiles(self):
+        self.installed()
+        other = self.other_profile()
+        code, _ = self.remove()
+        self.assertEqual(code, DONE)
+        self.assertNotIn(
+            "dsh-agentschat", json.loads(other.read_text())["dependencies"]
+        )
+        self.assertFalse(self.skill_target().exists())
+
+    def test_removal_deletes_the_skill_and_reverts_the_profile(self):
+        self.installed()
+        code, _ = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertFalse(self.skill_target().exists())
+        self.assertFalse((self.dsh_home / "skills" / "chatlogin").exists())
+        package = json.loads(
+            self.profile_dir.joinpath("package.json").read_text(encoding="utf-8")
+        )
+        self.assertNotIn("dsh-agentschat", package["dependencies"])
+        self.assertNotIn("dsh-agentschat", package["dsh"]["profile"]["bundles"])
+        self.assertIn("pnpm remove dsh-agentschat", self.machine.log)
+
+    def test_removal_leaves_what_others_kept_in_the_profile(self):
+        self.installed()
+        package = json.loads(
+            self.profile_dir.joinpath("package.json").read_text(encoding="utf-8")
+        )
+        package["dependencies"]["another-plugin"] = "^1.0"
+        package["dsh"]["profile"]["bundles"].append("another-plugin")
+        self.profile_dir.joinpath("package.json").write_text(
+            json.dumps(package, indent=2) + "\n", encoding="utf-8"
+        )
+        self.machine.log.clear()
+        code, _ = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        package = json.loads(
+            self.profile_dir.joinpath("package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(package["dependencies"], {"another-plugin": "^1.0"})
+        self.assertEqual(package["dsh"]["profile"]["bundles"], ["another-plugin"])
+
+    def test_removal_of_an_unreadable_profile_says_what_it_kept(self):
+        self.installed()
+        self.profile_dir.joinpath("package.json").write_text("{", encoding="utf-8")
+        self.machine.log.clear()
+        code, given = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertTrue(
+            self.profile_dir.joinpath("package.json").is_file(),
+            "неразличимый манифест не переписан вслепую",
+        )
+
+    def test_removal_without_a_dsh_install_touches_nothing(self):
+        self.installed = lambda: None
+        self.install()
+        self.machine.log.clear()
+        code, _ = self.remove()
+        self.assertEqual(code, DONE)
+        self.assertFalse((self.dsh_home / "skills").exists())
+        self.assertNotIn("pnpm remove", self.machine.log)
+
+    def test_removal_reports_a_failed_pnpm_prune_and_removes_the_manifest_entries(self):
+        self.installed()
+        self.machine.fails = "pnpm remove"
+        code, given = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertIn(str(self.profile_dir), given.stderr.getvalue())
+        package = json.loads(self.profile_dir.joinpath("package.json").read_text())
+        self.assertNotIn("dsh-agentschat", package["dependencies"])
+
+    def test_removal_without_pnpm_still_reverts_the_profile_manifest(self):
+        self.installed()
+        self.machine.present["pnpm"] = False
+        code, _ = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        package = json.loads(self.profile_dir.joinpath("package.json").read_text())
+        self.assertNotIn("dsh-agentschat", package["dependencies"])
+        self.assertFalse(self.skill_target().exists())
+
+    def test_removal_keeps_unrelated_files_in_the_skills_directory(self):
+        self.installed()
+        unrelated = self.skill_target().parent / "notes.md"
+        unrelated.write_text("my notes", encoding="utf-8")
+        code, _ = self.remove(*self.dsh_flags())
+        self.assertEqual(code, DONE)
+        self.assertEqual(unrelated.read_text(encoding="utf-8"), "my notes")
+        self.assertFalse(self.skill_target().exists())
+
+    def test_removal_preserves_unrecognised_profile_fields(self):
+        for package in (
+            {"notes": "keep"},
+            {"dependencies": "foreign", "dsh": "foreign"},
+            {"dsh": {"profile": "foreign"}},
+            {"dsh": {"profile": {"bundles": "foreign"}}},
+        ):
+            with self.subTest(package=package):
+                self.installed()
+                path = self.profile_dir / "package.json"
+                path.write_text(json.dumps(package), encoding="utf-8")
+                code, _ = self.remove(*self.dsh_flags())
+                self.assertEqual(code, DONE)
+                self.assertEqual(json.loads(path.read_text(encoding="utf-8")), package)
 
 
 if __name__ == "__main__":
