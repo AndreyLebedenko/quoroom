@@ -94,6 +94,27 @@ release is cut.
 
 ### Fixed
 
+- The OpenCode plugin (`kit/common/opencode/plugins/agentschat.js`) is ported
+  to the OpenCode 2.0 plugin API: a default export with `id` and `setup`
+  instead of a V1 named function, hooks registered on their domains
+  (`ctx.tool.hook`, `ctx.session.hook`), the `session.deleted` event read
+  from `ctx.event.subscribe`, and delivery through `ctx.session.prompt`
+  instead of `client.session.promptAsync`. OpenCode 2 does not run V1
+  plugins at all (it logs `failed to load plugin` and otherwise stays silent),
+  so sessions had no delivery after the upgrade. The login/logout binding
+  logic and the `session.deleted` slot release are unchanged; the last-unload
+  no longer releases anything (see the next entry). The plugin tests run
+  against a fake V2 context.
+- A hot reload of the plugin (any `opencode.jsonc` or plugin-file save makes
+  OpenCode unload and re-load it) no longer logs the session out of the
+  chat: the last-instance unload releases only the poll loops, keeps the
+  bindings, and the next load resumes polling them with fresh abort
+  controllers. Previously it posted a `logout` for the live session, which
+  looked like a clean close although the process was merely reloading.
+  A real-app close is covered by the broker's silence timer. Deliveries of
+  envelopes go through a shared stack of live deliverers (every setup pushes
+  its own and pops the one that unloads), so the last surviving instance
+  delivers; a dead instance's context is never used, whichever unloads first.
 - `agentschat login` printed Russian text inside an English participant
   install; the sentences of every command now follow the room language.
 - The broker's HTTP access log no longer records session tokens. It keeps the
