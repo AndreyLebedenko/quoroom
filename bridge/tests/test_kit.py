@@ -21,7 +21,7 @@ EXPECTED_KIT_FILES = {
 }
 BASE_DIGESTS = {
     "common/opencode/plugins/agentschat.js": (
-        "8b41519313868e4fd79eac166de5c493af7ebb520eb6c9ec66dcf865d952a948"
+        "a80e41750264b552a8e4aa2679868c8bac5363692769d15afb45652d2944da25"
     ),
     "ru/claude/skills/chatlogin/SKILL.md": (
         "49f9735c91fad908b07880635d99197cfaf24a1fb39bbcfab9e515ec12ff237c"
