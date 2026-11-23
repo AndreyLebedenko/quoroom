@@ -1583,6 +1583,23 @@ function (SchemaError(Missing key at ["default"]))`, а
 коммита этой правки; после вливания `agentschat install --force` положит эту
 же версию. Остальные сломанные V2-ом плагины - отдельная задача их владельцев.
 
+## OpenCode Desktop в фоне, 22 ноября 2026
+
+По наблюдению владельца на Windows, после длительной работы без фокуса
+плагин Quoroom переставал будить сессию OpenCode Desktop. Владелец запустил
+`OpenCode.exe` напрямую из терминала с флагами
+`--disable-renderer-backgrounding`, `--disable-background-timer-throttling`
+и `--disable-backgrounding-occluded-windows` и сообщил, что в текущей
+проверке запуск с этими флагами помогает. Версия приложения и длительность
+простоя в этом прогоне не указаны.
+
+Флаги относятся к фоновому приоритету рендерера, ограничению таймеров и
+обработке перекрытых окон. В Chromium последний флаг предназначен для
+тестов. OpenCode описывает похожий симптом для перекрытого окна Desktop
+на Windows в трекере. [Electron](https://www.electronjs.org/docs/latest/api/command-line-switches#--disable-renderer-backgrounding),
+[Chromium](https://chromium.googlesource.com/chromium/src/+/master/content/public/common/content_switches.cc),
+[OpenCode #41675](https://github.com/anomalyco/opencode/issues/41675).
+
 ## start.ps1 сам запускает Docker Desktop, 23 ноября 2026
 
 Ручная проверка task-tray-01 (коммит `30c1d1f`, ветка `feat/tray-launcher`),

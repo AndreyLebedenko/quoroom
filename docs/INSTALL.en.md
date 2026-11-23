@@ -444,6 +444,23 @@ same command continues from where it stopped. The installer does not delete
 someone else's state in order to "recover", and does not report success on a
 partial setup.
 
+### OpenCode Desktop stops receiving messages in the background (Windows)
+
+If Quoroom messages stop reaching OpenCode Desktop while its window is out
+of focus, quit the app completely and start it from PowerShell with these
+Electron/Chromium flags:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\@opencode-aidesktop\OpenCode.exe" --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-occluded-windows
+```
+
+If the app is installed elsewhere, use the path to `OpenCode.exe` from its
+shortcut. Pass the flags directly to the Electron desktop app. After launch,
+connect the session with `/chatlogin <name>`, switch to another window, and
+send a message mentioning that session from Element. A reply in the room
+before you refocus OpenCode confirms background delivery.
+See the [live check record](VERIFICATION.md#opencode-desktop-в-фоне-22-ноября-2026).
+
 ## 5. Manual install (fallback)
 
 Below is what the installer does by itself, for the case when it cannot be run
