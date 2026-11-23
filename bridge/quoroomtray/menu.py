@@ -5,7 +5,7 @@ from .actions import ActionKind
 from .texts import TrayTexts
 from .observation import Observation
 from .state import Colour, StandState
-from .wording import status_text
+from .wording import menu_item_text, status_text
 
 
 class MenuRole(Enum):
@@ -54,8 +54,11 @@ def build_menu(
 ) -> tuple[MenuItem, ...]:
     sessions = observation.sessions or ()
     return (
-        MenuItem(MenuRole.STATUS, status_text(state, texts), False),
-        *(MenuItem(MenuRole.SESSION, session.line, False) for session in sessions),
+        MenuItem(MenuRole.STATUS, menu_item_text(status_text(state, texts)), False),
+        *(
+            MenuItem(MenuRole.SESSION, menu_item_text(session.line), False)
+            for session in sessions
+        ),
         toggle_item(state, texts),
         MenuItem(MenuRole.OPEN_LOG, texts.text("tray.open_log"), True),
         MenuItem(MenuRole.EXIT, texts.text("tray.exit"), True),

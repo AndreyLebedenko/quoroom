@@ -19,7 +19,6 @@ from tests.tray_fakes import (
     GREEN_PROBES,
     GREY_PROBES,
     ONLY_STACK_PROBES,
-    SESSION,
     ManualSpawn,
     ScriptedLauncher,
 )
@@ -103,10 +102,10 @@ class SnapshotContentTests(unittest.TestCase):
         ]
         self.assertEqual(expected, shown)
 
-    def test_the_session_lines_are_listed_verbatim_and_cannot_be_selected(self):
+    def test_the_session_lines_are_listed_compacted_and_cannot_be_selected(self):
         rig = Rig(GREEN_PROBES)
 
-        entry = rig.entry(SESSION.line)
+        entry = rig.entry("claude online quiet 3s")
 
         self.assertFalse(entry.enabled)
         self.assertIsNone(entry.on_select)

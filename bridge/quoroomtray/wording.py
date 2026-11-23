@@ -41,3 +41,10 @@ def tooltip_text(state: StandState, texts: TrayTexts) -> str:
     if len(tooltip) <= settings.TOOLTIP_LIMIT:
         return tooltip
     return tooltip[: settings.TOOLTIP_LIMIT - len(ELLIPSIS)] + ELLIPSIS
+
+
+def menu_item_text(line: str) -> str:
+    compact = " ".join(line.split())
+    if len(compact) <= settings.MENU_ITEM_LIMIT:
+        return compact
+    return compact[: settings.MENU_ITEM_LIMIT - len(ELLIPSIS)] + ELLIPSIS

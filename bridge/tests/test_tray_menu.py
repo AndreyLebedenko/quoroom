@@ -9,7 +9,7 @@ from quoroomtray.menu import MenuRole, build_menu, offered_action
 from quoroomtray.observation import Observation, SessionLine
 from quoroomtray.state import stand_state
 from quoroomtray.texts import TrayTexts
-from quoroomtray.wording import status_text, tooltip_text
+from quoroomtray.wording import menu_item_text, status_text, tooltip_text
 from tests.tray_fakes import (
     GREEN_PROBES,
     GREY_PROBES,
@@ -69,16 +69,51 @@ class MenuShapeTests(unittest.TestCase):
             roles(menu),
         )
 
-    def test_session_lines_are_taken_verbatim_from_the_broker_status(self):
+    def test_the_menu_shows_the_compacted_text_of_each_session_line(self):
         padded = SessionLine("claude", "online", "claude     online      12:01:07  3s")
         observation = Observation(True, (padded,))
 
         menu = menu_for(observation, NO_ACTION)
 
         self.assertEqual(
-            ["claude     online      12:01:07  3s"],
+            ["claude online 12:01:07 3s"],
             [item.text for item in menu if item.role is MenuRole.SESSION],
         )
+
+    def test_a_long_failure_line_gives_a_status_item_cut_to_the_menu_limit(self):
+        actions = finished(ActionKind.START, 1, "ERROR: " + "x" * 300)
+
+        status = menu_for(GREY_PROBES, actions)[0]
+
+        self.assertIs(MenuRole.STATUS, status.role)
+        self.assertEqual(settings.MENU_ITEM_LIMIT, len(status.text))
+        self.assertTrue(status.text.endswith("..."))
+
+    def test_padded_whitespace_in_a_failure_line_is_collapsed_in_the_status_item(self):
+        actions = finished(ActionKind.START, 1, "ERROR:    docker		is   missing")
+
+        status = menu_for(GREY_PROBES, actions)[0]
+
+        self.assertEqual(
+            "The stand is broken: Start failed: ERROR: docker is missing",
+            status.text,
+        )
+
+    def test_a_short_failure_keeps_its_status_item_text(self):
+        actions = finished(ActionKind.START, 1, "ERROR: docker is missing")
+
+        status = menu_for(GREY_PROBES, actions)[0]
+
+        self.assertEqual(
+            "The stand is broken: Start failed: ERROR: docker is missing",
+            status.text,
+        )
+
+    def test_the_tooltip_keeps_the_long_failure_line_up_to_its_own_limit(self):
+        actions = finished(ActionKind.START, 1, "ERROR: " + "x" * 300)
+        state = stand_state(GREY_PROBES, actions)
+
+        self.assertEqual(settings.TOOLTIP_LIMIT, len(tooltip_text(state, ENGLISH)))
 
     def test_there_are_no_session_lines_while_the_broker_is_silent(self):
         menu = menu_for(ONLY_STACK_PROBES, NO_ACTION)
@@ -189,6 +224,29 @@ class ToggleItemTests(unittest.TestCase):
         )
 
 
+class FixedStatusWordingFitsTheMenuTests(unittest.TestCase):
+    FIXED_STATES = {
+        "grey": (GREY_PROBES, NO_ACTION),
+        "green": (GREEN_PROBES, NO_ACTION),
+        "starting": (GREY_PROBES, running(ActionKind.START)),
+        "stopping": (GREEN_PROBES, running(ActionKind.STOP)),
+        "only the stack answers": (ONLY_STACK_PROBES, NO_ACTION),
+        "only the broker answers": (ONLY_BROKER_PROBES, NO_ACTION),
+        "start failed without output": (GREY_PROBES, finished(ActionKind.START, 127)),
+        "stop failed without output": (GREEN_PROBES, finished(ActionKind.STOP, 127)),
+    }
+
+    def test_every_fixed_status_text_fits_the_menu_limit_in_every_language(self):
+        for language in ("en", "ru"):
+            for name, (observation, actions) in self.FIXED_STATES.items():
+                with self.subTest(language=language, state=name):
+                    text = status_text(
+                        stand_state(observation, actions), TrayTexts(language)
+                    )
+
+                    self.assertLessEqual(len(text), settings.MENU_ITEM_LIMIT)
+
+
 class StatusWordingTests(unittest.TestCase):
     def status(self, observation, actions, texts=ENGLISH):
         return status_text(stand_state(observation, actions), texts)
@@ -278,6 +336,52 @@ class TooltipTests(unittest.TestCase):
         state = stand_state(GREY_PROBES, NO_ACTION)
 
         self.assertFalse(tooltip_text(state, ENGLISH).endswith("..."))
+
+
+class MenuItemTextTests(unittest.TestCase):
+    def test_runs_of_whitespace_become_a_single_space(self):
+        self.assertEqual(
+            "claude online 12:01:07 3s",
+            menu_item_text("  claude     online\t\t12:01:07   3s  "),
+        )
+
+    def test_a_line_of_exactly_the_limit_is_kept_whole(self):
+        line = "a" * settings.MENU_ITEM_LIMIT
+
+        self.assertEqual(line, menu_item_text(line))
+
+    def test_a_line_one_over_the_limit_is_cut_to_the_limit_with_an_ellipsis(self):
+        line = "a" * (settings.MENU_ITEM_LIMIT + 1)
+
+        text = menu_item_text(line)
+
+        self.assertEqual(settings.MENU_ITEM_LIMIT, len(text))
+        self.assertEqual("a" * (settings.MENU_ITEM_LIMIT - 3) + "...", text)
+
+    def test_the_limit_applies_after_the_whitespace_is_collapsed(self):
+        head = "a" * 10
+        tail = "b" * (settings.MENU_ITEM_LIMIT - len(head) - 1)
+
+        text = menu_item_text(head + " " * 100 + tail)
+
+        self.assertEqual(head + " " + tail, text)
+        self.assertEqual(settings.MENU_ITEM_LIMIT, len(text))
+
+    def test_cyrillic_text_is_counted_in_characters_not_bytes(self):
+        ya = "\u044f"
+        fits = ya * settings.MENU_ITEM_LIMIT
+        over = ya * (settings.MENU_ITEM_LIMIT + 1)
+
+        self.assertEqual(fits, menu_item_text(fits))
+        self.assertEqual(
+            ya * (settings.MENU_ITEM_LIMIT - 3) + "...",
+            menu_item_text(over),
+        )
+
+    def test_backslash_sequences_are_shown_as_the_broker_reports_them(self):
+        text = r"a\nb\u0436"
+
+        self.assertEqual(text, menu_item_text(text))
 
 
 class LeftClickTests(unittest.TestCase):

@@ -67,3 +67,16 @@ pulling that into the tray story would widen its scope.
 - Show the date in `status` when `registered_at` is not today.
 - Not in scope: the token-in-output defect
   (client-network-error-exposes-session-token.md).
+
+## Addendum 2026-11-23: an escaped label in the stored registration
+
+Seen in the tray menu at commit aab886d. The stored `glm` registration
+(registered 2026-10-05 14:30:20, from an OpenCode session in
+`D:\AI\ReReason`) has a label that holds literal backslash escapes, for
+example `OpenCode, \u0440\u0430...` where the text meant Cyrillic. The
+registrations table stores it that way, and `/status`, `agentschat status`
+and the tray all show it as stored. The tray is right not to decode it: it
+would be guessing at broken data. Unknown: whether today's login path can
+still store such a label, or whether the 2026-10-05 client sent it already
+escaped. Check at `login` whether a label containing `\uXXXX` should be
+refused or kept as is.
