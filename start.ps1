@@ -43,6 +43,8 @@ $config     = Join-Path $bridgeDir 'config.yaml'
 $logFile    = Join-Path $bridgeDir 'broker.log'
 $pidFile    = Join-Path $bridgeDir 'state\broker.pid'
 $brokerPort = 8770
+$dockerWaitSeconds = 180
+$dockerPollSeconds = 2
 
 $language = $null
 for ($position = 0; $position -lt $args.Count; $position++) {
@@ -69,6 +71,8 @@ if ($language -ceq 'ru') {
     $texts = @{
         docker_missing  = 'docker не найден в PATH. Установите Docker Desktop (docs/INSTALL.md, шаг 0).'
         docker_down     = 'Docker-демон не отвечает. Запустите Docker Desktop и повторите.'
+        docker_starting = '==> Docker-демон не отвечает - запускаю Docker Desktop (жду до {0}с)...'
+        docker_desktop_missing = 'Docker Desktop не найден: {0}. Установите Docker Desktop (docs/INSTALL.md, шаг 0).'
         no_env          = 'нет docker/.env - скопируйте docker/.env.example -> docker/.env (docs/INSTALL.md, шаг 3).'
         no_venv         = 'нет окружения bridge/.venv - создайте его (docs/INSTALL.md, шаг 5).'
         no_config       = 'нет bridge/config.yaml - скопируйте config.example.yaml и впишите токены (docs/INSTALL.md, шаг 7).'
@@ -92,6 +96,8 @@ if ($language -ceq 'ru') {
     $texts = @{
         docker_missing  = 'docker was not found in PATH. Install Docker Desktop (docs/INSTALL.md, step 0).'
         docker_down     = 'The Docker daemon is not responding. Start Docker Desktop and run this again.'
+        docker_starting = '==> The Docker daemon is not responding - starting Docker Desktop (waiting up to {0}s)...'
+        docker_desktop_missing = 'Docker Desktop was not found: {0}. Install Docker Desktop (docs/INSTALL.md, step 0).'
         no_env          = 'docker/.env is missing - copy docker/.env.example to docker/.env (docs/INSTALL.md, step 3).'
         no_venv         = 'bridge/.venv is missing - create it (docs/INSTALL.md, step 5).'
         no_config       = 'bridge/config.yaml is missing - copy config.example.yaml and fill in the tokens (docs/INSTALL.md, step 7).'
@@ -123,12 +129,37 @@ function Test-Port([int]$port) {
     finally { $client.Close() }
 }
 
+function Invoke-DockerQuiet {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        docker @args *> $null
+        return $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+}
+
+function Start-DockerDesktop {
+    if ((Invoke-DockerQuiet desktop version) -eq 0) {
+        return ((Invoke-DockerQuiet desktop start --timeout $dockerWaitSeconds) -eq 0)
+    }
+    $exe = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { Die 'docker_desktop_missing' @($exe) }
+    Start-Process -FilePath $exe
+    foreach ($i in 1..($dockerWaitSeconds / $dockerPollSeconds)) {
+        Start-Sleep -Seconds $dockerPollSeconds
+        if ((Invoke-DockerQuiet info) -eq 0) { return $true }
+    }
+    return $false
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Die 'docker_missing' @()
 }
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
-    Die 'docker_down' @()
+if ((Invoke-DockerQuiet info) -ne 0) {
+    Say 'docker_starting' @($dockerWaitSeconds)
+    if (-not (Start-DockerDesktop)) {
+        Die 'docker_down' @()
+    }
 }
 if (-not (Test-Path (Join-Path $dockerDir '.env'))) {
     Die 'no_env' @()

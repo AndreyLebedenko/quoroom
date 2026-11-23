@@ -43,6 +43,12 @@ RUSSIAN_START_PS1 = {
     "next": r"Дальше в каждой сессии CLI вызвать /chatlogin. Остановить всё: .\stop.ps1",
     "follow": "==> Лог брокера (Ctrl+C - выйти, стенд останется поднятым):",
 }
+RUSSIAN_DOCKER_AUTOSTART = {
+    "docker_starting": "==> Docker-демон не отвечает - запускаю Docker Desktop (жду до {0}с)...",
+    "docker_desktop_missing": "Docker Desktop не найден: {0}. Установите Docker Desktop (docs/INSTALL.md, шаг 0).",
+}
+DOCKER_WAIT_SECONDS = 180
+DOCKER_POLL_SECONDS = 2
 RUSSIAN_STOP_PS1 = {
     "stopping_broker": "==> Останавливаю брокер (PID {0})...",
     "stopping_found": "==> Останавливаю брокер (PID {0}, найден по командной строке)...",
@@ -126,15 +132,39 @@ CALLER = """\
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $target = $args[0]
 $rest = @($args | Select-Object -Skip 1)
+if ($env:FAKE_PROGRAM_FILES) { $env:ProgramFiles = $env:FAKE_PROGRAM_FILES }
+function Add-FakeCall($line) {
+    if ($env:FAKE_CALL_LOG) { Add-Content -LiteralPath $env:FAKE_CALL_LOG -Value $line }
+}
 function docker {
+    Add-FakeCall "docker $($args -join ' ')"
     $code = 0
-    if ($args[0] -eq 'info') { $code = [int]$env:FAKE_DOCKER_INFO }
+    if ($args[0] -eq 'info') {
+        $code = [int]$env:FAKE_DOCKER_INFO
+        if ($env:FAKE_ENGINE_UP) { $code = 0 }
+        elseif ($null -ne $env:FAKE_INFO_FAILS_LEFT) {
+            $left = [int]$env:FAKE_INFO_FAILS_LEFT
+            if ($left -gt 0) { $code = 1; $env:FAKE_INFO_FAILS_LEFT = "$($left - 1)" }
+            else { $code = 0 }
+        }
+    }
+    elseif ($args[0] -eq 'desktop' -and $args[1] -eq 'version') {
+        if ($env:FAKE_DESKTOP_ABSENT) { $code = 1 }
+    }
+    elseif ($args[0] -eq 'desktop' -and $args[1] -eq 'start') {
+        $code = 1
+        if ($env:FAKE_DESKTOP_START) { $code = [int]$env:FAKE_DESKTOP_START }
+        if ($code -eq 0) { $env:FAKE_ENGINE_UP = '1' }
+    }
     elseif ($args[1] -eq 'up') { $code = [int]$env:FAKE_DOCKER_UP }
     elseif ($args[1] -eq 'down') { $code = [int]$env:FAKE_DOCKER_DOWN }
     cmd /c "exit $code"
 }
-if ($env:FAKE_DOCKER_ABSENT) { Remove-Item function:docker }
-function Start-Sleep { }
+if ($env:FAKE_DOCKER_ABSENT -or $env:FAKE_DOCKER_NATIVE) { Remove-Item function:docker }
+function Start-Sleep {
+    param($Seconds)
+    Add-FakeCall "sleep $Seconds"
+}
 function Get-CimInstance {
     [CmdletBinding()]
     param($ClassName, $Filter)
@@ -146,7 +176,15 @@ function Get-CimInstance {
         [pscustomobject]@{ ProcessId = [int]$Matches[1]; CommandLine = $known[$Matches[1]] }
     }
 }
-function Start-Process { throw 'Start-Process must not run in a test' }
+function Start-Process {
+    [CmdletBinding()]
+    param($FilePath, $ArgumentList, $WorkingDirectory, $RedirectStandardError, $WindowStyle, [switch]$PassThru)
+    $isFakeDockerDesktop = $env:FAKE_PROGRAM_FILES -and $FilePath -and
+        $FilePath.StartsWith($env:FAKE_PROGRAM_FILES) -and $FilePath.EndsWith('Docker Desktop.exe')
+    if (-not $isFakeDockerDesktop) { throw 'Start-Process must not run in a test' }
+    Add-FakeCall "launch $FilePath"
+    if ($null -ne $env:FAKE_EXE_ENGINE_AFTER) { $env:FAKE_INFO_FAILS_LEFT = $env:FAKE_EXE_ENGINE_AFTER }
+}
 if ($env:FAKE_PID_FILE) {
     New-Item -ItemType Directory -Force -Path (Split-Path $env:FAKE_PID_FILE) | Out-Null
     "$PID" | Out-File -FilePath $env:FAKE_PID_FILE -Encoding ascii
@@ -182,6 +220,26 @@ sleep 60 &
 echo $! >"$1"
 shift
 exec "$@"
+"""
+
+NATIVE_DOCKER_CMD = """\
+@echo off
+if "%1"=="info" goto info
+if "%1"=="desktop" goto desktop
+exit /b 0
+:info
+echo error during connect: the daemon is down 1>&2
+exit /b 1
+:desktop
+if "%2"=="start" goto desktopstart
+if "%2"=="version" if exist "%~dp0cli-absent.flag" goto cliabsent
+exit /b 0
+:desktopstart
+echo Docker Desktop failed to start 1>&2
+exit /b 1
+:cliabsent
+echo docker: unknown command: docker desktop 1>&2
+exit /b 1
 """
 
 STUB_BROKER = "print('stub broker')\n"
@@ -255,9 +313,11 @@ class TablesCase(unittest.TestCase):
 
 
 class MessageTableTests(TablesCase):
-    def test_the_russian_messages_of_start_ps1_are_what_it_printed_before(self):
+    def test_the_russian_messages_of_start_ps1_are_the_pinned_ones(self):
         russian, english = powershell_tables("start.ps1")
-        self.check_tables(russian, english, RUSSIAN_START_PS1)
+        self.check_tables(
+            russian, english, {**RUSSIAN_START_PS1, **RUSSIAN_DOCKER_AUTOSTART}
+        )
 
     def test_the_russian_messages_of_stop_ps1_are_what_it_printed_before(self):
         russian, english = powershell_tables("stop.ps1")
@@ -496,6 +556,201 @@ class StartPowerShellTests(PowerShellCase):
                 self.assertNotIn(table["starting"], said)
                 if lang == "en":
                     self.assertIsNone(CYRILLIC.search(said), said)
+
+    def docker_desktop_stand(self, installed=True):
+        shutil.rmtree(self.root, ignore_errors=True)
+        self.stand()
+        self.write_config("language: en\n")
+        programs = self.tmp / "Program Files"
+        shutil.rmtree(programs, ignore_errors=True)
+        exe = programs / "Docker" / "Docker" / "Docker Desktop.exe"
+        if installed:
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_text("", encoding="utf-8")
+        return programs, exe
+
+    def start_with_the_daemon_down(self, lang, installed=True, **faults):
+        programs, exe = self.docker_desktop_stand(installed)
+        calls = self.tmp / "calls.log"
+        calls.unlink(missing_ok=True)
+        code, said = self.run_script(
+            ["--lang", lang],
+            FAKE_DOCKER_INFO=1,
+            FAKE_PROGRAM_FILES=programs,
+            FAKE_CALL_LOG=calls,
+            FAKE_PID_FILE=self.root / "bridge" / "state" / "broker.pid",
+            **faults,
+        )
+        lines = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+        return code, said, lines, exe
+
+    def calls_before_the_stack(self, lines):
+        self.assertIn("docker compose up -d", lines)
+        return lines[: lines.index("docker compose up -d")]
+
+    def test_a_daemon_that_answers_is_left_alone_and_no_docker_desktop_is_started(self):
+        programs, exe = self.docker_desktop_stand()
+        calls = self.tmp / "calls.log"
+        code, said = self.run_script(
+            ["--lang", "en"],
+            FAKE_PROGRAM_FILES=programs,
+            FAKE_CALL_LOG=calls,
+            FAKE_PID_FILE=self.root / "bridge" / "state" / "broker.pid",
+        )
+        lines = calls.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self.calls_before_the_stack(lines), ["docker info"])
+        self.assertNotIn(self.english["docker_starting"].split("{0}")[0], said)
+        self.assertFalse([line for line in lines if line.startswith("launch")])
+
+    def test_a_daemon_that_is_down_is_started_through_the_docker_desktop_cli_and_the_stack_follows(
+        self,
+    ):
+        for lang, table in (("en", self.english), ("ru", self.russian)):
+            with self.subTest(lang=lang):
+                code, said, lines, exe = self.start_with_the_daemon_down(
+                    lang, FAKE_DESKTOP_START=0
+                )
+                self.assertEqual(code, 0, said)
+                self.assertEqual(
+                    self.calls_before_the_stack(lines),
+                    [
+                        "docker info",
+                        "docker desktop version",
+                        f"docker desktop start --timeout {DOCKER_WAIT_SECONDS}",
+                    ],
+                )
+                progress = with_values(table["docker_starting"], DOCKER_WAIT_SECONDS)
+                self.assertIn(progress, said)
+                self.assertLess(
+                    said.index(progress),
+                    said.index(with_values(table["stack_up"])),
+                )
+                self.assertFalse([line for line in lines if line.startswith("launch")])
+
+    def test_a_docker_desktop_cli_that_fails_is_reported_as_a_daemon_that_did_not_come_up(
+        self,
+    ):
+        for lang, table, label in (
+            ("en", self.english, "ERROR"),
+            ("ru", self.russian, "ОШИБКА"),
+        ):
+            with self.subTest(lang=lang):
+                code, said, lines, exe = self.start_with_the_daemon_down(
+                    lang, FAKE_DESKTOP_START=1
+                )
+                self.assertEqual(code, 1, said)
+                self.assertIn(f"{label}: {table['docker_down']}", said)
+                self.assertEqual(
+                    lines,
+                    [
+                        "docker info",
+                        "docker desktop version",
+                        f"docker desktop start --timeout {DOCKER_WAIT_SECONDS}",
+                    ],
+                )
+
+    def test_without_the_docker_desktop_cli_the_exe_is_launched_and_the_daemon_is_polled_every_two_seconds(
+        self,
+    ):
+        for lang in ("en", "ru"):
+            with self.subTest(lang=lang):
+                code, said, lines, exe = self.start_with_the_daemon_down(
+                    lang, FAKE_DESKTOP_ABSENT=1, FAKE_EXE_ENGINE_AFTER=3
+                )
+                self.assertEqual(code, 0, said)
+                self.assertEqual(
+                    self.calls_before_the_stack(lines),
+                    ["docker info", "docker desktop version", f"launch {exe}"]
+                    + [f"sleep {DOCKER_POLL_SECONDS}", "docker info"] * 4,
+                )
+                self.assertNotIn(
+                    f"docker desktop start --timeout {DOCKER_WAIT_SECONDS}", lines
+                )
+
+    def test_a_daemon_that_never_comes_up_is_given_up_on_after_the_whole_wait(self):
+        for lang, table, label in (
+            ("en", self.english, "ERROR"),
+            ("ru", self.russian, "ОШИБКА"),
+        ):
+            with self.subTest(lang=lang):
+                code, said, lines, exe = self.start_with_the_daemon_down(
+                    lang, FAKE_DESKTOP_ABSENT=1
+                )
+                polls = DOCKER_WAIT_SECONDS // DOCKER_POLL_SECONDS
+                self.assertEqual(code, 1, said)
+                self.assertIn(f"{label}: {table['docker_down']}", said)
+                self.assertEqual(
+                    lines,
+                    ["docker info", "docker desktop version", f"launch {exe}"]
+                    + [f"sleep {DOCKER_POLL_SECONDS}", "docker info"] * polls,
+                )
+                self.assertEqual(
+                    DOCKER_POLL_SECONDS * lines.count(f"sleep {DOCKER_POLL_SECONDS}"),
+                    DOCKER_WAIT_SECONDS,
+                )
+
+    def test_docker_desktop_that_is_not_installed_is_refused_with_its_own_message(self):
+        for lang, table, label in (
+            ("en", self.english, "ERROR"),
+            ("ru", self.russian, "ОШИБКА"),
+        ):
+            with self.subTest(lang=lang):
+                code, said, lines, exe = self.start_with_the_daemon_down(
+                    lang, installed=False, FAKE_DESKTOP_ABSENT=1
+                )
+                missing = with_values(table["docker_desktop_missing"], exe)
+                self.assertEqual(code, 1, said)
+                self.assertIn(f"{label}: {missing}", said)
+                self.assertNotIn(table["docker_down"], said)
+                self.assertEqual(lines, ["docker info", "docker desktop version"])
+
+    def native_docker(self, cli_present):
+        shims = self.tmp / "native-shims"
+        shims.mkdir(exist_ok=True)
+        (shims / "docker.cmd").write_text(NATIVE_DOCKER_CMD, encoding="ascii")
+        flag = shims / "cli-absent.flag"
+        flag.unlink(missing_ok=True)
+        if not cli_present:
+            flag.write_text("", encoding="ascii")
+        return os.pathsep.join([str(shims), os.environ["PATH"]])
+
+    def test_a_native_docker_that_writes_to_stderr_does_not_stop_the_script_with_a_powershell_error(
+        self,
+    ):
+        scenarios = (
+            ("cli_fails", True, True, "docker_down", None),
+            ("exe_never_answers", False, True, "docker_down", None),
+            ("not_installed", False, False, "docker_desktop_missing", "exe"),
+        )
+        for name, cli_present, installed, key, value in scenarios:
+            for lang, table, label in (
+                ("en", self.english, "ERROR"),
+                ("ru", self.russian, "ОШИБКА"),
+            ):
+                with self.subTest(scenario=name, lang=lang):
+                    programs, exe = self.docker_desktop_stand(installed)
+                    calls = self.tmp / "calls.log"
+                    calls.unlink(missing_ok=True)
+                    code, said = self.run_script(
+                        ["--lang", lang],
+                        FAKE_DOCKER_NATIVE=1,
+                        FAKE_PROGRAM_FILES=programs,
+                        FAKE_CALL_LOG=calls,
+                        PATH=self.native_docker(cli_present),
+                    )
+                    lines = (
+                        calls.read_text(encoding="utf-8").splitlines()
+                        if calls.exists()
+                        else []
+                    )
+                    wanted = with_values(table[key], *([exe] if value else []))
+                    self.assertEqual(code, 1, said)
+                    self.assertNotIn("NativeCommandError", said)
+                    self.assertIn(f"{label}: {wanted}", said)
+                    self.assertEqual(
+                        f"launch {exe}" in lines, installed and not cli_present
+                    )
 
 
 class StopPowerShellTests(PowerShellCase):
