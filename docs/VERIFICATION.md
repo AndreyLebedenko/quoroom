@@ -1582,3 +1582,40 @@ function (SchemaError(Missing key at ["default"]))`, а
 `~/.config/opencode/plugins/` была пропатчена вручную тем же содержимым до
 коммита этой правки; после вливания `agentschat install --force` положит эту
 же версию. Остальные сломанные V2-ом плагины - отдельная задача их владельцев.
+
+## start.ps1 сам запускает Docker Desktop, 23 ноября 2026
+
+Ручная проверка task-tray-01 (коммит `30c1d1f`, ветка `feat/tray-launcher`),
+Windows 11, Docker 28.4.0, плагин Docker Desktop CLI v0.2.0. Прогонял
+владелец из `D:\AI\AgentsChat`.
+
+Проверено живьём:
+
+- После `docker desktop stop` команда `docker info` возвращает `1`, а
+  `docker desktop version` возвращает `0` и печатает
+  `Docker Desktop CLI plugin version: v0.2.0`. Признак, по которому
+  `start.ps1` выбирает путь через CLI, работает и при остановленном Docker
+  Desktop; запасной путь через `Docker Desktop.exe` на этой машине не
+  используется.
+- `docker desktop start --timeout 5` при уже работающем Docker Desktop
+  мгновенно печатает `Docker Desktop is already running` и возвращает `0`.
+- При остановленном Docker Desktop та же команда печатает
+  `Starting Docker Desktop`, возвращает `0` через 5,39 с, и `docker info`
+  сразу после неё возвращает `0`: команда возвращается, когда движок уже
+  готов, поэтому `docker compose up` можно вызывать сразу.
+- `.\start.ps1` при остановленном Docker Desktop напечатал по порядку
+  `The Docker daemon is not responding - starting Docker Desktop (waiting up
+  to 180s)...`, `Starting the Docker stack`, три контейнера `Running`,
+  ожидание порта 443, `Done`. Контейнеры уже были подняты политикой
+  `restart: unless-stopped` при старте Docker Desktop, `compose up` их только
+  подтвердил. Брокер всё это время работал (PID 11932), и скрипт не запустил
+  второй.
+
+Не проверено живьём:
+
+- Срабатывает ли `--timeout` на самом деле: запуск уложился в 5,39 с при
+  пределе 5 с и вернул `0`, так что прерывание по таймауту и его код
+  возврата не наблюдались. Тесты закрепляют только то, что скрипт передаёт
+  `--timeout 180` и считает любой ненулевой код отказом `docker_down`.
+- Запасной путь через `Docker Desktop.exe` с опросом `docker info` покрыт
+  только тестами.
