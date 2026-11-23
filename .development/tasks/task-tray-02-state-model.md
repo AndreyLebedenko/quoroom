@@ -14,8 +14,11 @@ Everything the tray decides, without `pystray`, in `bridge/quoroomtray/`:
   action in progress, last action result) to one of grey / yellow / green /
   red plus a reason for red. The colour contract is in the story card.
   Exactly-one-answers is red; both silent is grey; an action in progress is
-  yellow whatever the probes say; a failed last action is red until the next
-  probe shows green or grey after a new action.
+  yellow whatever the probes say. A failed last action is red until the
+  probes show the state that action aimed at - green after a failed Start,
+  grey after a failed Stop - or until a new action starts. This keeps the
+  story's rule that state comes from facts: a stand repaired or stopped from
+  a console stops being red on the next poll (lead decision, 2026-11-23).
 - **Menu model**: the ordered items the UI will draw (status line, session
   lines from the broker's `line` field, Start or Stop with its enabled flag,
   Open log, Exit) as plain data.

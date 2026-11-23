@@ -1,0 +1,19 @@
+{
+  "tray.exit": "Exit",
+  "tray.exit_code": "exit code {code}",
+  "tray.notification_not_running": "The stand is not running.",
+  "tray.open_log": "Open log",
+  "tray.reason_broker_only": "the broker answers but port 443 does not",
+  "tray.reason_stack_only": "port 443 answers but the broker does not",
+  "tray.reason_start_failed": "Start failed: {detail}",
+  "tray.reason_stop_failed": "Stop failed: {detail}",
+  "tray.start": "Start",
+  "tray.starting": "Starting...",
+  "tray.status_green": "The stand is running",
+  "tray.status_grey": "The stand is stopped",
+  "tray.status_red": "The stand is broken: {reason}",
+  "tray.status_starting": "Starting the stand...",
+  "tray.status_stopping": "Stopping the stand...",
+  "tray.stop": "Stop",
+  "tray.stopping": "Stopping..."
+}

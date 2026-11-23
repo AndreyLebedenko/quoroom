@@ -85,6 +85,7 @@ ALLOWLIST = (
     Allowed("bridge/sessionchat/client_messages/ru.json", CATALOGUE_REASON),
     Allowed("bridge/sessionchat/installer/messages/ru.json", CATALOGUE_REASON),
     Allowed("bridge/register_messages/ru.json", CATALOGUE_REASON),
+    Allowed("bridge/quoroomtray/messages/ru.json", CATALOGUE_REASON),
     Allowed(
         f"{KIT}ru/",
         "the Russian variant of the kit, installed when the room language is ru",

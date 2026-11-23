@@ -15,6 +15,11 @@ A thin `pystray` shell over the task 02 model, started as
   browser or shows a `pystray` notification, per the model's decision.
 - Start/Stop calls the task 02 runner; Open log opens `bridge/broker.log`
   with the default handler; Exit stops the loop and leaves the stand alone.
+- The `on_finished` callback the UI hands to `ScriptRunner` must not let
+  an exception escape: it runs on a daemon thread under `pythonw`, so an
+  escaped exception kills the thread with no trace and the icon misses its
+  refresh (task 02 review, 2026-11-23). Guard it in the runner or in the
+  callback, with a test.
 - A second copy of the tray does not start (a named mutex or a lock file in
   `bridge/state/`).
 - `bridge/requirements-tray.txt` with pinned `pystray` and `Pillow`; the

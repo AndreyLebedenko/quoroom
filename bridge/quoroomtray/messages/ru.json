@@ -1,0 +1,19 @@
+{
+  "tray.exit": "Выход",
+  "tray.exit_code": "код выхода {code}",
+  "tray.notification_not_running": "Стенд не запущен.",
+  "tray.open_log": "Открыть лог",
+  "tray.reason_broker_only": "брокер отвечает, а порт 443 нет",
+  "tray.reason_stack_only": "порт 443 отвечает, а брокер нет",
+  "tray.reason_start_failed": "Запуск не удался: {detail}",
+  "tray.reason_stop_failed": "Остановка не удалась: {detail}",
+  "tray.start": "Запустить",
+  "tray.starting": "Запускается...",
+  "tray.status_green": "Стенд работает",
+  "tray.status_grey": "Стенд остановлен",
+  "tray.status_red": "Стенд неисправен: {reason}",
+  "tray.status_starting": "Стенд запускается...",
+  "tray.status_stopping": "Стенд останавливается...",
+  "tray.stop": "Остановить",
+  "tray.stopping": "Останавливается..."
+}
