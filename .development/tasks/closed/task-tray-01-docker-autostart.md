@@ -1,6 +1,11 @@
 # Task: start.ps1 starts Docker Desktop itself
 
-Status: Not started
+Status: Completed 2026-11-23. Implemented in `30c1d1f`, reviewed by
+opencode (accept), live check recorded in `docs/VERIFICATION.md`
+(`19837f6`). Not observed live: `--timeout` actually firing, and the exe
+fallback; both are covered by tests only. Known test gaps left open by the
+lead (non-blocking): nothing fails if Invoke-DockerQuiet stops restoring
+ErrorActionPreference, or if `docker_starting` moves after the wait.
 Story: story-tray-launcher.md
 
 ## Summary
