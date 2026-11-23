@@ -1,6 +1,11 @@
 # Task: tray state model, probes and script runner
 
-Status: Not started
+Status: Completed 2026-11-23. Implemented in `29ddb30`, reviewed by
+opencode (accept, mutation-checked). Live checks (hidden PowerShell output
+encoding, real start.ps1/stop.ps1 through the runner, the Windows tooltip
+limit) are carried by task 04's manual handoff. Non-blocking review notes:
+the on_finished guard moved to task 03; StandState invariants hold by
+construction and are not pinned by tests.
 Story: story-tray-launcher.md
 
 ## Summary
