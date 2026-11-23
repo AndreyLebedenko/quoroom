@@ -1,6 +1,12 @@
 # Task: tray icon on pystray
 
-Status: Not started
+Status: Completed 2026-11-23. Implemented in `5004e94`, reviewed by
+opencode (accept, mutation-checked; the hidden default item checked against
+pystray 0.19.5 sources). Owner's first look on 2026-11-23: icon green, menu
+works; the full manual run (colours through Start/Stop, left click on every
+state, notification, Cyrillic) is in task 04's handoff. Review notes moved
+to task 04: a failure before the icon exists leaves no trace; the error log
+is unbounded.
 Story: story-tray-launcher.md
 
 ## Summary
