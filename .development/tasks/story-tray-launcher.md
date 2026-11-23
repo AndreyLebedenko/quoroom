@@ -1,7 +1,8 @@
 # Story: Windows tray launcher for the stand
 
-**Status:** Agreed with the owner on 2026-11-23, including Q1. No task
-started.
+**Status:** All four task cards are closed (2026-11-23). The story stays
+open until the owner runs the deferred reboot checks (handoff items
+10a-10c in `docs/VERIFICATION.md`).
 
 ## User-facing goal
 
@@ -110,9 +111,9 @@ the `sessionchat` package that participants install, so `pystray` and
 - [ ] With Docker Desktop not running, Start brings up Docker Desktop, the
       stack and the broker; the icon goes yellow, then green.
 - [ ] Stop leaves Docker Desktop running; the icon goes yellow, then grey.
-- [ ] Left click on green opens Element in the default browser; on any other
+- [x] Left click on green opens Element in the default browser; on any other
       state it shows the notification and opens nothing.
-- [ ] The menu lists the sessions `/status` reports.
+- [x] The menu lists the sessions `/status` reports.
 - [ ] Killing the broker by hand turns the icon red with a reason.
 - [ ] The icon starts with Windows and behaves at login as Q1 decides.
 - [ ] `unittest`, `ruff check` and `ruff format --check` are green; the

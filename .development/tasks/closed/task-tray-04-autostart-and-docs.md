@@ -1,6 +1,6 @@
 # Task: start the tray with Windows, docs and manual handoff
 
-Status: Not started
+Status: Completed
 Story: story-tray-launcher.md
 
 ## Summary
@@ -44,3 +44,16 @@ Story: story-tray-launcher.md
 - READMEs stay in step.
 - `unittest`, `ruff check`, `ruff format --check` green; the handoff is
   prepared.
+
+## Closing note (2026-11-23)
+
+Committed as aab886d; reviewed by opencode (accept, no blocking findings).
+The live check found the menu wider than the screen; fixed in 448808c
+(menu items capped at 64 characters), reviewed and accepted, and checked by
+the owner. The owner checked left click and the icon colours live. The
+reboot items 10a-10c of the handoff are deferred by the owner, who closed
+the card on 2026-11-23 and will file a bug report if they fail.
+
+Non-blocking review notes left open: `commands.py` treats any command other
+than install as remove; a missing `APPDATA` gives a raw traceback; the
+pre-existing double-start race in `start.ps1` (handoff item 10c).
