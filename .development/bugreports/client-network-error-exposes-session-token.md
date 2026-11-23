@@ -39,3 +39,18 @@ while preserving the useful endpoint and failure category. Cover wait, inbox
 and ask with synthetic credential tests and both client languages. Do not
 change the authentication protocol, grant Matrix tokens to sessions, clean
 historical logs, or rotate existing credentials as part of this fix.
+
+## Live confirmation (2026-11-23, commit b8174eb)
+
+Observed on a real outage, not a probe. The broker became unreachable during
+the manual check of the Docker Desktop autostart (feat/tray-launcher). After
+121 s, `agentschat wait --agent claude-code` exited with
+`wait_broker_lost_unreachable`, and its text contained the full
+`/wait?agent=claude-code&token=<32 hex>` URL from the requests exception.
+That output is the listener's wake-up text, so it lands in the Claude Code
+session transcript in full. The token in that output was invalidated the
+same day by `logout --force` and a new login.
+
+Priority note: with the tray launcher, broker outages become routine
+(Stop from the tray), so every listening session will print its token on
+each Stop. The fix should land before the tray is in daily use.
