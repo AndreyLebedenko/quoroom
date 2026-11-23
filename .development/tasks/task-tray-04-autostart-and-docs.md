@@ -9,8 +9,9 @@ Story: story-tray-launcher.md
   (`shell:startup`) pointing at `bridge/.venv/Scripts/pythonw.exe -m
   quoroomtray` with `bridge/` as working directory. Shape of the command
   (a tray flag or a small PowerShell script) is decided in this task.
-- At start-up the tray applies the login rule from task 02 (story Q1,
-  option (a)) once. `run_tray` has no hook for it yet (task 03 report); add
+- At start-up the tray arms the login rule (story Q1, refined 2026-11-23:
+  armed for 5 minutes, fires at most once, needs the half-state on two
+  consecutive polls). `run_tray` has no hook for it yet (task 03 report); add
   one rather than calling it from `__main__.py` untested.
 - A failure before the icon exists (for example `requirements-tray.txt`
   not installed, so importing pystray fails) must leave a trace: today

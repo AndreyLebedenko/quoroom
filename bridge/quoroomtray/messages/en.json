@@ -1,4 +1,9 @@
 {
+  "autostart.failed": "Autostart failed: {detail}",
+  "autostart.installed": "Autostart installed: {shortcut}",
+  "autostart.not_installed": "Autostart was not installed, nothing to remove: {shortcut}",
+  "autostart.removed": "Autostart removed: {shortcut}",
+  "autostart.target_missing": "Autostart not installed: {target} does not exist. Create bridge/.venv first (docs/INSTALL.md).",
   "tray.exit": "Exit",
   "tray.exit_code": "exit code {code}",
   "tray.notification_not_running": "The stand is not running.",

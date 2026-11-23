@@ -1,4 +1,9 @@
 {
+  "autostart.failed": "Автозапуск не удался: {detail}",
+  "autostart.installed": "Автозапуск установлен: {shortcut}",
+  "autostart.not_installed": "Автозапуск не был установлен, снимать нечего: {shortcut}",
+  "autostart.removed": "Автозапуск снят: {shortcut}",
+  "autostart.target_missing": "Автозапуск не установлен: нет {target}. Сначала создайте bridge/.venv (docs/INSTALL.md).",
   "tray.exit": "Выход",
   "tray.exit_code": "код выхода {code}",
   "tray.notification_not_running": "Стенд не запущен.",

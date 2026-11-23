@@ -70,10 +70,18 @@ the `sessionchat` package that participants install, so `pystray` and
   b. at login always run `start.ps1`;
   c. never start anything; red is the truth, the owner presses Start.
   Chosen: (a) - it repairs exactly the half-state, and a stand stopped on
-  purpose stays stopped. The rule runs once, when the tray starts with
-  Windows; it is not re-applied on later polls, so a broker the owner
-  stops or that crashes later shows red instead of being restarted
-  silently.
+  purpose stays stopped. Refined 2026-11-23 by the owner after task 04
+  found that, after a reboot, the tray starts before Docker Desktop brings
+  the containers back, so a single observation at tray start sees grey and
+  the half-state appears later with nothing to repair it. The rule is
+  therefore armed for the first 5 minutes after the tray starts: grey
+  observations keep it armed; the half-state seen on two consecutive polls
+  runs `start.ps1` once and disarms it; any other observation, any Start or
+  Stop already running, or the end of the 5 minutes disarms it without
+  acting. It fires at most once per tray start, so a broker the owner stops
+  or that crashes later shows red instead of being restarted silently. The
+  tray cannot tell a Windows login from a manual start, so the same applies
+  when the owner starts the tray by hand.
 
 ## Boundaries
 

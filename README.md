@@ -205,6 +205,68 @@ Closing the log window does not stop the stand; use `stop.ps1` for that. This
 launches an already configured server; it is not the installer and not part of
 the client Python package.
 
+### Tray icon
+
+On Windows a tray icon shows the state of the stand by colour and starts and
+stops it without a PowerShell window. It is optional: the scripts above stay
+the single way the stand is started and stopped, and the tray only runs them
+hidden. Install its two packages into the project environment once, from
+`bridge/`:
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-tray.txt
+.venv\Scripts\pythonw.exe -m quoroomtray
+```
+
+The packages (`pystray`, `Pillow`) are not in `requirements.txt` and never
+reach a participant's machine. The icon follows the facts, not what the tray
+remembers, so it is right also when the stand was started from a console:
+
+- grey - stopped: neither port 443 nor the broker answers;
+- yellow - a Start or Stop launched by the tray is still running;
+- green - port 443 answers and the broker answers on `/status`;
+- red - broken: exactly one of the two answers, or the last Start or Stop the
+  tray launched failed. The tooltip and the first menu line give the reason.
+
+A left click on a green icon opens Element in the default browser; on any other
+colour it shows a notification "the stand is not running" and opens nothing.
+The right-click menu lists the state, one line per connected session, Start or
+Stop (disabled while the icon is yellow), Open log and Exit. Start runs
+`start.ps1`. Stop runs the full `stop.ps1`: it stops the broker and brings the
+containers down, and leaves Docker Desktop running. Exit closes only the tray;
+the stand keeps running. The menu language follows `language` in
+`bridge/config.yaml`.
+
+To start the tray with Windows, from `bridge/`:
+
+```powershell
+.venv\Scripts\python.exe -m quoroomtray --install-autostart
+.venv\Scripts\python.exe -m quoroomtray --remove-autostart
+```
+
+The first command puts a shortcut `Quoroom Tray.lnk` into your Startup folder
+(`shell:startup`); the second removes it. The tray applies one rule, whenever
+it starts (at login or by hand; it cannot tell the two apart), and only within
+its first 5 minutes. After a reboot the tray usually starts before Docker
+Desktop has brought the containers back, so grey polls keep the rule waiting.
+When port 443 answers but the broker does not on two polls in a row (the
+containers came back by themselves after Windows shut down without
+`stop.ps1`), the tray runs `start.ps1` once, which only adds the broker, and
+the rule is spent. A stand stopped on purpose stays grey and nothing starts.
+Anything else disarms the rule without acting: a running stand, a broker
+without the stack, a Start or Stop you pressed, or the end of the 5 minutes. A
+half-state seen on one poll only, such as the moment a `start.ps1` you ran by
+hand passes through it, does nothing. The rule never fires twice per tray
+start: a broker you stop or that crashes later shows a red icon and is not
+restarted silently.
+
+`start.ps1` itself now starts Docker Desktop when the Docker daemon does not
+answer and waits for it (up to 180 seconds), so a Start from a grey icon works
+with Docker Desktop closed. If the tray cannot start at all, for example
+because `requirements-tray.txt` is not installed, the reason is written to
+`bridge/state/tray-errors.log`; the file is size-capped and keeps one backup,
+`tray-errors.log.1`.
+
 ## License
 
 The code in this repository is under the Apache License 2.0, see
@@ -229,6 +291,8 @@ licenses: Continuwuity, Element Web, Caddy, mkcert and the Python packages in
 - `bridge/sessionchat/installer/` - the shared installer layer (roles, steps,
   ownership records) under `install.ps1` and `install.sh`.
 - `bridge/` - the broker and the `agentschat` CLI the sessions use.
+- `bridge/quoroomtray/` - the optional Windows tray launcher (`pystray`), outside
+  the installed `sessionchat` package; started with `pythonw -m quoroomtray`.
 - `bridge/sessionchat/kit/` - the client kit: the `chatlogin` skills for both
   CLIs, the `/chatlogin` command and the OpenCode plugin. They are not placed
   into projects: `agentschat install` lays the kit into the user's Claude Code

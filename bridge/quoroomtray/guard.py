@@ -15,3 +15,17 @@ def guarded(action: Callable[..., Any], report: FailureReport) -> Callable[..., 
                 pass
 
     return run
+
+
+STARTUP_FAILED_EXIT_CODE = 1
+
+
+def exit_code_after_reporting(entry: Callable[[], int], report: FailureReport) -> int:
+    try:
+        return entry()
+    except Exception as failure:
+        try:
+            report(failure)
+        except Exception:
+            pass
+        return STARTUP_FAILED_EXIT_CODE

@@ -197,6 +197,53 @@ the server is not being purged in this run. One question cannot say the opposite
 
 Details for the human are in [INSTALL.en.md](INSTALL.en.md).
 
+## Tray icon
+
+The Windows tray icon is an optional part that shows the state of the stand by
+colour and starts and stops it. It lives in its own package,
+`bridge/quoroomtray/`, outside the `sessionchat` package that participants
+install: `pystray` and `Pillow` are in `bridge/requirements-tray.txt` and never
+reach a participant's machine. A test pins that the only module importing them
+is the shell, `shell/pystray_shell.py`; the state model, the probes and the
+script runner do not depend on them.
+
+The tray reads facts, not what it remembers:
+
+- port 443 on `127.0.0.1` (Caddy, that is, the Docker stack);
+- the broker's `GET /status` on `127.0.0.1:8770` (no token needed): the
+  language and the list of sessions, each with the broker's own `line`.
+
+The colour comes from those two facts and the state of the tray's own Start or
+Stop: grey (nothing answers), yellow (a Start or Stop the tray launched is
+running), green (both answer), red (exactly one answers, or the last Start or
+Stop the tray launched failed). So the icon is right also when the stand was
+started or stopped from a console.
+
+The tray does not own the broker process. Start and Stop are `start.ps1` and
+`stop.ps1`, which the tray launches hidden and from which it reads only the exit
+code and the last output line. The broker is still stopped by `Stop-Process
+-Force` in `stop.ps1`; a graceful broker shutdown is not part of the tray. The
+tray holds no Matrix token: from `bridge/config.yaml` it reads only the
+`language` key, so the broker stays the only holder of tokens (see "Security
+and secrets").
+
+At start the tray arms the login rule for its first 5 minutes: grey polls keep
+it armed, and port 443 answering without the broker on two polls in a row runs
+`start.ps1` once (the script is idempotent and only adds the broker) and
+disarms the rule. Any other observation, a Start or Stop already running
+(including one the owner pressed), and the end of the window disarm it without
+acting. A stand stopped on purpose stays stopped, and a broker stopped or
+crashed later is not restarted silently. The window covers the Docker Desktop
+wait of `start.ps1`, because after a reboot the tray starts before the
+containers are back; two polls in a row keep the rule from racing a `start.ps1`
+the owner ran by hand. The decision and its reasons are in the story card
+`.development/tasks/story-tray-launcher.md`, question Q1. A second copy of the
+tray does not start (a named mutex). Failures of the tray are written to
+`bridge/state/tray-errors.log`, size-capped with one backup; an error before
+the icon exists goes there too, and the process exits with a non-zero code.
+How to start the tray and put it in autostart is in the README, section "Start
+and stop".
+
 ## Contracts
 
 This section describes the current broker and the `agentschat` client, not the
